@@ -293,6 +293,7 @@ namespace Hooking
 		if (validOffset) {
 			LogSiteBytes(a_hook, nominal);
 			LogCodeWindow(a_hook, nominal, 0x20, 0x20);
+			if (target) LogExternalCallTarget(a_hook, target);
 		} else {
 			LOG(err, "{}: host/offset is outside .text; no nominal bytes can be read safely.", a_hook);
 		}
@@ -335,6 +336,39 @@ namespace Hooking
 			}
 			LOG(debug, "{}: rva 0x{:X}: {}", a_hook, start + row - base, hex);
 		}
+	}
+
+	void LogExternalCallTarget(const char* a_hook, std::uintptr_t a_target)
+	{
+		MEMORY_BASIC_INFORMATION info{};
+		if (!a_target || !::VirtualQuery(reinterpret_cast<const void*>(a_target), &info, sizeof(info))) {
+			LOG(warn, "{}: call destination 0x{:X} has no queryable memory region; diagnostic only.", a_hook, a_target);
+			return;
+		}
+		HMODULE owner = nullptr;
+		char path[1024]{};
+		const bool hasOwner = ::GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast<LPCSTR>(a_target), &owner) != 0;
+		if (hasOwner) ::GetModuleFileNameA(owner, path, sizeof(path) - 1);
+		const auto ownerBase = reinterpret_cast<std::uintptr_t>(owner);
+		LOG(warn, "{}: call destination 0x{:X}: allocation 0x{:X}, state 0x{:X}, type 0x{:X}, protection 0x{:X}, owner {}, owner offset 0x{:X}; DIAGNOSTIC ONLY, not a validated call contract.",
+			a_hook, a_target, reinterpret_cast<std::uintptr_t>(info.AllocationBase), info.State, info.Type, info.Protect,
+			hasOwner ? path : "<no loaded module>", hasOwner ? a_target - ownerBase : 0);
+		if (info.State != MEM_COMMIT || (info.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return;
+		const auto region = reinterpret_cast<std::uintptr_t>(info.BaseAddress);
+		if (a_target < region || a_target - region >= info.RegionSize) return;
+		const auto count = std::min<std::size_t>(32, info.RegionSize - (a_target - region));
+		std::uint8_t bytes[32]{};
+		SIZE_T read = 0;
+		// ReadProcessMemory fails safely if a third party unmaps the region after VirtualQuery.
+		const bool copied = ::ReadProcessMemory(::GetCurrentProcess(), reinterpret_cast<const void*>(a_target), bytes, count, &read) != 0;
+		if (!copied || !read || read > sizeof(bytes)) {
+			LOG(warn, "{}: call destination bytes unavailable (Win32 error {}); no direct dereference attempted.", a_hook, ::GetLastError());
+			return;
+		}
+		std::string hex;
+		for (SIZE_T i = 0; i < read; ++i) hex += std::format("{:02X} ", bytes[i]);
+		LOG(warn, "{}: call destination bytes at 0x{:X}: {} (no execution, no writes).", a_hook, a_target, hex);
 	}
 
 	void LogModuleIdentity(const char* a_hook)

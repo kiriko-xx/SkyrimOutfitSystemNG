@@ -91,4 +91,6 @@ namespace Hooking
 	// placed: the pair tells whether the exe itself differs from the retail build.
 	void LogCodeWindow(const char* a_hook, std::uintptr_t a_center, std::ptrdiff_t a_before, std::ptrdiff_t a_after);
 	void LogModuleIdentity(const char* a_hook);
+	// Read-only observation; external destinations are never approved for patching.
+	void LogExternalCallTarget(const char* a_hook, std::uintptr_t a_target);
 }

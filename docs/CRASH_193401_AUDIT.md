@@ -28,6 +28,12 @@ helper89DD0内TESObjectREFR/Actor RTTI，包装器6E290用引擎RTDynamicCast re
 
 本轮Release编译BUILD_EXIT=0；DLL1,922,560字节，SHA256766f72c933272ced1586db8d48dfcaecdde68eb31bee6318e0590d5a86cc45e7，资源仍1.5.28.0。形变路径6例、slider9例、接口10例、发色生产namespace25例通过；严格站点21项为生产表达式转译/静态检查，身份4项仅布尔真值表，均不替代引擎验证。历史skse_listener_replay默认绑定旧139/132/95现场，与本次184/263不符而失败；新增-ModelOnly只跑独立协议模型，不篡改旧现场断言。
 
+## 第二次实机与外部目标取证
+
+用户报告12b033d不再闪退但幻化无效。新日志明确+302校验失败→成对门禁关闭；旧档仍读入464套/2赋值。原站点E8 5E BC C7 FF解出基址前0x1FD4B。模块外不是非法的证明，可能是合法跳板；无归属与内容不能批准覆盖，也不能直接指责第三方。
+
+新增只读取证：失败时VirtualQuery记录AllocationBase/State/Type/Protect，GetModuleHandleEx(FROM_ADDRESS|UNCHANGED_REFCOUNT)查归属，ReadProcessMemory最多32字节；不执行、不写入、不自动追转接、不放宽原门禁。读取失败仅记录，不直接解引用外部地址。编译BUILD_EXIT=0，DLL1926144字节/SHA2565ea82076172d632ccbdb298441a8a36be8a6ea8bb1927d3f08f0eb9ba6c4eeb6。严格站点21项与只读取证静态约束通过，待用户现场取证。该构建仍预计该环境关闭幻化，不作为修复版。
+
 ## 最小保护与限制
 
 - 隐藏钩子只接受原契约偏移的预期直接call或已有可识别一跳；不扫到其它call就安装，不覆盖未知第三方E9/重定向。失败触发现有成对总开关，保留原装备；这可能让该环境暂时无幻化，而不是假装修好了兼容。
