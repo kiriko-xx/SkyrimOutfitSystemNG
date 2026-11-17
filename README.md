@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.27**（修「1.5.26 装上一个 `.tri` 目标都没贴上」：`.tri` 路径不再用 `GetArmorAddon(race)` 猜，改问引擎已解析的 `biped->objects[slot].addon`，同目录四个候选名全试，`.nif` 自带的目标也计入；克隆件武装后不再摘幻化。前序：1.5.26 让 `.tri` 跟随不再依赖 skee 接口，1.5.25 修好「幻化件有了但身体没了」，1.5.24 恢复贴件，1.5.17 起幻化显示正常。1.5.18–1.5.22 的失败版本源码存档在 git tag `v1.5.22-archive`，1.5.17 成品包在 `SkyrimOutfitSystemNG-1.5.17.zip`；版本与哈希见 [VERSIONS.md](VERSIONS.md)）
+- 当前版本：**1.5.28**（修复 `.tri` 路径重复 `meshes` 前缀，校验 BODYTRI 类型/路径/资源，区分实际 ARMA 与第一/第三人称；纠正回调过滤与 SKSE 2.0.20 早注册订阅解释，自动 morph 刷新不再摘幻化。保持 1.5.25 已实测正常的基础幻化；本次实时形变仍待实机验证，不以资源计数代表成功。版本、哈希和回退见 [VERSIONS.md](VERSIONS.md)）
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 

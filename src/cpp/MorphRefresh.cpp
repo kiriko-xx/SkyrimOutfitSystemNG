@@ -28,8 +28,7 @@ namespace SOS::MorphRefresh
 	{
 		// Minimal ABI declarations for the RaceMenu interfaces we use. The
 		// vtable order matters; it was audited against the public RaceMenu
-		// header and three shipped skee64 builds (v4 and v5). Only the slots
-		// below are called, and all of them exist in v4.
+		// header. The callback slot requires GetVersion() >= 5.
 		namespace skee
 		{
 			using u32 = std::uint32_t;
@@ -81,10 +80,10 @@ namespace SOS::MorphRefresh
 				virtual void SetMorph(void*, const char*, const char*, float) = 0;       // 3
 				virtual float GetMorph(void*, const char*, const char*) = 0;            // 4
 				virtual void ClearMorph(void*, const char*, const char*) = 0;           // 5
-				virtual void GetBodyMorphs(void*, MorphKeyVisitor&) = 0;                 // 6
-				virtual void ClearBodyMorphNames(void*) = 0;                            // 7
+				virtual float GetBodyMorphs(void*, const char*) = 0;                 // 6
+				virtual void ClearBodyMorphNames(void*, const char*) = 0;                            // 7
 				virtual void VisitMorphs(void*, MorphKeyVisitor&) = 0;                   // 8
-				virtual void VisitKeys(void*, MorphKeyVisitor&) = 0;                     // 9
+				virtual void VisitKeys(void*, const char*, MorphKeyVisitor&) = 0;                     // 9
 				virtual void VisitMorphValues(void*, MorphValueVisitor&) = 0;            // 10
 				virtual void ClearMorphs(void*) = 0;                                    // 11
 				virtual void ApplyVertexDiff(void*, void*, bool) = 0;                   // 12
@@ -932,6 +931,21 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			           "the provider wrote new morphs";
 		}
 
+		std::string MeshRelativePath(std::string a_path)
+		{
+			std::replace(a_path.begin(), a_path.end(), '/', '\\');
+			std::transform(a_path.begin(), a_path.end(), a_path.begin(),
+				[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			while (a_path.starts_with("meshes\\")) {
+				a_path.erase(0, 7);
+			}
+			if (a_path.empty() || a_path.front() == '\\' || a_path.find(':') != std::string::npos ||
+				a_path == ".." || a_path.starts_with("..\\") || a_path.find("\\..") != std::string::npos) {
+				return {};
+			}
+			return a_path;
+		}
+
 		bool TriFileExists(const std::string& a_relative)
 		{
 			// RaceMenu opens the file the same way (BodyMorphInterface::CacheFile,
@@ -951,7 +965,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			if (!a_model || !*a_model) {
 				return;
 			}
-			const std::string model{ a_model };
+			const std::string model = MeshRelativePath(a_model);
 			std::string lower{ model };
 			std::transform(lower.begin(), lower.end(), lower.begin(),
 				[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -1008,27 +1022,16 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			return {};
 		}
 
-		// Main thread only. Keyed by armour form and sex; an empty value means "no
+		// Main thread only. Keyed by ARMA, sex and perspective; an empty value means "no
 		// .tri", which is the common case and must not be re-probed per rebuild.
 		std::unordered_map<std::uint64_t, std::string> g_triPathCache;
 		std::unordered_set<std::uint64_t> g_triProbeLogged;
 
-		// 1.5.27: the model path comes from the armour addon the engine actually
-		// attached (biped->objects[slot].addon), not from a fresh
-		// TESObjectARMO::GetArmorAddon(race) lookup. That lookup only answers for a
-		// race the ARMA lists or inherits from; a custom race, a race the pack never
-		// listed, or an ARMA the engine resolved through its own fallback makes it
-		// return nothing - which is how 1.5.26 ended up with "0 .tri target(s)"
-		// while the slot dump showed every ARMA resolved (addon FE28F802 ...).
-		std::string BodyTriPathFor(RE::TESObjectARMO* a_armor, RE::TESObjectARMA* a_addon, RE::TESRace* a_race, bool a_female)
+		// Prefer the actual attached ARMA; a race lookup is only a fallback.
+		std::string BodyTriPathFor(RE::TESObjectARMO* a_armor, RE::TESObjectARMA* a_addon, RE::TESRace* a_race, bool a_female, bool a_firstPerson)
 		{
 			if (!a_armor) {
 				return {};
-			}
-			const std::uint64_t key =
-				(static_cast<std::uint64_t>(a_armor->GetFormID()) << 1) | (a_female ? 1ull : 0ull);
-			if (const auto it = g_triPathCache.find(key); it != g_triPathCache.end()) {
-				return it->second;
 			}
 			const RE::TESObjectARMA* addon = a_addon;
 			const char* source = "the armour addon the engine attached";
@@ -1043,9 +1046,15 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				SKSE::log::debug("MorphRefresh: {:08X} has no armour addon yet; no .tri target can be derived.", a_armor->GetFormID());
 				return {};
 			}
-			const char* model = addon->bipedModels[a_female ? 1 : 0].GetModel();
+			const std::uint64_t key = (static_cast<std::uint64_t>(addon->GetFormID()) << 2) |
+				(a_female ? 1ull : 0ull) | (a_firstPerson ? 2ull : 0ull);
+			if (const auto it = g_triPathCache.find(key); it != g_triPathCache.end()) {
+				return it->second;
+			}
+			const auto* models = a_firstPerson ? addon->bipedModel1stPersons : addon->bipedModels;
+			const char* model = models[a_female ? 1 : 0].GetModel();
 			if (!model || !*model) {
-				model = addon->bipedModels[a_female ? 0 : 1].GetModel();
+				model = models[a_female ? 0 : 1].GetModel();
 			}
 			const auto path = DeriveTriPath(model, a_female);
 			if (g_triProbeLogged.insert(key).second) {
@@ -1071,10 +1080,30 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				return false;
 			}
 			for (std::uint16_t i = 0; i < a_node->GetExtraDataSize(); ++i) {
-				const auto* extra = a_node->GetExtraDataAt(i);
-				if (extra && std::strcmp(extra->GetName().c_str(), "BODYTRI") == 0) {
-					return true;
+				auto* extra = a_node->GetExtraDataAt(i);
+				if (!extra || std::strcmp(extra->GetName().c_str(), "BODYTRI") != 0) { continue; }
+				auto* text = netimmerse_cast<RE::NiStringExtraData*>(extra);
+				if (!text || !text->value || !*text->value) { continue; }
+				const auto path = MeshRelativePath(text->value);
+				if (path.empty() || !TriFileExists(path)) { continue; }
+				if (path != text->value) {
+					auto* value = RE::malloc<char>(path.size() + 1);
+					if (!value) { continue; }
+					std::memcpy(value, path.c_str(), path.size() + 1);
+					RE::NiPointer<RE::NiStringExtraData> replacement{ RE::NiExtraData::Create<RE::NiStringExtraData>() };
+					if (!replacement) { RE::free(value); continue; }
+					replacement->SetName("BODYTRI");
+					replacement->value = value;
+					// Extra data may be shared with another clone; replace this node
+					// rather than freeing or rewriting the shared string.
+					RE::NiPointer<RE::NiExtraData> original{ extra };
+					a_node->RemoveExtraData("BODYTRI");
+					if (!a_node->AddExtraData(replacement.get())) {
+						a_node->AddExtraData(original.get());
+						continue;
+					}
 				}
+				return true;
 			}
 			const auto* node = a_node->AsNode();
 			if (!node) {
@@ -1097,7 +1126,10 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			if (!a_node || a_path.empty() || NodeHasBodyTri(a_node)) {
 				return false;
 			}
-			auto* extra = RE::NiExtraData::Create<RE::NiStringExtraData>();
+			if (a_node->HasExtraData("BODYTRI")) {
+				a_node->RemoveExtraData("BODYTRI");
+			}
+			RE::NiPointer<RE::NiStringExtraData> extra{ RE::NiExtraData::Create<RE::NiStringExtraData>() };
 			if (!extra) {
 				return false;
 			}
@@ -1108,35 +1140,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			std::memcpy(value, a_path.c_str(), a_path.size() + 1);
 			extra->value = value;
-			a_node->AddExtraData(extra);
-			return true;
-		}
-
-		// True when the node RaceMenu just morphed is one of our own illusion clones
-		// (or part of one): the illusion already followed that write.
-		bool IsIllusionClone(RE::Actor* a_actor, const RE::NiAVObject* a_node)
-		{
-			if (!a_actor || !a_node) {
-				return false;
-			}
-			for (const bool firstPerson : { false, true }) {
-				auto* biped = a_actor->GetBiped(firstPerson).get();
-				if (!biped) {
-					continue;
-				}
-				for (std::size_t i = 0; i < RE::BIPED_OBJECTS::kTotal; ++i) {
-					const auto* clone = biped->objects[i].partClone.get();
-					if (!clone) {
-						continue;
-					}
-					for (const RE::NiAVObject* walk = a_node; walk; walk = walk->parent) {
-						if (walk == clone) {
-							return true;
-						}
-					}
-				}
-			}
-			return false;
+			return a_node->AddExtraData(extra.get());
 		}
 
 		// The poll below watches the same vertex buffers this pass just rewrote.
@@ -1184,7 +1188,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			// walks every biped object and ApplyMorphs looks for "BODYTRI" in the
 			// subtree it was handed). The interface is only used to re-morph right
 			// now, so 1.5.20-1.5.25 gave up on the whole mechanism whenever the
-			// handshake failed - which on 1.5.97 is always.
+			// handshake failed - which can persist when early registration missed this plugin.
 			if (!a_actor || !a_actor->Is3DLoaded()) {
 				return BakeResult::kSkipped;
 			}
@@ -1247,7 +1251,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					if (const auto it = bySlot.find(i); it != bySlot.end()) {
 						// 1.5.27: the addon the engine attached this slot with is the
 						// only reliable source for the model path (BodyTriPathFor).
-						if (const auto path = BodyTriPathFor(it->second, biped->objects[i].addon, race, female); !path.empty()) {
+						if (const auto path = BodyTriPathFor(it->second, biped->objects[i].addon, race, female, firstPerson); !path.empty()) {
 							// A no-op when the clone already carries one.
 							AttachBodyTri(node, path);
 						}
@@ -1270,8 +1274,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				}
 			}
 
-			if (targets > 0 && morphPush::g_targetLogged.insert(id).second) {
-				SKSE::log::info("MorphRefresh: {:08X} carries a .tri morph target on {} of {} cloned slot(s) ({}); RaceMenu and OBody morph those clones in their own apply pass - no interface needed.",
+			if (morphPush::g_targetLogged.insert(id).second) {
+				SKSE::log::info("MorphRefresh: {:08X} has readable BODYTRI resources on {} of {} cloned slot(s) ({}); paths only, not proof of TRI shape matching or morph movement.",
 					id, targets, slots, BakeReasonText(a_reason));
 			}
 			if (evidence && slots > 0) {
@@ -1281,7 +1285,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					const auto after = ComputeGeometrySignature(a_actor, mask);
 					SKSE::log::debug("MorphRefresh: re-morphed {:08X} on {} node(s), {} .tri target(s) of {} slot(s) ({}); the vertices {}.",
 						id, nodes, targets, slots, BakeReasonText(a_reason),
-						before == after ? "were already current" : "moved");
+						before == after ? "did not change (not proof of success)" : "moved");
 				} else {
 					SKSE::log::debug("MorphRefresh: {:08X} has no BodyMorph interface; {} .tri target(s) of {} slot(s) stay armed for RaceMenu's own pass ({}).",
 						id, targets, slots, BakeReasonText(a_reason));
@@ -1366,9 +1370,6 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			auto* actor = static_cast<RE::TESObjectREFR*>(a_refr)->As<RE::Actor>();
 			if (!actor) {
-				return;
-			}
-			if (IsIllusionClone(actor, static_cast<const RE::NiAVObject*>(a_rootNode))) {
 				return;
 			}
 			RequestBake(actor->GetFormID(), BakeReason::kProvider);
@@ -1459,7 +1460,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				const auto now2 = std::chrono::steady_clock::now();
 				const auto after = ComputeCoveredGeometry(actor, id);
 				if (after != before) {
-					SKSE::log::trace("MorphRefresh: the provider pass moved the meshes of {:08X}; the illusion followed without a cycle.", id);
+					SKSE::log::trace("MorphRefresh: the covered geometry signature of {:08X} changed after the provider pass; individual outfit morph movement still needs verification.", id);
 				} else if (attempts < kVerifyAttempts) {
 					// RaceMenu defers the update (its update manager flushes later) and
 					// OBody queues its pass, so an unchanged signature this early only
@@ -1476,8 +1477,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					// start at the base shape again.
 					SKSE::log::debug("MorphRefresh: the provider pass left the meshes of {:08X} alone, but the illusion carries .tri targets; leaving it to the next morph pass.", id);
 				} else {
-					SKSE::log::debug("MorphRefresh: the provider pass left the meshes of {:08X} alone; taking the illusion off for one engine pass.", id);
-					CycleIllusion(actor, "body morph changed");
+					SKSE::log::debug("MorphRefresh: the provider pass left the meshes of {:08X} alone; queueing target repair without removing the illusion.", id);
+					RequestBake(id, BakeReason::kProvider);
 				}
 				const auto baseline = ComputeSignature(actor);
 				const auto providerSignature = ComputeProviderSignature(actor, nullptr);
@@ -1641,10 +1642,10 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				// slider" needs. It costs one body rebuild instead of the two full
 				// worn rebuilds of the cycle - the ~600 ms main-thread stall the
 				// OBody preset switches showed - and never exposes the real gear.
-				// The cycle remains the only sequence that makes the engine load a
-				// fresh .tri target, so it stays as the verified fallback.
+				// A missing target is repaired in place, never by exposing real gear.
 				EnsureProvidersForUse();
 				if (Settings::Get().morphProviderFirst && ProviderCanMorph()) {
+					const auto before = ComputeCoveredGeometry(actor, id);
 					if (g_api) {
 						ApplyMorphs(actor);
 					} else {
@@ -1654,7 +1655,6 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					// whole-actor signature always moves while a slider is being
 					// dragged (the body underneath is rewritten too), which made
 					// 1.5.19 conclude the clones had followed when they had not.
-					const auto before = ComputeCoveredGeometry(actor, id);
 					std::lock_guard lock(g_mutex);
 					g_verify[id] = VerifyState{ before, now + kVerifyDelay, 0 };
 					// No re-baseline yet: VerifyProviderPass owns the next baseline,
@@ -1693,12 +1693,9 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					continue;
 				}
 
-				CycleIllusion(actor, "body morph changed");
+				RequestBake(id, BakeReason::kProvider);
 
-				// Re-baseline right away. The cycle replaced every display clone,
-				// so the geometry moved again because of us; without this the next
-				// poll would read our own rebuild as a fresh morph change and
-				// cycle for ever - the stutter OBody preset switches showed.
+				// Re-baseline the observer; target repair never removes the outfit.
 				const auto baseline = ComputeSignature(actor);
 				{
 					std::lock_guard lock(g_mutex);
@@ -1752,16 +1749,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 
 		bool TryRaceMenu(const SKSE::MessagingInterface* a_messaging, bool a_quiet = false)
 		{
-			// The exchange is a plain SKSE message. skee answers it from a
-			// catch-all listener it registers at load time (skee64 main.cpp,
-			// RegisterListener(g_pluginHandle, nullptr, ...)); "skee64" and "skee"
-			// are the names it registers under, and the unnamed broadcast is the
-			// fallback for builds where the named dispatch does not match. All
-			// three are tried, in that order, and the channel that answered goes
-			// into the log. Note (1.5.26): on 1.5.97 skse64.log shows our
-			// broadcast reaching only the plugins that registered a catch-all
-			// listener *after* us, so this can legitimately fail for a whole
-			// session - which is why nothing else may depend on it.
+			// SKSE only dispatches to subscribers of our sender handle.
+			// A catch-all registered before our handle existed can miss it.
 			constexpr const char* kReceivers[] = { "skee64", "skee", nullptr };
 			const char* answered = nullptr;
 			skee::InterfaceExchangeMessage exchange{};
@@ -1775,7 +1764,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			if (!exchange.interfaceMap) {
 				if (!a_quiet) {
-					SKSE::log::info("MorphRefresh: RaceMenu did not answer the interface exchange on any channel; the .tri targets stay armed, only the immediate re-morph and the morph callback are off.");
+					SKSE::log::info("MorphRefresh: RaceMenu did not answer the interface exchange; if skee uses [Features] bEnableEarlyRegistration=1, set it to 0 and restart. Retrying cannot repair a missing SKSE sender subscription. BODYTRI paths alone do not prove morph success.");
 				}
 				return false;
 			}
@@ -1907,11 +1896,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			return;
 		}
 
-		// 1.5.26: the exchange goes out from a queued task, never from this
-		// message handler. skse64.log shows that a broadcast sent from inside a
-		// handler only ever reaches the plugins that registered their catch-all
-		// listener late, so skee - loaded early - never sees it. The .tri targets
-		// do not depend on the answer, so nothing is lost while it is missing.
+		// Keep messaging out of skinning callbacks. Queueing cannot fix a missing
+		// subscription caused by an early catch-all registration in SKSE 2.0.20.
 		QueueProviderRetry();
 		SKSE::log::info("MorphRefresh: every illusion clone whose armour model ships a .tri gets that .tri as a morph target; RaceMenu and OBody morph those clones in their own pass. The provider interface only adds the immediate re-morph.");
 	}

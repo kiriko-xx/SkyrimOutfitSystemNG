@@ -17,7 +17,9 @@
 | 1.5.25 | 2026-11-17 | 1,065,358 | `afb826b016997ec57d17c01fddc7cf64617837a3deafde153227dabc8ceca191` | 删除 `ClearSlots`/`SlotClone`：离开幻化集的槽不再清空、原样交回引擎（`left to the engine`）；DLL 1,866,240 B / `ae797d9d…`；**实机确认幻化服装与空幻化都正常**（m02536） |
 | 1.5.26 | 2026-11-17 | 1,074,870 | `705f3517db9553df9e0bda4c5cadda59c49275d337ceea2b21dc4d3b0f288df6` | `.tri` 跟随不再依赖 skee 接口：每个幻化克隆件无条件贴 `BODYTRI`（RaceMenu/OBody 自己的 `ApplyBodyMorphs` 会遍历到并 morph 它），接口降级为加分项，握手改到主线程任务，几何探针补蒙皮网格 `rawVertexData`；DLL 1,868,288 B / `7ca36b0d…`；**实机 0 个 `.tri` target 贴上（m02992）** |
 
-| 1.5.27 | 2026-11-17 | 1,085,341 | `5979290d01fb375c1d2a46040f4d799d21fa9db3cde2e528a365853d3569cfe9` | **当前版本**；`.tri` 路径改问引擎已解析的 `biped->objects[slot].addon`（不再用 `GetArmorAddon(race)`），四个候选名全试，`.nif` 自带目标也计入，克隆件武装后不再 `CycleIllusion`；DLL 1,875,456 B / `22eb7794…` |
+| 1.5.27 | 2026-11-17 | 1,085,341 | `5979290d01fb375c1d2a46040f4d799d21fa9db3cde2e528a365853d3569cfe9` | **实机仍不跟随**；`.tri` 路径改问引擎已解析的 `biped->objects[slot].addon`（不再用 `GetArmorAddon(race)`），四个候选名全试，`.nif` 自带目标也计入，克隆件武装后不再 `CycleIllusion`；DLL 1,875,456 B / `22eb7794…` |
+
+| 1.5.28 | 2026-11-17 | 1,126,775 | `4894dcbc71c6a1cf445c87c301d13804aeb47791ed32d0ffc3ee0a1a41613b35` | **当前候选版本，待实机**；修双 meshes 前缀、校验 BODYTRI 可读资源、ARMA/sex/1P/3P 缓存、回调过滤与 provider 基线；自动刷新不摘幻化；DLL 1,878,016 B / `fe5c79b5b1f1e1fc3153870dd6b61cf293081805cab407ad3ea41ed1621bb553` / 1.5.28.0；31 条目解包哈希31/31、清单30/30 |
 
 各包旁的 `.zip.sha256` 内容为「哈希 + 两个空格 + 包名」+ CRLF，可直接 `certutil -hashfile` 复核。
 
@@ -32,7 +34,8 @@
 | 1.5.25 | git tag `v1.5.25`（提交 `2db9580`） |
 | 1.5.26 | git tag `v1.5.26` |
 | 1.5.27 | git tag `v1.5.27` |
-| 当前 dist | 1.5.27 的交付内容（31 文件 / 2,553,987 B；DLL 1,875,456 B / 1.5.27.0 / `22eb7794…`），`SHA256SUMS.txt` 30 行逐条复核 30/30 |
+| 1.5.28 | git tag `v1.5.28` |
+| 当前 dist | 1.5.28 的候选交付（31 文件 / 2,578,845 B；DLL 1,878,016 B / 1.5.28.0 / `fe5c79b5…`），SHA256SUMS.txt 30 行复核30/30；游戏内形变尚未验证 |
 
 1.5.22 的交付目录存档在 `build/dist_1_5_22/`（build/ 不入库）。
 
