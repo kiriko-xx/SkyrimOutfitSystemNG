@@ -15,7 +15,9 @@
 | 1.5.23 | 2026-11-17 | 1,053,290 | `e75a9274f8f0c5190ba9139311c1fe2da4871fa76d4e88ca7d920b2318c3a34b` | `CustomSkinPlayer` 扫描失败时回退 1.0.0 历史站点（SE `+0x81` / AE `+0x1EF`）+ 幻化门禁恢复成对；DLL 1,863,168 B / `be282e7a…`；**实机只显示头手、46 槽外露** |
 | 1.5.24 | 2026-11-17 | 1,059,923 | `068b2396e6c0c72c4c26087a3aeb0f9f6da3a323a292acb8cda43254392c92cf` | 贴件回到引擎传进来的 `ActorWeightModel`（`rbx`/`rdi` 寄存器契约）、只贴未真实穿戴的件；DLL 1,866,752 B / `2530c1e5…`；**实机幻化件恢复显示，但身体（32 槽）变空模型** |
 | 1.5.25 | 2026-11-17 | 1,065,358 | `afb826b016997ec57d17c01fddc7cf64617837a3deafde153227dabc8ceca191` | 删除 `ClearSlots`/`SlotClone`：离开幻化集的槽不再清空、原样交回引擎（`left to the engine`）；DLL 1,866,240 B / `ae797d9d…`；**实机确认幻化服装与空幻化都正常**（m02536） |
-| 1.5.26 | 2026-11-17 | 1,074,870 | `705f3517db9553df9e0bda4c5cadda59c49275d337ceea2b21dc4d3b0f288df6` | **当前版本**；`.tri` 跟随不再依赖 skee 接口：每个幻化克隆件无条件贴 `BODYTRI`（RaceMenu/OBody 自己的 `ApplyBodyMorphs` 会遍历到并 morph 它），接口降级为加分项，握手改到主线程任务，几何探针补蒙皮网格 `rawVertexData`；DLL 1,868,288 B / `7ca36b0d…` |
+| 1.5.26 | 2026-11-17 | 1,074,870 | `705f3517db9553df9e0bda4c5cadda59c49275d337ceea2b21dc4d3b0f288df6` | `.tri` 跟随不再依赖 skee 接口：每个幻化克隆件无条件贴 `BODYTRI`（RaceMenu/OBody 自己的 `ApplyBodyMorphs` 会遍历到并 morph 它），接口降级为加分项，握手改到主线程任务，几何探针补蒙皮网格 `rawVertexData`；DLL 1,868,288 B / `7ca36b0d…`；**实机 0 个 `.tri` target 贴上（m02992）** |
+
+| 1.5.27 | 2026-11-17 | 1,085,341 | `5979290d01fb375c1d2a46040f4d799d21fa9db3cde2e528a365853d3569cfe9` | **当前版本**；`.tri` 路径改问引擎已解析的 `biped->objects[slot].addon`（不再用 `GetArmorAddon(race)`），四个候选名全试，`.nif` 自带目标也计入，克隆件武装后不再 `CycleIllusion`；DLL 1,875,456 B / `22eb7794…` |
 
 各包旁的 `.zip.sha256` 内容为「哈希 + 两个空格 + 包名」+ CRLF，可直接 `certutil -hashfile` 复核。
 
@@ -29,7 +31,8 @@
 | 1.5.24 | git tag `v1.5.24`（提交 `0a78b76`） |
 | 1.5.25 | git tag `v1.5.25`（提交 `2db9580`） |
 | 1.5.26 | git tag `v1.5.26` |
-| 当前 dist | 1.5.26 的交付内容（31 文件 / 2,525,801 B；DLL 1,868,288 B / 1.5.26.0 / `7ca36b0d…`），`SHA256SUMS.txt` 30 行逐条复核 30/30 |
+| 1.5.27 | git tag `v1.5.27` |
+| 当前 dist | 1.5.27 的交付内容（31 文件 / 2,553,987 B；DLL 1,875,456 B / 1.5.27.0 / `22eb7794…`），`SHA256SUMS.txt` 30 行逐条复核 30/30 |
 
 1.5.22 的交付目录存档在 `build/dist_1_5_22/`（build/ 不入库）。
 
