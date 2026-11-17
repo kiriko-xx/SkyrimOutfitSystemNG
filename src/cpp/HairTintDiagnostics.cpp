@@ -190,6 +190,17 @@ namespace SOS::HairTintDiagnostics
 		scan.text << " loaded=" << loaded;
 		std::array<RE::NiAVObject*, kMaxRoots> roots{};
 		std::size_t rootCount = 0;
+		if (loaded) {
+			auto* headHair = player->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kHair);
+			scan.text << " source=headpart-hair root=" << Identity(headHair);
+			if (headHair) {
+				roots[rootCount++] = headHair;
+				scan.Visit(headHair, 0);
+			} else {
+				scan.text << " missing;";
+			}
+		}
+		scan.text << " source=illusion-slots";
 		if (loaded && a_coveredSlotMask) {
 			for (const bool firstPerson : { false, true }) {
 				const auto biped = player->GetBiped(firstPerson);

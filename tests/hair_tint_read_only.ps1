@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $src = Get-Content -Raw (Join-Path $PSScriptRoot '../src/cpp/HairTintDiagnostics.cpp')
 $morph = Get-Content -Raw (Join-Path $PSScriptRoot '../src/cpp/MorphRefresh.cpp')
-foreach ($required in @('kMaxRoots = 8', 'kMaxObjects = 512', 'kMaxGeometries = 64', 'netimmerse_cast<RE::BSLightingShaderProperty*>', 'BSShaderMaterial::Type::kLighting', 'BSShaderMaterial::Feature::kHairTint', 'spdlog::should_log(spdlog::level::debug)', 'g_lastSample', 'std::atomic<unsigned> g_events')) {
+foreach ($required in @('kMaxRoots = 8', 'kMaxObjects = 512', 'kMaxGeometries = 64', 'netimmerse_cast<RE::BSLightingShaderProperty*>', 'BSShaderMaterial::Type::kLighting', 'BSShaderMaterial::Feature::kHairTint', 'spdlog::should_log(spdlog::level::debug)', 'g_lastSample', 'std::atomic<unsigned> g_events', 'GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kHair)', 'source=headpart-hair', 'source=illusion-slots')) {
  if (-not $src.Contains($required)) { throw "Missing diagnostic guard: $required" }
 }
 $begin = $src.IndexOf('class MenuSink')

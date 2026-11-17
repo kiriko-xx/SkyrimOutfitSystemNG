@@ -59,6 +59,14 @@ InstallPlugins 经 IDirectoryIterator 枚举 DLL，当前代码没有显式排�
 4. 再单独测 BodyMorph 滑块、OBody换预设；不要把读取路径或接口握手成功当作实际形变成功。若重现CTD，保留新 crash 日志，不对旧 Remiel/package 栈预先归因。
 5. 若菜单期间无采样行，先核对日志级别与主线程heartbeat是否运行；不能据此断言颜色没变。诊断后将 ExtraLogging 恢复 off。
 
+## 新实测：0f33f8f 仍未解决发色和形变
+
+用户确认不再崩溃，但不是CTD永久消除证明。最新同次日志证明 sender139 的桶没有 skee132：旧skee Load wildcard时向量size133，后续139新桶未获订阅；完整重放应得 [24,35,39,45,66,91,95,140]。OBody95桶含132，所以它能取得接口，SOS不能；请求时机相同不能改变路由。
+
+最小公开契约候选：只将我方模块basename换为 OutfitSystemNG.dll，内部PluginInfo.name仍SkyrimOutfitSystemNG，INI/存档标识不改。必须在实际Data/SKSE/Plugins最终VFS视图禁用旧SkyrimOutfitSystemNG.dll，不能双加载。文件名不保证枚举排序；仅当新日志证明我方handle H早于skee S且receiver skee delivered/map均true并取得v4，才说明路由已修。不得改名第三方、伪造sender或硬读内部map。
+
+发色操作时序以用户新澄清为准：正确色为13,13,13；进入RM已错色；之后用户在临时色板预览56,59,44，再取消（不是确认），画面恢复正确13,13,13。日志没有色板打开/预览/取消的精确事件，不能把open快照中的56,59,44归因为初始化写色，也不能将未采到的瞬时错色等同该值。seq6/7出现RGB/128通路、九次其它slider事件未恢复仅为日志观察，不能覆盖用户实际操作说明。2/255与1/128是不同现有写路径，不能硬编码统一倍率。新只读采样增加独立headpart-hair来源，与illusion-slots明确分区，仍共用8根/512对象/64几何预算；不写颜色。真实头发缺失或共享材质时仍不能作为无歧义写入来源。
+
 ## 未完成
 
 公开接口获取在旧版晚加载情况下仍待解决。已核对参考包 nioverride.psc 没有 AttachMesh/DetachMesh；别版上游的 AttachMesh 即使存在也仅证明首次 ApplyVertexDiff，不证明持续形变，不能拿它重构已验证挂载路径。公开 UpdateModelWeight 仅 ref 参数，不能指定现有 clone root；没有已验证第三方代理接口。
