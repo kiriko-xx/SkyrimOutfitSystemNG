@@ -193,7 +193,11 @@ namespace Hooking {
                     return;
                 }
 
-                CustomSkinPlayer_Hook = FindCallInFunction("CustomSkinPlayer", CustomSkinPlayer_Hook_ID, InventoryChanges_ExecuteVisitorOnWorn);
+                // SE 1.5.97 is the build where the recorded callee check fails while the
+                // site itself still works, so this hook keeps a per-runtime fallback offset
+                // (0x81 SE / 0x1EF AE - the values every release up to 1.5.19 patched).
+                const std::ptrdiff_t kLegacyOffset = REL::Module::IsAE() ? 0x1EF : 0x81;
+                CustomSkinPlayer_Hook = FindCallInFunctionOrOffset("CustomSkinPlayer", CustomSkinPlayer_Hook_ID, InventoryChanges_ExecuteVisitorOnWorn, kLegacyOffset);
                 if (!CustomSkinPlayer_Hook) {
                     return;
                 }
@@ -511,15 +515,14 @@ namespace Hooking {
 #endif
 
         // Hiding the real armour without something to put in its place shows up as a
-        // nude actor, so the illusion stays off unless the hiding hook is in place. The
-        // display side does not have to be a hook: when this build has no call site for
-        // it, the plugin attaches the display set from its own deferred pass.
-        const bool illusionAvailable = Detail::g_dontVanillaSkinPlayerInstalled;
+        // nude actor, so the illusion stays off unless both halves are in place. Up to
+        // 1.5.19 the display half was the CustomSkinPlayer hook; 1.5.22 tried to keep
+        // the illusion on with only the hiding hook and let the deferred pass attach
+        // the display set, and users saw a nude actor, so both are required again.
+        const bool illusionAvailable = Detail::g_dontVanillaSkinPlayerInstalled && Detail::g_customSkinPlayerInstalled;
         SetIllusionDisplayEnabled(illusionAvailable);
-        if (illusionAvailable && Detail::g_customSkinPlayerInstalled) {
+        if (illusionAvailable) {
             LOG(info, "Illusion display is active: the player skinning hooks are installed.");
-        } else if (illusionAvailable) {
-            LOG(info, "Illusion display is active: the hiding hook is installed and the display set is attached from the deferred pass.");
         } else {
             LOG(critical, "Illusion display is off for this session: the player skinning hooks are not both installed (vanilla pass {}, display pass {}). The real equipped armour stays visible. Nothing else is disabled.",
                 Detail::g_dontVanillaSkinPlayerInstalled ? "hooked" : "missing",

@@ -204,6 +204,65 @@ namespace Hooking
 		return sites.front();
 	}
 
+	std::uintptr_t FindCallInFunctionOrOffset(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, std::ptrdiff_t a_legacyOffset)
+	{
+		if (!IdExists(a_host) || !IdExists(a_target)) {
+			LOG(err, "{}: address library id {} or {} is missing for runtime {}; this hook stays disabled.",
+				a_hook, a_host.id(), a_target.id(), REL::Module::get().version().string());
+			return 0;
+		}
+
+		const auto base = REL::Module::get().base();
+		const auto entry = a_host.address();
+		const auto target = a_target.address();
+		if (!InText(entry, 1)) {
+			LOG(err, "{}: the entry rva 0x{:X} is outside .text; the hook stays disabled so the game keeps running.", a_hook, entry - base);
+			return 0;
+		}
+
+		const auto text = TextSegment();
+		auto end = entry + static_cast<std::uintptr_t>(kBodyScanLimit);
+		const auto textEnd = text.address() + text.size();
+		if (end > textEnd) end = textEnd;
+
+		const auto sites = CallsReaching(entry, end, target);
+		if (!sites.empty()) {
+			for (const auto site : sites) {
+				LOG(debug, "{}: the call to 0x{:X} sits at rva 0x{:X} ({} byte(s) into the function at rva 0x{:X}).",
+					a_hook, target, site - base,
+					static_cast<std::ptrdiff_t>(site) - static_cast<std::ptrdiff_t>(entry), entry - base);
+			}
+			if (sites.size() > 1) {
+				LOG(warn, "{}: the function at rva 0x{:X} calls 0x{:X} {} times; hooking the first one at rva 0x{:X}.",
+					a_hook, entry - base, target, sites.size(), sites.front() - base);
+			}
+			return sites.front();
+		}
+
+		// No call to the recorded callee in the function body. The instruction the hook
+		// has always patched may still be there: this build reaches the skinning pass
+		// through a different call, and patching that call is exactly what made the
+		// illusion appear in every release up to 1.5.19. Checking the byte keeps the
+		// write from landing in the middle of unrelated data.
+		const auto legacy = entry + static_cast<std::uintptr_t>(a_legacyOffset);
+		if (InText(legacy, 5) && *reinterpret_cast<const std::uint8_t*>(legacy) == 0xE8) {
+			LOG(warn, "{}: the function at rva 0x{:X} has no call to 0x{:X} within 0x{:X} bytes, but the site this hook has used since 1.0.0 - rva 0x{:X} (+0x{:X} into the function) - is still a 5-byte call; the hook is installed there.",
+				a_hook, entry - base, target, kBodyScanLimit, legacy - base, a_legacyOffset);
+			return legacy;
+		}
+
+		LOG(err, "{}: the function at rva 0x{:X} does not call 0x{:X} within 0x{:X} bytes and the legacy site rva 0x{:X} is not a 5-byte call either; the hook stays disabled so the game keeps running. Report this line together with your game version.",
+			a_hook, entry - base, target, kBodyScanLimit, legacy - base);
+		LogModuleIdentity(a_hook);
+		const auto all = CallsReaching(text.address(), textEnd, target);
+		LOG(err, "{}: .text holds {} call(s) to 0x{:X}.", a_hook, all.size(), target);
+		for (std::size_t i = 0; i < all.size() && i < 5; ++i) {
+			LOG(err, "{}: call at rva 0x{:X} ({} bytes from the function entry)", a_hook, all[i] - base,
+				static_cast<std::ptrdiff_t>(all[i]) - static_cast<std::ptrdiff_t>(entry));
+		}
+		return 0;
+	}
+
 	void LogSiteBytes(const char* a_hook, std::uintptr_t a_site)
 	{
 		if (!InText(a_site, 5)) {

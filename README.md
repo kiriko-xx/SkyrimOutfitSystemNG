@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.17**（1.5.18–1.5.22 因实机问题整体回退，源码存档在 git tag `v1.5.22-archive`；版本与哈希见 [VERSIONS.md](VERSIONS.md)）
+- 当前版本：**1.5.23**（修 1.5.20 起「底层幻化乱套」：恢复 1.5.17 一直在用的 `CustomSkinPlayer` 贴件站点，扫不到才回退历史偏移；1.5.18–1.5.22 的失败版本源码存档在 git tag `v1.5.22-archive`；版本与哈希见 [VERSIONS.md](VERSIONS.md)）
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 

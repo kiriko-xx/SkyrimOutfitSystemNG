@@ -38,6 +38,16 @@ namespace Hooking
 	// Returns 0 (and logs why) when no call to a_target sits in the body.
 	std::uintptr_t FindCallInFunction(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target);
 
+	// Same scan, but for builds where the function body contains no call to a_target at
+	// all. That happens when the compiler inlined the callee or when the address
+	// library entry resolves to a different function than the one the hook was written
+	// against. In that case the site the plugin has patched since 1.0.0 (host entry +
+	// a_legacyOffset, a per-hook constant) is used when the bytes there are still a
+	// 5-byte call. Returning 0 would disable the hook, and a disabled CustomSkinPlayer
+	// hook leaves the real armour hidden with nothing attached, which is worse than a
+	// site that does not match the recorded callee.
+	std::uintptr_t FindCallInFunctionOrOffset(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, std::ptrdiff_t a_legacyOffset);
+
 	// How far into a function body the call scan looks. All the hooks patch a call in
 	// the first few hundred bytes of their host function (the deepest is 0x373).
 	inline constexpr std::ptrdiff_t kBodyScanLimit = 0x800;
