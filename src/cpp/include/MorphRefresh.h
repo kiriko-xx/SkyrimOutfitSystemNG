@@ -11,18 +11,21 @@ namespace RE
 
 namespace SOS::MorphRefresh
 {
-	// Acquires RaceMenu's BodyMorph interface, OBody's preset API and SLIF NG's
-	// query interface (any combination). Called once from kDataLoaded. The
-	// providers supply the signal that the actor's shape changed; without at
-	// least one of them the module stays inactive.
+	// Arms the .tri morph targets on every illusion clone and asks the body
+	// morph providers for their interfaces (RaceMenu, OBody, SLIF NG - any
+	// combination). Called once from kDataLoaded. The .tri targets work without
+	// any interface: RaceMenu and OBody morph the clones in their own apply
+	// pass. The interfaces only add the immediate re-morph and the morph
+	// callback.
 	void Install();
 
-	// Tries the providers again. RaceMenu does not always answer the interface
-	// exchange at kDataLoaded: on 1.5.97 skee only starts listening from inside
-	// one of its own message handlers, so the answer can be minutes late. This
-	// runs from the heartbeat (fast at first, then every 30 s for the whole
-	// session), from kPostLoadGame and lazily from the poll right before the
-	// interface is used. It never gives up.
+	// Tries the providers again. Must run on the main thread, outside any SKSE
+	// message handler and outside the skinning hooks: the handshake is a
+	// message dispatch, and skse64.log shows a dispatch sent from inside a
+	// handler only reaches the plugins that registered a catch-all listener
+	// late (so skee, loaded early, never answers). Callers queue it through the
+	// task interface; the heartbeat retries forever, fast at first and then
+	// every 30 s.
 	void RetryProviders();
 
 	// Forgets every signature and pending rebuild (new game / load).
@@ -44,9 +47,10 @@ namespace SOS::MorphRefresh
 
 	// Called by the skinning hook once it applied the display set. The clones it
 	// creates never pass skee's attach hook, so they carry no .tri morph target
-	// and RaceMenu's morph pass skips them; this gives every illusion slot its
-	// .tri path and re-applies the morphs the actor currently holds. Runs from a
-	// main-thread task and does not detach or rebuild anything.
+	// and RaceMenu's own morph pass skips them; this gives every illusion slot
+	// its .tri path and, when the interface is available, re-applies the morphs
+	// the actor currently holds. Runs from a main-thread task and does not
+	// detach or rebuild anything - and it runs with or without the interface.
 	void NotifySlotApplied(RE::Actor* a_actor);
 
 	// Takes the illusion off, lets the engine run one pass over the real armour

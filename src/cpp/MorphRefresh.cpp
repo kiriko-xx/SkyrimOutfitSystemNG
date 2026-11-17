@@ -322,6 +322,27 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		std::chrono::steady_clock::time_point g_lastProviderRetry{};
 		int g_providerRetries{ 0 };
 
+		// One queued provider retry at a time. The handshake dispatches SKSE
+		// messages, so it may only run from a main-thread task - never from an
+		// SKSE message handler and never from a skinning hook.
+		std::atomic<bool> g_providerRetryQueued{ false };
+
+		void QueueProviderRetry()
+		{
+			if (g_providerRetryQueued.exchange(true)) {
+				return;
+			}
+			auto* tasks = SKSE::GetTaskInterface();
+			if (!tasks) {
+				g_providerRetryQueued.store(false);
+				return;
+			}
+			tasks->AddTask([]() {
+				g_providerRetryQueued.store(false);
+				RetryProviders();
+			});
+		}
+
 		// Per actor: the signature last observed, the stabilised signature that
 		// already caused a pass, the timestamps both need, and what the provider
 		// showed when that pass started - a morph value that moves away from it
@@ -464,6 +485,52 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			return hash;
 		}
 
+		// 1.5.26: a dressed actor's body and armour are *skinned* meshes -
+		// BSTriShape with a NiSkinInstance - so HashDynamicShape() above never
+		// touches them and the poll stayed blind while a slider was dragged. The
+		// morphed positions of a skinned mesh live in the partition's raw vertex
+		// buffer (that is exactly where skee writes them, see
+		// BodyMorphInterface.cpp ApplyMorph), and those vertices are stored in
+		// bind pose, so animation alone never changes this hash.
+		std::uint64_t HashSkinnedShape(RE::NiAVObject* a_object)
+		{
+			if (!a_object) {
+				return 0;
+			}
+			auto* geometry = a_object->AsGeometry();
+			if (!geometry || !geometry->skinInstance) {
+				return 0;
+			}
+			auto* partition = geometry->skinInstance->skinPartition.get();
+			if (!partition || partition->numPartitions == 0 || !partition->partitions.data()) {
+				return 0;
+			}
+			auto& part = partition->partitions[0];
+			auto* buffer = part.buffData;
+			if (!buffer || !buffer->rawVertexData || part.vertices == 0) {
+				return 0;
+			}
+			const std::uint32_t stride = part.vertexDesc.GetSize();
+			if (stride == 0 || stride > 128) {
+				return 0;
+			}
+			const std::size_t size = static_cast<std::size_t>(part.vertices) * stride;
+			const auto* bytes = buffer->rawVertexData;
+			std::uint64_t hash = 1469598103934665603ull;
+			const std::size_t head = size < 1024 ? size : 1024;
+			for (std::size_t i = 0; i < head; ++i) {
+				hash ^= bytes[i];
+				hash *= 1099511628211ull;
+			}
+			for (std::size_t i = head; i < size; i += 251) {
+				hash ^= bytes[i];
+				hash *= 1099511628211ull;
+			}
+			hash ^= size;
+			hash *= 1099511628211ull;
+			return hash;
+		}
+
 		// 1.5.18 hashed biped->objects[i].partClone directly and stayed blind: for
 		// most pieces that pointer is the *container* of the piece (a NiNode that
 		// holds the mesh, an add-on node, a skin wrapper), not the BSGeometry, so
@@ -482,7 +549,11 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			if (!a_object || a_depth > kProbeMaxDepth || a_shapes >= a_budget) {
 				return;
 			}
-			if (const auto shape = HashDynamicShape(a_object); shape != 0) {
+			auto shape = HashDynamicShape(a_object);
+			if (shape == 0) {
+				shape = HashSkinnedShape(a_object);
+			}
+			if (shape != 0) {
 				a_hash ^= shape;
 				a_hash *= 1099511628211ull;
 				++a_shapes;
@@ -766,11 +837,12 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 
 		void EnsureProvidersForUse()
 		{
-			// The pitfall the SLIF NG author documented and 1.5.18 still walked
-			// into: on 1.5.97 skee only starts listening from inside one of its own
-			// message handlers, so the exchange can fail for minutes after load.
 			// Ask again right before the interface is actually needed - never only
 			// on a timer that may already have expired before the game started.
+			// Always through the queue: this runs inside the skinning hook, and a
+			// message dispatch must not happen there (1.5.25 logs show the
+			// "Failed to dispatch message" warnings landing between two skinning
+			// calls for exactly that reason).
 			const auto now = std::chrono::steady_clock::now();
 			{
 				std::lock_guard lock(g_mutex);
@@ -779,7 +851,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				}
 				g_lastProviderRetry = now;
 			}
-			RetryProviders();
+			QueueProviderRetry();
 		}
 
 		// What asked for a re-morph; only used for the log line.
@@ -836,6 +908,10 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			// per 5 s instead of one per frame while a slider is dragged.
 			std::chrono::steady_clock::time_point g_lastEvidence{};
 			RE::FormID g_evidenceActor{ 0 };
+			// One info line per actor the first time its clones carry a .tri
+			// target, so a user log proves the push path is armed without
+			// turning every rebuild into a log line.
+			std::unordered_set<RE::FormID> g_targetLogged;
 		}
 
 		enum class BakeResult
@@ -1032,7 +1108,14 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		// clone keeps its identity and no frame ever shows the real armour.
 		BakeResult BakeIllusion(RE::Actor* a_actor, BakeReason a_reason)
 		{
-			if (!g_api || !a_actor || !a_actor->Is3DLoaded()) {
+			// 1.5.26: the .tri target is what makes RaceMenu morph the clone, and
+			// attaching it needs no provider interface at all - skee reads it from
+			// inside its own pass (BodyMorphInterface.cpp, MorphCache::UpdateMorphs
+			// walks every biped object and ApplyMorphs looks for "BODYTRI" in the
+			// subtree it was handed). The interface is only used to re-morph right
+			// now, so 1.5.20-1.5.25 gave up on the whole mechanism whenever the
+			// handshake failed - which on 1.5.97 is always.
+			if (!a_actor || !a_actor->Is3DLoaded()) {
 				return BakeResult::kSkipped;
 			}
 			const auto id = a_actor->GetFormID();
@@ -1072,10 +1155,11 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 
 			const bool evidence = id != morphPush::g_evidenceActor ||
 				now - morphPush::g_lastEvidence > std::chrono::seconds(5);
-			const auto before = evidence ? ComputeGeometrySignature(a_actor, mask) : 0;
+			const auto before = evidence && g_api ? ComputeGeometrySignature(a_actor, mask) : 0;
 
-			std::size_t nodes{ 0 };
+			std::size_t slots{ 0 };
 			std::size_t targets{ 0 };
+			std::size_t nodes{ 0 };
 			for (const bool firstPerson : { false, true }) {
 				auto* biped = a_actor->GetBiped(firstPerson).get();
 				if (!biped) {
@@ -1089,31 +1173,50 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					if (!node) {
 						continue;
 					}
+					++slots;
 					if (const auto it = bySlot.find(i); it != bySlot.end()) {
-						if (const auto path = BodyTriPathFor(it->second, race, female);
-							!path.empty() && AttachBodyTri(node, path)) {
-							++targets;
+						if (const auto path = BodyTriPathFor(it->second, race, female); !path.empty()) {
+							// A no-op when the clone already carries one; the slot
+							// is armed either way.
+							AttachBodyTri(node, path);
+							if (NodeHasBodyTri(node)) {
+								++targets;
+							}
 						}
 					}
-					morphPush::g_selfWrite.store(true, std::memory_order_release);
-					g_api->ApplyVertexDiff(a_actor, node, false);
-					morphPush::g_selfWrite.store(false, std::memory_order_release);
-					++nodes;
+					// Only the immediate re-morph needs the interface. The .tri
+					// target above is what makes RaceMenu morph the clone itself,
+					// and that works with no interface at all.
+					if (g_api) {
+						morphPush::g_selfWrite.store(true, std::memory_order_release);
+						g_api->ApplyVertexDiff(a_actor, node, false);
+						morphPush::g_selfWrite.store(false, std::memory_order_release);
+						++nodes;
+					}
 				}
 			}
 
-			if (evidence && nodes > 0) {
+			if (targets > 0 && morphPush::g_targetLogged.insert(id).second) {
+				SKSE::log::info("MorphRefresh: {:08X} carries a .tri morph target on {} of {} cloned slot(s) ({}); RaceMenu and OBody morph those clones in their own apply pass - no interface needed.",
+					id, targets, slots, BakeReasonText(a_reason));
+			}
+			if (evidence && slots > 0) {
 				morphPush::g_evidenceActor = id;
 				morphPush::g_lastEvidence = now;
-				const auto after = ComputeGeometrySignature(a_actor, mask);
-				SKSE::log::debug("MorphRefresh: re-morphed {:08X} on {} node(s), {} new .tri target(s) ({}); the vertices {}.",
-					id, nodes, targets, BakeReasonText(a_reason),
-					before == after ? "were already current" : "moved");
+				if (g_api) {
+					const auto after = ComputeGeometrySignature(a_actor, mask);
+					SKSE::log::debug("MorphRefresh: re-morphed {:08X} on {} node(s), {} .tri target(s) of {} slot(s) ({}); the vertices {}.",
+						id, nodes, targets, slots, BakeReasonText(a_reason),
+						before == after ? "were already current" : "moved");
+				} else {
+					SKSE::log::debug("MorphRefresh: {:08X} has no BodyMorph interface; {} .tri target(s) of {} slot(s) stay armed for RaceMenu's own pass ({}).",
+						id, targets, slots, BakeReasonText(a_reason));
+				}
 			}
 			if (nodes > 0) {
 				AbsorbOwnWrite(a_actor);
 			}
-			return nodes > 0 ? BakeResult::kBaked : BakeResult::kSkipped;
+			return (nodes > 0 || targets > 0) ? BakeResult::kBaked : BakeResult::kSkipped;
 		}
 
 		void DrainPending()
@@ -1535,16 +1638,16 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 
 		bool TryRaceMenu(const SKSE::MessagingInterface* a_messaging, bool a_quiet = false)
 		{
-			// SKSE 2.1.2+ resolves a receiver name to the sender's position in the
-			// list of plugins that registered a listener, so one plugin that
-			// failed to load shifts every name after it and an old name can miss
-			// while skee64.dll is loaded and working. "skee64" is the name skee
-			// registers itself under, and skee always registers a catch-all
-			// listener too (skee64 main.cpp, RegisterListener(nullptr)), so an
-			// unnamed broadcast reaches it as well. All three are tried, in that
-			// order, and the channel that answered goes into the log: 1.5.18 only
-			// ever tried "skee" and reported "RaceMenu did not answer" for a
-			// RaceMenu that was answering all along.
+			// The exchange is a plain SKSE message. skee answers it from a
+			// catch-all listener it registers at load time (skee64 main.cpp,
+			// RegisterListener(g_pluginHandle, nullptr, ...)); "skee64" and "skee"
+			// are the names it registers under, and the unnamed broadcast is the
+			// fallback for builds where the named dispatch does not match. All
+			// three are tried, in that order, and the channel that answered goes
+			// into the log. Note (1.5.26): on 1.5.97 skse64.log shows our
+			// broadcast reaching only the plugins that registered a catch-all
+			// listener *after* us, so this can legitimately fail for a whole
+			// session - which is why nothing else may depend on it.
 			constexpr const char* kReceivers[] = { "skee64", "skee", nullptr };
 			const char* answered = nullptr;
 			skee::InterfaceExchangeMessage exchange{};
@@ -1558,7 +1661,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			if (!exchange.interfaceMap) {
 				if (!a_quiet) {
-					SKSE::log::info("MorphRefresh: RaceMenu did not answer the interface exchange on any channel; no RaceMenu BodyMorph interface.");
+					SKSE::log::info("MorphRefresh: RaceMenu did not answer the interface exchange on any channel; the .tri targets stay armed, only the immediate re-morph and the morph callback are off.");
 				}
 				return false;
 			}
@@ -1690,17 +1793,13 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			return;
 		}
 
-		const bool raceMenu = TryRaceMenu(messaging);
-		const bool obody = TryOBody(messaging);
-		const bool slif = TrySLIF(messaging);
-		if (!raceMenu && !obody && !slif) {
-			SKSE::log::info("MorphRefresh: no body morph provider answered; morph changes follow the geometry probe only.");
-		}
-		// A provider that answered now subscribes to its morph notification here;
-		// one that answers later does it in RetryProviders.
-		InstallPush();
-		SKSE::log::info("MorphRefresh: .tri morph target support {} for illusion slots.",
-			g_api ? "active" : "inactive (no RaceMenu BodyMorph interface yet)");
+		// 1.5.26: the exchange goes out from a queued task, never from this
+		// message handler. skse64.log shows that a broadcast sent from inside a
+		// handler only ever reaches the plugins that registered their catch-all
+		// listener late, so skee - loaded early - never sees it. The .tri targets
+		// do not depend on the answer, so nothing is lost while it is missing.
+		QueueProviderRetry();
+		SKSE::log::info("MorphRefresh: .tri morph targets are attached to every illusion clone; RaceMenu and OBody morph them in their own pass. The provider interface only adds the immediate re-morph.");
 	}
 
 // RaceMenu may only answer the interface exchange after its own data loaded
@@ -1733,10 +1832,10 @@ void ReportRaceMenuSilence()
 		}
 	}
 	if (found) {
-		SKSE::log::info("MorphRefresh: {} is in the process but RaceMenu still has not handed out the BodyMorph interface; kept asking ({} tries). The .tri morph refresh waits for it and the geometry probe covers the gap.",
+		SKSE::log::info("MorphRefresh: {} is in the process but RaceMenu still has not handed out the BodyMorph interface; kept asking ({} tries). The .tri targets do not depend on it - they arm the clones for RaceMenu's own morph pass.",
 			found, g_providerRetries);
 	} else {
-		SKSE::log::info("MorphRefresh: no skee module in the process - RaceMenu is not installed. Only OBody/SLIF and the geometry probe can drive the .tri morph refresh.");
+		SKSE::log::info("MorphRefresh: no skee module in the process - RaceMenu is not installed. The .tri targets still arm the clones, and OBody/SLIF plus the geometry probe drive the rest.");
 	}
 }
 
@@ -1779,6 +1878,7 @@ void RetryProviders()
 		morphPush::g_lastBake = {};
 		morphPush::g_lastEvidence = {};
 		morphPush::g_evidenceActor = 0;
+		morphPush::g_targetLogged.clear();
 		g_pollPending = false;
 		g_lastPoll = {};
 		g_lastProviderRetry = {};
@@ -1852,11 +1952,13 @@ void RetryProviders()
 
 	void NotifySlotApplied(RE::Actor* a_actor)
 	{
-		if (!a_actor || !g_api) {
-			// Without RaceMenu there is nothing that could re-morph the clones;
-			// OBody's own pass still walks them, so nothing else is needed.
+		if (!a_actor) {
 			return;
 		}
+		// 1.5.26: run even without the interface. The clones the skinning hook
+		// just attached carry no .tri target until this pass runs, and without
+		// that target RaceMenu's own morph pass skips them entirely - which is
+		// the "the illusion does not follow the slider" symptom.
 		RequestBake(a_actor->GetFormID(), BakeReason::kRebuilt);
 	}
 
