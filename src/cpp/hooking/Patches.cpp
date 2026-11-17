@@ -222,21 +222,38 @@ namespace Hooking {
             }
         }
 
+        // ActorWeightModel is an opaque engine struct (CommonLibSSE-NG only forward
+        // declares it), but its first field is the BipedAnim the skinning pass fills.
+        // Reading it blindly is not safe - a bogus pointer would take the game down -
+        // so the candidate is only accepted when it is one of the two biped models the
+        // actor itself reports. That check also covers the deferred path, where the
+        // "model" really is the address of the actor's BSTSmartPointer<BipedAnim>.
+        RE::BipedAnim* ModelBiped(RE::Actor* a_actor, RE::ActorWeightModel* a_model) {
+            if (!a_actor || !a_model) return nullptr;
+            auto* candidate = reinterpret_cast<RE::BipedAnim* const*>(a_model)[0];
+            if (!candidate) return nullptr;
+            for (const bool firstPerson : { false, true }) {
+                if (a_actor->GetBiped(firstPerson).get() == candidate) return candidate;
+            }
+            static std::atomic_bool warned{ false };
+            if (!warned.exchange(true, std::memory_order_relaxed)) {
+                LOG(warn, "Custom: the weight model 0x{:X} does not point at a biped model of {:08X}; leftover slots are left alone. Report this line together with the game version.", reinterpret_cast<std::uintptr_t>(a_model), a_actor->GetFormID());
+            }
+            return nullptr;
+        }
+
         // Detaches every slot in the mask. ClearBipedPart removes the node and
         // partClone; nulling item/addon/part forces ApplyArmorAddon to build a
         // brand new clone instead of treating the slot as already up to date
         // (which would keep the old .tri shape).
         //
         // CustomOne() runs once per ActorWeightModel (third person first, then
-        // first person). The second argument is the address of the actor's
-        // BSTSmartPointer<BipedAnim> holder, not a BipedAnim itself. Clear only
-        // that model: clearing both models here wiped the model rebuilt by the
-        // previous call, which made the body and clothing vanish until the outfit
-        // was applied again.
-        void ClearSlots(RE::ActorWeightModel* a_model, std::uint32_t a_mask) {
+        // first person), so only the model that was handed in is cleared: clearing
+        // both models here wiped the model rebuilt by the previous call, which made
+        // the body and clothing vanish until the outfit was applied again.
+        void ClearSlots(RE::Actor* a_actor, RE::ActorWeightModel* a_model, std::uint32_t a_mask) {
             if (!a_model || a_mask == 0) return;
-            auto* holder = reinterpret_cast<RE::BSTSmartPointer<RE::BipedAnim>*>(a_model);
-            auto* anim = holder ? holder->get() : nullptr;
+            auto* anim = ModelBiped(a_actor, a_model);
             if (!anim) return;
             for (std::uint32_t bit = 0; bit < 32; ++bit) {
                 if ((a_mask & (1u << bit)) == 0) continue;
@@ -251,11 +268,29 @@ namespace Hooking {
         // Returning the clone node of a slot makes a rebuild visible in the log:
         // a new pointer after ClearSlots plus ApplyArmorAddon proves the slot got
         // a fresh geometry instead of the stale .tri shape it held before.
-        const void* SlotClone(RE::ActorWeightModel* a_model, std::uint32_t a_bit) {
-            auto* holder = reinterpret_cast<RE::BSTSmartPointer<RE::BipedAnim>*>(a_model);
-            auto* anim = holder ? holder->get() : nullptr;
+        const void* SlotClone(RE::Actor* a_actor, RE::ActorWeightModel* a_model, std::uint32_t a_bit) {
+            auto* anim = ModelBiped(a_actor, a_model);
             if (!anim || a_bit >= 32) return nullptr;
             return static_cast<const void*>(anim->objects[a_bit].partClone.get());
+        }
+
+        // A refused ApplyArmorAddon leaves the slot empty - the actor renders nude in
+        // that slot while the real armour stays hidden. That is the one failure mode
+        // that must never pass silently, so it is logged (throttled: the skinning pass
+        // runs many times per second).
+        void LogApplyRefused(const RE::TESObjectARMO* a_armor, const RE::ActorWeightModel* a_model) {
+            static std::mutex mutex;
+            static std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> seen;
+            const auto now = std::chrono::steady_clock::now();
+            const auto key = (static_cast<std::uint64_t>(a_armor->GetFormID()) << 8);
+            {
+                std::lock_guard lock(mutex);
+                if (seen.size() > 512) seen.clear();
+                const auto it = seen.find(key);
+                if (it != seen.end() && now < it->second) return;
+                seen[key] = now + std::chrono::seconds(5);
+            }
+            LOG(warn, "Custom: ApplyArmorAddon refused {:08X} (slot mask 0x{:08X}) for weight model 0x{:X}; that slot stays empty. Report this line together with the game version.", a_armor->GetFormID(), a_armor->GetSlotMask().underlying(), reinterpret_cast<std::uintptr_t>(a_model));
         }
 
         // The store revision changes whenever an outfit is created, edited or
@@ -336,8 +371,8 @@ namespace Hooking {
             }
 
             // Map slot -> real armour before anything is applied; used below to put
-            // the honest item back after the addon was swapped in, and to restore the
-            // real piece when a slot leaves the display set.
+            // the honest item back after the addon was swapped in, so that mods which
+            // read the worn items (procedural armour damage) still see the real gear.
             std::array<const RE::TESForm*, 32> wornBySlot{};
             for (const auto armor : visitor.equipped) {
                 if (!armor) continue;
@@ -351,16 +386,16 @@ namespace Hooking {
             std::uint32_t displayMask = 0;
             bool fullRebuild = false;
             std::vector<const RE::TESObjectARMO*> applySet;
-            std::vector<const RE::TESObjectARMO*> rebuildSet;
             if (outfit) {
                 // Compute the display set.
                 auto displaySet = outfit->compute_display_set_c(rust::Slice{visitor.equipped.data(), visitor.equipped.size()});
 
-                // Compute the remaining items to be applied to the player
-                // We assume that the DontVanillaSkinPlayer already passed through
-                // the equipped items that will be shown, so we only need to worry about the
-                // items that are not equipped but which are in the outfit or which are masked
-                // by the outfit.
+                // Only the pieces that are *not* genuinely worn have to be applied here:
+                // DontVanillaSkinPlayer lets the vanilla pass build the addon of every
+                // equipped piece that is part of the display set, and that pass runs on
+                // the real ActorWeightModel. Applying those pieces a second time from a
+                // clone we built ourselves only produced empty slots (clone 0x0), which
+                // is why 1.5.14's "clear the slot and re-apply" route was abandoned.
                 applySet.reserve(displaySet.size());
                 for (const auto& item : displaySet) {
                     if (std::find(visitor.equipped.begin(), visitor.equipped.end(), item.ptr) == visitor.equipped.end()) applySet.push_back(item.ptr);
@@ -372,54 +407,32 @@ namespace Hooking {
                 const bool revisionRebuild = RevisionRebuildPending(actor->GetFormID(), svc->inner().revision());
                 const bool morphRebuild = SOS::MorphRefresh::ShouldForceRebuild(actor->GetFormID());
                 fullRebuild = revisionRebuild || morphRebuild;
-
-                // A body morph change must rebuild every displayed piece, not only
-                // the outfit-only ones: an item that is genuinely equipped is still
-                // part of displaySet and its cloned mesh is just as stale. The
-                // non-forced path keeps the cheaper applySet behaviour.
-                if (fullRebuild) {
-                    rebuildSet.reserve(displaySet.size());
-                    for (const auto& item : displaySet) {
-                        if (item.ptr) rebuildSet.push_back(item.ptr);
-                    }
-                    LOG(debug, "Custom: rebuilding {} display pieces (mask 0x{:08X}, outfit revision {}, body morph {}) for {:08X}.", rebuildSet.size(), displayMask, revisionRebuild, morphRebuild, actor->GetFormID());
-                } else {
-                    rebuildSet = applySet;
-                }
+                LOG(debug, "Custom: attaching {} outfit-only piece(s) of {} displayed (mask 0x{:08X}, outfit revision {}, body morph {}) for {:08X}.", applySet.size(), displaySet.size(), displayMask, revisionRebuild, morphRebuild, actor->GetFormID());
             }
 
+            // Slots that dropped out of the display set keep their cloned mesh and item
+            // until something detaches them. Clear them, but never re-apply the real
+            // armour that happens to be worn there: the illusion owns the whole body, so
+            // a slot the outfit does not cover has to show skin, not the old real piece.
             const std::uint32_t staleMask = TakeStaleSlots(actorWeightModel, displayMask);
             if (staleMask != 0) {
-                ClearSlots(actorWeightModel, staleMask);
-                std::array<const RE::TESObjectARMO*, 32> restored{};
-                std::size_t restoredCount = 0;
-                for (std::uint32_t bit = 0; bit < 32; ++bit) {
-                    if ((staleMask & (1u << bit)) == 0 || !wornBySlot[bit]) continue;
-                    auto* wornArmor = const_cast<RE::TESObjectARMO*>(wornBySlot[bit]->As<RE::TESObjectARMO>());
-                    if (!wornArmor) continue;
-                    if (std::find(restored.begin(), restored.begin() + restoredCount, wornArmor) != restored.begin() + restoredCount) continue;
-                    restored[restoredCount++] = wornArmor;
-                    RE::TESObjectARMOAugments::ApplyArmorAddon(wornArmor, race, actorWeightModel, isFemale);
-                }
-                LOG(debug, "Custom: {} slot(s) left the display set (mask 0x{:08X}); restored {} real piece(s) for {:08X}.", std::popcount(staleMask), staleMask, restoredCount, actor->GetFormID());
+                ClearSlots(actor, actorWeightModel, staleMask);
+                LOG(debug, "Custom: {} slot(s) left the display set (mask 0x{:08X}); cleared for {:08X}.", std::popcount(staleMask), staleMask, actor->GetFormID());
             }
 
-            if (fullRebuild) {
-                ClearSlots(actorWeightModel, displayMask);
-            }
-
-            for (const auto* armor : rebuildSet) {
+            for (const auto* armor : applySet) {
                 if (!armor) continue;
-                RE::TESObjectARMOAugments::ApplyArmorAddon(armor, race, actorWeightModel, isFemale);
+                if (!RE::TESObjectARMOAugments::ApplyArmorAddon(armor, race, actorWeightModel, isFemale)) {
+                    LogApplyRefused(armor, actorWeightModel);
+                    continue;
+                }
                 if (restoreItems) {
                     RestoreRealItems(actor, armor, wornBySlot);
                 }
-                if (fullRebuild) {
-                    const auto mask = armor->GetSlotMask().underlying();
-                    for (std::uint32_t bit = 0; bit < 32; ++bit) {
-                        if ((mask & (1u << bit)) == 0) continue;
-                        LOG(debug, "Custom: {:08X} slot {:02} clone {}", armor->GetFormID(), bit, SlotClone(actorWeightModel, bit));
-                    }
+                const auto mask = armor->GetSlotMask().underlying();
+                for (std::uint32_t bit = 0; bit < 32; ++bit) {
+                    if ((mask & (1u << bit)) == 0) continue;
+                    LOG(debug, "Custom: {:08X} slot {:02} clone {}", armor->GetFormID(), bit, SlotClone(actor, actorWeightModel, bit));
                 }
             }
             // Every clone above was created straight through ApplyArmorAddon, so it
@@ -441,10 +454,12 @@ namespace Hooking {
                     LOG(debug, "Custom: Failed to cast target to Actor.");
                     return;
                 }
-                // No weight model was handed in: attach both of the actor's biped models.
-                // GetBiped() returns the actor's own BSTSmartPointer<BipedAnim> holder,
-                // which is the pointer the game passes to this function, so the two paths
-                // behave identically.
+                // No weight model was handed in (deferred path only - the hook always
+                // passes the real one): fall back to the actor's two biped models. The
+                // address of the BSTSmartPointer<BipedAnim> holder stands in for the
+                // engine struct; ModelBiped() accepts it because its first field is
+                // exactly that pointer, but ApplyArmorAddon may refuse it, so this path
+                // is never used while the hook is installed.
                 for (const bool firstPerson : { false, true }) {
                     auto* holder = const_cast<RE::BSTSmartPointer<RE::BipedAnim>*>(&actor->GetBiped(firstPerson));
                     if (!holder || !holder->get()) continue;

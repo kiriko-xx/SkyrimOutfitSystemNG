@@ -177,8 +177,9 @@ namespace Hooking {
         }// namespace ShimWornFlags
 
         namespace CustomSkinPlayer {
-            using Hooking::CustomSkinPlayer::CustomFromInventory;
+            using Hooking::CustomSkinPlayer::Custom;
             using Hooking::CustomSkinPlayer::SetSiteHookInstalled;
+            using Hooking::ShouldOverrideSkinning;
 
             // AE inlined the function 1.5.x called here, so the address library entry
             // differs per runtime; which call inside it belongs to the skinning pass is
@@ -205,28 +206,49 @@ namespace Hooking {
                 LOG(debug, "Patching custom skin player");
                 LogResolved("InventoryChanges_ExecuteVisitorOnWorn", InventoryChanges_ExecuteVisitorOnWorn);
 
+                //
+                // The site is the "add the armour addons to the ActorWeightModel" call of
+                // the skinning routine, and the registers are part of its contract:
+                // rbx holds the TESObjectREFR being skinned and rdi the ActorWeightModel
+                // the vanilla pass just filled. That model has to be handed to
+                // ApplyArmorAddon as-is - 1.5.20 to 1.5.23 passed the address of the
+                // actor's BSTSmartPointer<BipedAnim> instead, which is a different layout,
+                // so every ApplyArmorAddon call was refused and every slot stayed empty
+                // (the "only head and hands" report: those are the vanilla skin parts).
+                //
                 struct Code : Xbyak::CodeGenerator {
-                    Code(std::uintptr_t a_resume, std::uintptr_t a_executeVisitorOnWorn, std::uintptr_t a_custom) {
+                    Code(std::uintptr_t a_resume, std::uintptr_t a_executeVisitorOnWorn, std::uintptr_t a_shouldOverride, std::uintptr_t a_custom) {
                         Xbyak::Label f_Custom;
                         Xbyak::Label f_ExecuteVisitorOnWorn;
+                        Xbyak::Label f_ShouldOverride;
+                        Xbyak::Label j_Out;
 
-                        // Run the vanilla pass first, then attach the display set. Only
-                        // rcx (the InventoryChanges being visited) is carried over: the
-                        // actor, its race and its weight models are all reachable from
-                        // it, so the trampoline does not depend on the register the game
-                        // happens to keep the actor or the weight model in.
+                        // Run the vanilla pass first (it fills the model with the worn
+                        // armour), then attach the outfit to the very same model.
                         push(rcx);
                         push(rdx);
                         sub(rsp, 0x20);
                         call(ptr[rip + f_ExecuteVisitorOnWorn]);
                         add(rsp, 0x20);
-                        mov(rcx, ptr[rsp + 0x8]);
+
+                        // Nothing to do for actors without an illusion; the vanilla pass
+                        // has already run and the hook leaves the model untouched.
+                        mov(rcx, rbx);
+                        sub(rsp, 0x20);
+                        call(ptr[rip + f_ShouldOverride]);
+                        add(rsp, 0x20);
+                        test(al, al);
+                        jz(j_Out);
+
+                        mov(rcx, rbx);
+                        mov(rdx, rdi);
                         sub(rsp, 0x20);
                         call(ptr[rip + f_Custom]);
                         add(rsp, 0x20);
-                        mov(rdx, ptr[rsp]);
-                        mov(rcx, ptr[rsp + 0x8]);
-                        add(rsp, 0x10);
+
+                        L(j_Out);
+                        pop(rdx);
+                        pop(rcx);
                         jmp(ptr[rip]);
                         dq(a_resume);
 
@@ -235,10 +257,13 @@ namespace Hooking {
 
                         L(f_ExecuteVisitorOnWorn);
                         dq(a_executeVisitorOnWorn);
+
+                        L(f_ShouldOverride);
+                        dq(a_shouldOverride);
                     }
                 };
 
-                Code gen{ CustomSkinPlayer_Hook + 0x5, InventoryChanges_ExecuteVisitorOnWorn.address(), std::uintptr_t(CustomFromInventory) };
+                Code gen{ CustomSkinPlayer_Hook + 0x5, InventoryChanges_ExecuteVisitorOnWorn.address(), std::uintptr_t(ShouldOverrideSkinning), std::uintptr_t(Custom) };
                 g_customSkinPlayerInstalled = Install("custom skin player", CustomSkinPlayer_Hook, gen);
                 // Tells the C++ side whether the display set is attached from inside the
                 // skinning routine or from the deferred pass it drives itself.
