@@ -747,15 +747,6 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			SKSE::log::trace("MorphRefresh: ApplyBodyMorphs for {:08X}.", a_actor->GetFormID());
 		}
 
-		void ApplyOBodyMorphs(RE::Actor* a_actor)
-		{
-			if (!g_obody || !g_obodyReady.load(std::memory_order_acquire) || !a_actor || !a_actor->Is3DLoaded()) {
-				return;
-			}
-			g_obody->ApplyOBodyMorphsToActor(a_actor);
-			SKSE::log::trace("MorphRefresh: ApplyOBodyMorphsToActor for {:08X}.", a_actor->GetFormID());
-		}
-
 		void RestoreIllusion(RE::Actor* a_actor, RE::FormID a_id, const std::string& a_name)
 		{
 			{
@@ -830,8 +821,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 
 		bool ProviderCanMorph()
 		{
-			return g_api != nullptr ||
-				(g_obody != nullptr && g_obodyReady.load(std::memory_order_acquire));
+			return g_api != nullptr;
 		}
 
 		void EnsureProvidersForUse()
@@ -1126,9 +1116,6 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			if (!a_node || a_path.empty() || NodeHasBodyTri(a_node)) {
 				return false;
 			}
-			if (a_node->HasExtraData("BODYTRI")) {
-				a_node->RemoveExtraData("BODYTRI");
-			}
 			RE::NiPointer<RE::NiStringExtraData> extra{ RE::NiExtraData::Create<RE::NiStringExtraData>() };
 			if (!extra) {
 				return false;
@@ -1140,7 +1127,11 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			std::memcpy(value, a_path.c_str(), a_path.size() + 1);
 			extra->value = value;
-			return a_node->AddExtraData(extra.get());
+			RE::NiPointer<RE::NiExtraData> original{ a_node->GetExtraData("BODYTRI") };
+			if (original) { a_node->RemoveExtraData("BODYTRI"); }
+			if (a_node->AddExtraData(extra.get())) { return true; }
+			if (original) { a_node->AddExtraData(original.get()); }
+			return false;
 		}
 
 		// The poll below watches the same vertex buffers this pass just rewrote.
@@ -1377,6 +1368,19 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 
 		// OBody::NotifyMorphApplied (src/Body/Body.cpp) broadcasts this right after
 		// it called ApplyBodyMorphs on the actor, with the actor as sender.
+		std::atomic<bool> g_raceMenuSliderPending{ false };
+
+		void DrainRaceMenuSlider()
+		{
+			if (!g_raceMenuSliderPending.exchange(false, std::memory_order_acq_rel)) { return; }
+			auto* ui = RE::UI::GetSingleton();
+			if (g_api && ui && ui->IsMenuOpen("RaceSex Menu")) {
+				if (auto* player = RE::PlayerCharacter::GetSingleton(); player && player->Is3DLoaded()) {
+					RequestBake(player->GetFormID(), BakeReason::kProvider);
+				}
+			}
+		}
+
 		class OBodyMorphSink final : public RE::BSTEventSink<SKSE::ModCallbackEvent>
 		{
 		public:
@@ -1389,6 +1393,11 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			RE::BSEventNotifyControl ProcessEvent(const SKSE::ModCallbackEvent* a_event,
 				RE::BSTEventSource<SKSE::ModCallbackEvent>*) override
 			{
+				if (a_event && a_event->eventName == "RSM_SliderChange") {
+					// The public UI event is not a completion callback; defer explicit
+					// clone application to the main-thread queue and preserve morph values.
+					g_raceMenuSliderPending.store(true, std::memory_order_release);
+				}
 				if (a_event && a_event->sender && a_event->eventName.c_str() &&
 					std::strcmp(a_event->eventName.c_str(), "Obody_ApplyMorph") == 0) {
 					if (auto* actor = a_event->sender->As<RE::Actor>()) {
@@ -1418,7 +1427,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				if (auto* source = SKSE::GetModCallbackEventSource()) {
 					source->AddEventSink(OBodyMorphSink::GetSingleton());
 					morphPush::g_obodySinkInstalled = true;
-					SKSE::log::debug("MorphRefresh: listening for OBody's morph event.");
+					SKSE::log::debug("MorphRefresh: listening for OBody morph and RaceMenu RSM_SliderChange events; explicit clone application requires the BodyMorph interface.");
 				}
 			}
 		}
@@ -1462,19 +1471,14 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				if (after != before) {
 					SKSE::log::trace("MorphRefresh: the covered geometry signature of {:08X} changed after the provider pass; individual outfit morph movement still needs verification.", id);
 				} else if (attempts < kVerifyAttempts) {
-					// RaceMenu defers the update (its update manager flushes later) and
-					// OBody queues its pass, so an unchanged signature this early only
-					// means the pass has not landed yet. Keep waiting instead of paying
-					// the full remove-and-reapply cycle for nothing.
+					// Allow deferred geometry writes to land before comparing again.
 					{
 						std::lock_guard lock(g_mutex);
 						g_verify[id] = VerifyState{ before, now2 + kVerifyDelay, attempts + 1 };
 					}
 					continue;
 				} else if (IllusionsArmed(id)) {
-					// The clones carry a .tri target, so the next pass RaceMenu or the
-					// provider runs moves them; cycling would only rebuild clones that
-					// start at the base shape again.
+					// A readable path does not prove that a provider traverses this clone.
 					SKSE::log::debug("MorphRefresh: the provider pass left the meshes of {:08X} alone, but the illusion carries .tri targets; leaving it to the next morph pass.", id);
 				} else {
 					SKSE::log::debug("MorphRefresh: the provider pass left the meshes of {:08X} alone; queueing target repair without removing the illusion.", id);
@@ -1646,11 +1650,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				EnsureProvidersForUse();
 				if (Settings::Get().morphProviderFirst && ProviderCanMorph()) {
 					const auto before = ComputeCoveredGeometry(actor, id);
-					if (g_api) {
-						ApplyMorphs(actor);
-					} else {
-						ApplyOBodyMorphs(actor);
-					}
+					ApplyMorphs(actor);
 					// The check runs against the slots the illusion covers. A
 					// whole-actor signature always moves while a slider is being
 					// dragged (the body underneath is rewritten too), which made
@@ -1735,14 +1735,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					g_applyScheduled.erase(id);
 				}
 				if (auto* actor = RE::TESForm::LookupByID<RE::Actor>(id)) {
-					if (!g_api) {
-						// OBody writes the preset morphs itself; asking it to
-						// reapply them walks every mesh of the actor, including
-						// the clones the hook just rebuilt.
-						ApplyOBodyMorphs(actor);
-					} else {
-						ApplyMorphs(actor);
-					}
+					ApplyMorphs(actor);
 				}
 			}
 		}
@@ -1764,7 +1757,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			if (!exchange.interfaceMap) {
 				if (!a_quiet) {
-					SKSE::log::info("MorphRefresh: RaceMenu did not answer the interface exchange; if skee uses [Features] bEnableEarlyRegistration=1, set it to 0 and restart. Retrying cannot repair a missing SKSE sender subscription. BODYTRI paths alone do not prove morph success.");
+					SKSE::log::info("MorphRefresh: RaceMenu did not answer the interface exchange. The installed RaceMenu build and messaging contract must be verified; do not add unsupported INI settings. BODYTRI paths alone do not prove morph success.");
 				}
 				return false;
 			}
@@ -1783,7 +1776,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 
 			g_api = candidate;
 			g_apiVersion = version;
-			SKSE::log::info("MorphRefresh: RaceMenu BodyMorph v{} acquired through {}; the illusion follows .tri morph changes.",
+			SKSE::log::info("MorphRefresh: RaceMenu BodyMorph v{} acquired through {}; explicit clone morph application is available (movement still needs verification).",
 				version, answered);
 			return true;
 		}
@@ -1899,7 +1892,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		// Keep messaging out of skinning callbacks. Queueing cannot fix a missing
 		// subscription caused by an early catch-all registration in SKSE 2.0.20.
 		QueueProviderRetry();
-		SKSE::log::info("MorphRefresh: every illusion clone whose armour model ships a .tri gets that .tri as a morph target; RaceMenu and OBody morph those clones in their own pass. The provider interface only adds the immediate re-morph.");
+		SKSE::log::info("MorphRefresh: readable BODYTRI targets are attached to illusion clones. Older RaceMenu builds may only traverse real equipped armour; explicit clone morph application requires the BodyMorph interface.");
 	}
 
 // RaceMenu may only answer the interface exchange after its own data loaded
@@ -1932,10 +1925,10 @@ void ReportRaceMenuSilence()
 		}
 	}
 	if (found) {
-		SKSE::log::info("MorphRefresh: {} is in the process but RaceMenu still has not handed out the BodyMorph interface; kept asking ({} tries). The .tri targets do not depend on it - they arm the clones for RaceMenu's own morph pass.",
+		SKSE::log::info("MorphRefresh: {} is in the process but RaceMenu still has not handed out the BodyMorph interface; kept asking ({} tries). Readable BODYTRI paths are not sufficient on versions that only traverse real equipped armour; explicit clone application is unavailable.",
 			found, g_providerRetries);
 	} else {
-		SKSE::log::info("MorphRefresh: no skee module in the process - RaceMenu is not installed. The .tri targets still arm the clones, and OBody/SLIF plus the geometry probe drive the rest.");
+		SKSE::log::info("MorphRefresh: no known skee module in the process. No BodyMorph mesh interface is available; geometry observation alone cannot apply morphs to illusion clones.");
 	}
 }
 
@@ -1983,6 +1976,7 @@ void RetryProviders()
 		g_triProbeLogged.clear();
 		g_triPathCache.clear();
 		g_pollPending = false;
+		g_raceMenuSliderPending.store(false, std::memory_order_release);
 		g_lastPoll = {};
 		g_lastProviderRetry = {};
 		g_providerRetries = 0;
@@ -2034,6 +2028,7 @@ void RetryProviders()
 			}
 			// Safety net for a re-morph that got rate limited or whose task was
 			// dropped: the poll picks the actor up again.
+			DrainRaceMenuSlider();
 			DrainPending();
 			PollOnMainThread();
 		});
@@ -2070,9 +2065,8 @@ void RetryProviders()
 		if (!a_actor) {
 			return;
 		}
-		const bool haveRaceMenu = g_api != nullptr;
-		const bool haveOBody = g_obody != nullptr && g_obodyReady.load(std::memory_order_acquire);
-		if (!haveRaceMenu && !haveOBody) {
+		// OBody reapply regenerates preset values; it is not a mesh-only refresh.
+		if (!g_api) {
 			return;
 		}
 		std::lock_guard lock(g_mutex);
