@@ -1580,6 +1580,10 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 						state.valueSince = now;
 						state.lastCycle = now;
 						state.quietFrom = now;
+					} else if (g_api && providerSignature != state.actedProvider) {
+						// Value changes are external; clone replay does not rewrite morph keys.
+						state.actedProvider = providerSignature;
+						changed = true;
 					} else if (state.value != signature) {
 						// Still moving (a ramp in flight, a preset being applied,
 						// or our own rebuild settling): wait for it to sit still
@@ -1649,6 +1653,11 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				// OBody preset switches showed - and never exposes the real gear.
 				// A missing target is repaired in place, never by exposing real gear.
 				EnsureProvidersForUse();
+				if (g_api) {
+					SKSE::log::debug("MorphRefresh: queueing explicit clone replay for {:08X} from the generic observer (no menu gate).", id);
+					RequestBake(id, BakeReason::kProvider);
+					continue;
+				}
 				if (Settings::Get().morphProviderFirst && ProviderCanMorph()) {
 					const auto before = ComputeCoveredGeometry(actor, id);
 					ApplyMorphs(actor);
