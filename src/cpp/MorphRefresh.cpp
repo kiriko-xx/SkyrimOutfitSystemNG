@@ -28,6 +28,22 @@ namespace SOS::MorphRefresh
 {
 	namespace
 	{
+		bool IsGameThread()
+		{
+			const auto* main = RE::Main::GetSingleton();
+			const auto current = GetCurrentThreadId();
+			const auto expected = main ? main->threadID : 0;
+			const bool accepted = expected != 0 && expected == current;
+			static std::atomic<bool> loggedReject{ false };
+			static std::atomic<bool> loggedAccept{ false };
+			auto& logged = accepted ? loggedAccept : loggedReject;
+			if (!logged.exchange(true, std::memory_order_relaxed)) {
+				SKSE::log::info("MorphRefresh: task thread {} game thread {}: {}. Thread identity is not an equipment/render completion fence.",
+					current, expected, accepted ? "accepted" : "deferred; pending morphs retained");
+			}
+			return accepted;
+		}
+
 		// Minimal ABI declarations for the RaceMenu interfaces we use. The
 		// vtable order matters; it was audited against the public RaceMenu
 		// header. The callback slot requires GetVersion() >= 5.
@@ -340,7 +356,9 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			tasks->AddTask([]() {
 				g_providerRetryQueued.store(false);
-				RetryProviders();
+				if (IsGameThread()) {
+					RetryProviders();
+				}
 			});
 		}
 
@@ -1350,6 +1368,9 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			tasks->AddTask([]() {
 				morphPush::g_taskQueued.store(false);
+				if (!IsGameThread()) {
+					return;  // Keep pending actors for the next heartbeat; never spin the task pool.
+				}
 				DrainPending();
 			});
 		}
@@ -2053,6 +2074,11 @@ void RetryProviders()
 			return;
 		}
 		tasks->AddTask([retryProviders]() {
+			if (!IsGameThread()) {
+				std::lock_guard lock(g_mutex);
+				g_pollPending = false;
+				return;
+			}
 			auto* player = RE::PlayerCharacter::GetSingleton();
 			const auto coveredMask = player ? CoveredSlotMask(player->GetFormID()) : 0;
 			HairTintDiagnostics::SampleOnMainThread(coveredMask);

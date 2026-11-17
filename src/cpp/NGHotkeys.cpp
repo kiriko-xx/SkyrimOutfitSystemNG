@@ -4,6 +4,7 @@
 
 #include "AutoSwitch.h"
 #include "MorphRefresh.h"
+#include "SceneOutfits.h"
 
 #include <algorithm>
 #include <atomic>
@@ -251,6 +252,7 @@ namespace SOS::Hotkeys
 				// couple of times per second while the player is playing.
 				AutoSwitch::Tick();
 				MorphRefresh::Tick();
+				SceneOutfits::Tick();
 
 				Combo combo;
 				Combo quickCombo;

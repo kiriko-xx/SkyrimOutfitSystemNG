@@ -8,9 +8,14 @@
 #include <SKSE/API.h>
 #include <SKSE/Events.h>
 #include <SKSE/SKSE.h>
+#include <Windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cstdint>
+#include <deque>
+#include <mutex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -131,6 +136,92 @@ namespace SOS::SceneOutfits
 			SKSE::log::debug("SceneOutfits: {} scene ended; '{}' restored.", a_source, previous);
 		}
 
+		enum class SceneEvent
+		{
+			kOStimStart,
+			kOStimEnd,
+			kSexLabStart,
+			kSexLabEnd
+		};
+
+		std::atomic<std::uint64_t> g_generation{ 0 };
+		std::mutex g_queueMutex;
+		std::mutex g_dispatchMutex;
+		std::deque<SceneEvent> g_pendingEvents;
+		bool g_drainScheduled{ false };
+
+		void DispatchSceneEvent(SceneEvent a_event)
+		{
+			switch (a_event) {
+			case SceneEvent::kOStimStart:
+				StartScene("OStim");
+				break;
+			case SceneEvent::kOStimEnd:
+				EndScene("OStim");
+				break;
+			case SceneEvent::kSexLabStart:
+				StartScene("SexLab");
+				break;
+			case SceneEvent::kSexLabEnd:
+				EndScene("SexLab");
+				break;
+			}
+		}
+
+		void DrainSceneEvents(std::uint64_t a_generation)
+		{
+			for (;;) {
+				// SKSE AddTask defers to its task pool; it does not guarantee a
+				// main thread or serial Run calls. Serialize scene state ourselves.
+				std::lock_guard dispatchLock(g_dispatchMutex);
+				SceneEvent event;
+				{
+					std::lock_guard queueLock(g_queueMutex);
+					if (a_generation != g_generation.load(std::memory_order_acquire)) {
+						return;  // Never alter a newer generation's scheduled flag.
+					}
+					if (g_pendingEvents.empty()) {
+						g_drainScheduled = false;
+						return;
+					}
+					auto* main = RE::Main::GetSingleton();
+					if (!main || main->threadID == 0 || main->threadID != GetCurrentThreadId()) {
+						g_drainScheduled = false;
+						return;  // Keep FIFO for the next input heartbeat; never spin-resubmit.
+					}
+					event = g_pendingEvents.front();
+					g_pendingEvents.pop_front();
+				}
+				// Release queue lock before game calls: a callback may enqueue again.
+				DispatchSceneEvent(event);
+			}
+		}
+
+		void QueueSceneEvent(SceneEvent a_event)
+		{
+			const auto generation = g_generation.load(std::memory_order_acquire);
+			auto* tasks = SKSE::GetTaskInterface();
+			if (!tasks) {
+				SKSE::log::warn("SceneOutfits: the task interface is not available; scene event dropped (no synchronous fallback).");
+				return;
+			}
+			{
+				std::lock_guard queueLock(g_queueMutex);
+				if (generation != g_generation.load(std::memory_order_acquire)) {
+					return;
+				}
+				// FIFO is our queue-lock acquisition order, not SKSE Run order.
+				// Keep every start/end value; never coalesce overlapping source ends.
+				g_pendingEvents.push_back(a_event);
+				if (g_drainScheduled) {
+					return;
+				}
+				g_drainScheduled = true;
+			}
+			// Capture only the owned token, never callback strings/events/actors.
+			tasks->AddTask([generation]() { DrainSceneEvents(generation); });
+		}
+
 		class ModEventSink final : public RE::BSTEventSink<SKSE::ModCallbackEvent>
 		{
 		public:
@@ -141,19 +232,37 @@ namespace SOS::SceneOutfits
 				}
 				const std::string_view name = a_event->eventName.c_str();
 				if (name == "ostim_start") {
-					StartScene("OStim");
+					QueueSceneEvent(SceneEvent::kOStimStart);
 				} else if (name == "ostim_end") {
-					EndScene("OStim");
+					QueueSceneEvent(SceneEvent::kOStimEnd);
 				} else if (name == "PlayerAnimationStart") {
-					StartScene("SexLab");
+					QueueSceneEvent(SceneEvent::kSexLabStart);
 				} else if (name == "PlayerAnimationEnd") {
-					EndScene("SexLab");
+					QueueSceneEvent(SceneEvent::kSexLabEnd);
 				}
 				return RE::BSEventNotifyControl::kContinue;
 			}
 		};
 
 		ModEventSink g_sink;
+	}
+
+	void Tick()
+	{
+		auto* tasks = SKSE::GetTaskInterface();
+		if (!tasks) {
+			return;  // Event submission already warns when the interface is absent.
+		}
+		const auto generation = g_generation.load(std::memory_order_acquire);
+		{
+			std::lock_guard queueLock(g_queueMutex);
+			if (generation != g_generation.load(std::memory_order_acquire) ||
+				g_pendingEvents.empty() || g_drainScheduled) {
+				return;
+			}
+			g_drainScheduled = true;
+		}
+		tasks->AddTask([generation]() { DrainSceneEvents(generation); });
 	}
 
 	bool Install()
@@ -174,6 +283,13 @@ namespace SOS::SceneOutfits
 
 	void Reset()
 	{
+		// Invalidate queued drains first; wait for an in-flight dispatch before
+		// clearing scene state. Keep the existing Reset caller/lifecycle contract.
+		g_generation.fetch_add(1, std::memory_order_acq_rel);
+		std::lock_guard dispatchLock(g_dispatchMutex);
+		std::lock_guard queueLock(g_queueMutex);
+		g_pendingEvents.clear();
+		g_drainScheduled = false;
 		g_active = false;
 		g_activeSources.clear();
 		g_previousOutfit.clear();
