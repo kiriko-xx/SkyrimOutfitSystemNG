@@ -277,6 +277,10 @@ namespace {
         }
 
         switch (a_msg->type) {
+        case SKSE::MessagingInterface::kPostPostLoad:
+            LOG(info, "RaceMenu interface probe phase: PostPostLoad.");
+            SOS::MorphRefresh::ProbeRaceMenuInterface();
+            break;
         case SKSE::MessagingInterface::kDataLoaded:
             // Everything else is loaded now, so trampolines and hooks are safe to set up.
             SOS::GameState::SetLoading(false);
@@ -284,6 +288,8 @@ namespace {
             ApplySkinningHooks();
             SetupEvents();
             SOS::AutoSwitch::Install();
+            LOG(info, "RaceMenu interface probe phase: DataLoaded.");
+            SOS::MorphRefresh::ProbeRaceMenuInterface();
             SOS::MorphRefresh::Install();
             SOS::SceneOutfits::Install();
             SOS::Compat::Install();

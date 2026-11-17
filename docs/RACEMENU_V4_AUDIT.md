@@ -35,6 +35,30 @@ InstallPlugins 经 IDirectoryIterator 枚举 DLL，当前代码没有显式排�
 - master 源码的 UpdateModelHair_Hooked 使用实时传入颜色；TintMaskInterface 的 attach/NiNodeUpdate 使用 ActorBase 派生颜色，两来源可能竞争。此仅为调查方向，不是本 DLL 的已证实根因。
 - crash-2026-11-17-08-58-59：SkyrimSE+013B21C，package/quest alias 更新，Remiel 相关 package，栈经过 PapyrusUtil/OStim。没有足够证据归责 Face Lighting，也不能排除间接破坏。
 
+## OBody 对照与接口探测（未发布）
+
+- OBody 的 PostPostLoad 请求 payload 是 sizeof(InterfaceExchangeMessage*)，SOS 是 sizeof(exchange)；本协议在 x64 都是 8 字节，不是握手失败原因。OBody 的 Init(false) 在已检查的 CommonLib bool 重载中只关闭自动日志，并非特殊发送者能力。
+- SOS 现补上 PostPostLoad 和 DataLoaded 同步纯接口探测，不在早期阶段装事件、不访问角色、不刷新网格。逐通道记录真实 sender handle、receiver、payload size、Dispatch 返回值和 map 是否回写。只有尚未取得接口时请求。此为控制变量和取证，不保证修复旧版订阅缺失。
+- 定向 skee 的 delivered=false 表示未投递到该监听者；delivered=true 而 map returned=false 才需查其处理协议。广播 delivered=true 不代表 skee 收到。记录真实句柄后需与同一次启动 SKSE 日志注册顺序交叉核对。
+- SKSE 2.0.20 注册 catch-all 的桶向量有 numPlugins+5 预留容量。因此晚加载也可能恰好落在预留范围，不能只按 skee/OBody/SOS 先后顺序断定；需要回放全部注册时点的 resize。
+- OBody 现有 v1/v2 公开 API 没有取得 RaceMenu map 或任意 clone root 形变转交能力，禁止把重施 OBody 预设当只刷新网格。
+
+## 只读发色诊断与当前离线验证
+
+- 新模块 HairTintDiagnostics 在 ExtraLogging=on（trace/debug）时启用；普通 info 级别关闭。Install/Reset/采样都由主线程路径调用。菜单和滑块 sink 只合并原子事件位，不读 UI、actor、材质或 g_api。
+- 采样在现有 Tick 的 SKSE 主线程任务最前、provider 重试和 morph 操作之前；只观察玩家当前幻化覆盖槽的 partClone。上限 8 根、512 对象/边、64 几何、深度64；截断明确输出 truncated=1。光照材质必须通过 Ni RTTI、kLighting 和 kHairTint 三重检查才读 tintColor，不写任何颜色、模型或预设。
+- 记录 baseRGBA、hairColorForm、menu、view、内部0基槽号、addon/root/geometry/shader/material 身份及实际 tint。只在初次、事件或快照变化时输出。事件 open=1/close=2/slider=4 可合并，steadyMs 是采样时刻，不是事件/写入完成时刻。CPU材质值也不等于最终GPU画面。
+- tests/morph_interface_mock.ps1 摘取生产 TryRaceMenu 与 ProbeRaceMenuInterface，10个 mock 场景通过，涵盖未递送、无回写、v4接受、v3拒绝、广播误判防护、已取得去重、无messaging与quiet。只验证最小ABI前缀及控制逻辑，不验证真实SKSE路由或已装DLL完整ABI。
+- tests/hair_tint_read_only.ps1 验证只读模块预算/类型守卫、sink只发信号、主线程采样先于morph；这只是静态防回归。既有路径6例、滑块队列9例及两个只读/探测静态检查均通过。统一Release构建 BUILD_EXIT=0，无基础Hook/Patches改动。
+
+### 最小实机采样顺序
+
+1. 使用标为诊断构建的 DLL，保留现有配置，只将插件自己 INI 的 ExtraLogging 改 on；不要修改或添加旧 skee 不支持的 early-registration 配置。
+2. 启动后保留同一次启动的 skse64.log 与 SOS日志，检查 PostPostLoad/DataLoaded phase 和逐通道 sender/receiver/delivered/map returned；若无接口，不承诺拖滑块能形变。
+3. 先让假发颜色正确并停留半秒；打开 RaceMenu 不动半秒；拖发色条；取消色板；关闭菜单。记录每一步画面并保存 HairTintDiagnostics 行。优先比较同一材质身份的 tint 与 baseRGBA；若身份变了，按替换而非同材质改色分析。
+4. 再单独测 BodyMorph 滑块、OBody换预设；不要把读取路径或接口握手成功当作实际形变成功。若重现CTD，保留新 crash 日志，不对旧 Remiel/package 栈预先归因。
+5. 若菜单期间无采样行，先核对日志级别与主线程heartbeat是否运行；不能据此断言颜色没变。诊断后将 ExtraLogging 恢复 off。
+
 ## 未完成
 
 公开接口获取在旧版晚加载情况下仍待解决。已核对参考包 nioverride.psc 没有 AttachMesh/DetachMesh；别版上游的 AttachMesh 即使存在也仅证明首次 ApplyVertexDiff，不证明持续形变，不能拿它重构已验证挂载路径。公开 UpdateModelWeight 仅 ref 参数，不能指定现有 clone root；没有已验证第三方代理接口。

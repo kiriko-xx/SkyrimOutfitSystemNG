@@ -1,4 +1,5 @@
 #include "MorphRefresh.h"
+#include "HairTintDiagnostics.h"
 
 #include "NGFeatures.h"
 #include "bindings.h"
@@ -1748,8 +1749,12 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			const char* answered = nullptr;
 			skee::InterfaceExchangeMessage exchange{};
 			for (const auto* receiver : kReceivers) {
-				a_messaging->Dispatch(skee::InterfaceExchangeMessage::kMessage_ExchangeInterface,
+				const bool dispatched = a_messaging->Dispatch(skee::InterfaceExchangeMessage::kMessage_ExchangeInterface,
 					&exchange, sizeof(exchange), receiver);
+				if (!a_quiet) {
+					SKSE::log::info("MorphRefresh: interface probe sender {} receiver {} payload {} delivered {} map returned {}.",
+						SKSE::GetPluginHandle(), receiver ? receiver : "(broadcast)", sizeof(exchange), dispatched, exchange.interfaceMap != nullptr);
+				}
 				if (exchange.interfaceMap) {
 					answered = receiver ? receiver : "(broadcast)";
 					break;
@@ -1860,6 +1865,13 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		}
 	}
 
+	void ProbeRaceMenuInterface()
+	{
+		if (auto* messaging = SKSE::GetMessagingInterface(); messaging && !g_api) {
+			TryRaceMenu(messaging);
+		}
+	}
+
 	bool Available()
 	{
 		return g_api != nullptr || g_slif != nullptr ||
@@ -1882,6 +1894,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			return;
 		}
 		g_installed = true;
+		HairTintDiagnostics::Install();
 
 		auto* messaging = SKSE::GetMessagingInterface();
 		if (!messaging) {
@@ -1957,6 +1970,7 @@ void RetryProviders()
 
 	void Reset()
 	{
+		HairTintDiagnostics::Reset();
 		std::lock_guard lock(g_mutex);
 		g_signatures.clear();
 		g_forced.clear();
@@ -1992,10 +2006,8 @@ void RetryProviders()
 			// under the same lock.
 			std::lock_guard lock(g_mutex);
 			const bool incomplete = g_api == nullptr || g_obody == nullptr || g_slif == nullptr;
-			// Never stop asking: RaceMenu on 1.5.97 can stay silent for the whole
-			// main menu and answer only once the game is running. The fast cadence
-			// covers the load sequence, the slow one keeps the question alive for
-			// the rest of the session at no measurable cost.
+			// Retry for late provider availability; a missing sender subscription
+			// cannot be repaired by repeating the exchange.
 			const auto interval = g_providerRetries < 8 ? kProviderRetryInterval : kProviderRetrySlowInterval;
 			if (incomplete && now - g_lastProviderRetry >= interval) {
 				g_lastProviderRetry = now;
@@ -2023,6 +2035,8 @@ void RetryProviders()
 			return;
 		}
 		tasks->AddTask([retryProviders]() {
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			HairTintDiagnostics::SampleOnMainThread(player ? CoveredSlotMask(player->GetFormID()) : 0);
 			if (retryProviders) {
 				RetryProviders();
 			}
@@ -2053,10 +2067,8 @@ void RetryProviders()
 		if (!a_actor) {
 			return;
 		}
-		// 1.5.26: run even without the interface. The clones the skinning hook
-		// just attached carry no .tri target until this pass runs, and without
-		// that target RaceMenu's own morph pass skips them entirely - which is
-		// the "the illusion does not follow the slider" symptom.
+		// Prepare targets even without an interface; old RaceMenu versions may
+		// still need explicit ApplyVertexDiff to visit these clones.
 		RequestBake(a_actor->GetFormID(), BakeReason::kRebuilt);
 	}
 

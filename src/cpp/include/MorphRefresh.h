@@ -11,21 +11,15 @@ namespace RE
 
 namespace SOS::MorphRefresh
 {
-	// Arms the .tri morph targets on every illusion clone and asks the body
-	// morph providers for their interfaces (RaceMenu, OBody, SLIF NG - any
-	// combination). Called once from kDataLoaded. The .tri targets work without
-	// any interface: RaceMenu and OBody morph the clones in their own apply
-	// pass. The interfaces only add the immediate re-morph and the morph
-	// callback.
+	// Called at DataLoaded. Readable BODYTRI paths alone do not guarantee that
+	// older RaceMenu versions visit illusion nodes; explicit replay needs its API.
 	void Install();
 
-	// Tries the providers again. Must run on the main thread, outside any SKSE
-	// message handler and outside the skinning hooks: the handshake is a
-	// message dispatch, and skse64.log shows a dispatch sent from inside a
-	// handler only reaches the plugins that registered a catch-all listener
-	// late (so skee, loaded early, never answers). Callers queue it through the
-	// task interface; the heartbeat retries forever, fast at first and then
-	// every 30 s.
+	// PostPostLoad probe only; no actor, mesh or event-sink work.
+	void ProbeRaceMenuInterface();
+
+	// Main-thread provider discovery and event installation. Never call from
+	// skinning callbacks; retries cannot repair a missing sender subscription.
 	void RetryProviders();
 
 	// Forgets every signature and pending rebuild (new game / load).
