@@ -242,36 +242,15 @@ namespace Hooking {
             return nullptr;
         }
 
-        // Detaches every slot in the mask. ClearBipedPart removes the node and
-        // partClone; nulling item/addon/part forces ApplyArmorAddon to build a
-        // brand new clone instead of treating the slot as already up to date
-        // (which would keep the old .tri shape).
-        //
-        // CustomOne() runs once per ActorWeightModel (third person first, then
-        // first person), so only the model that was handed in is cleared: clearing
-        // both models here wiped the model rebuilt by the previous call, which made
-        // the body and clothing vanish until the outfit was applied again.
-        void ClearSlots(RE::Actor* a_actor, RE::ActorWeightModel* a_model, std::uint32_t a_mask) {
-            if (!a_model || a_mask == 0) return;
+        // Reads back what the skinning pass put in a slot, so the log shows whether a
+        // piece really landed: addon 0 means no ARMA was resolved for this race/sex,
+        // and clone 1 means the geometry exists (partClone is filled in by the engine
+        // right after ApplyArmorAddon returns, which is why it used to read as 0).
+        void LogSlotState(RE::Actor* a_actor, RE::ActorWeightModel* a_model, const RE::TESObjectARMO* a_armor, std::uint32_t a_bit) {
             auto* anim = ModelBiped(a_actor, a_model);
-            if (!anim) return;
-            for (std::uint32_t bit = 0; bit < 32; ++bit) {
-                if ((a_mask & (1u << bit)) == 0) continue;
-                auto& slot = anim->objects[bit];
-                RE::BipedAnimAugments::ClearBipedPart(anim, &slot, true, 0);
-                slot.item = nullptr;
-                slot.addon = nullptr;
-                slot.part = nullptr;
-            }
-        }
-
-        // Returning the clone node of a slot makes a rebuild visible in the log:
-        // a new pointer after ClearSlots plus ApplyArmorAddon proves the slot got
-        // a fresh geometry instead of the stale .tri shape it held before.
-        const void* SlotClone(RE::Actor* a_actor, RE::ActorWeightModel* a_model, std::uint32_t a_bit) {
-            auto* anim = ModelBiped(a_actor, a_model);
-            if (!anim || a_bit >= 32) return nullptr;
-            return static_cast<const void*>(anim->objects[a_bit].partClone.get());
+            if (!anim || a_bit >= 32) return;
+            const auto& slot = anim->objects[a_bit];
+            LOG(debug, "Custom: {:08X} slot {:02} item {:08X} addon {:08X} part {} clone {}", a_armor->GetFormID(), a_bit, slot.item ? slot.item->GetFormID() : 0, slot.addon ? slot.addon->GetFormID() : 0, slot.part ? 1 : 0, slot.partClone ? 1 : 0);
         }
 
         // A refused ApplyArmorAddon leaves the slot empty - the actor renders nude in
@@ -323,9 +302,10 @@ namespace Hooking {
         }
 
         // Slots the outfit occupied the last time Custom ran for this weight model.
-        // Slots that drop out of the display set (policy changed to X, piece removed,
-        // outfit switched) keep their cloned mesh and item until something detaches
-        // them, and DontVanillaSkinPlayer keeps the real armour out of those slots.
+        // Only used for the log line: a slot that drops out of the display set
+        // (policy changed to X, piece removed, outfit switched) is left alone on
+        // purpose, because the next skinning pass rebuilds it from the real gear or
+        // from the skin.
         std::mutex g_appliedMaskMutex;
         std::unordered_map<std::uintptr_t, std::uint32_t> g_appliedMasks;
 
@@ -410,14 +390,14 @@ namespace Hooking {
                 LOG(debug, "Custom: attaching {} outfit-only piece(s) of {} displayed (mask 0x{:08X}, outfit revision {}, body morph {}) for {:08X}.", applySet.size(), displaySet.size(), displayMask, revisionRebuild, morphRebuild, actor->GetFormID());
             }
 
-            // Slots that dropped out of the display set keep their cloned mesh and item
-            // until something detaches them. Clear them, but never re-apply the real
-            // armour that happens to be worn there: the illusion owns the whole body, so
-            // a slot the outfit does not cover has to show skin, not the old real piece.
+            // A slot that drops out of the display set must not be torn out here.
+            // Clearing item/addon/part used to look like the tidy fix, but it also
+            // removes the engine's own skin entries and nothing rebuilds them, so the
+            // body stayed empty for the rest of the session. Leave the slot to the
+            // next skinning pass instead.
             const std::uint32_t staleMask = TakeStaleSlots(actorWeightModel, displayMask);
             if (staleMask != 0) {
-                ClearSlots(actor, actorWeightModel, staleMask);
-                LOG(debug, "Custom: {} slot(s) left the display set (mask 0x{:08X}); cleared for {:08X}.", std::popcount(staleMask), staleMask, actor->GetFormID());
+                LOG(debug, "Custom: {} slot(s) left the display set (mask 0x{:08X}); left to the engine for {:08X}.", std::popcount(staleMask), staleMask, actor->GetFormID());
             }
 
             for (const auto* armor : applySet) {
@@ -432,7 +412,7 @@ namespace Hooking {
                 const auto mask = armor->GetSlotMask().underlying();
                 for (std::uint32_t bit = 0; bit < 32; ++bit) {
                     if ((mask & (1u << bit)) == 0) continue;
-                    LOG(debug, "Custom: {:08X} slot {:02} clone {}", armor->GetFormID(), bit, SlotClone(actor, actorWeightModel, bit));
+                    LogSlotState(actor, actorWeightModel, armor, bit);
                 }
             }
             // Every clone above was created straight through ApplyArmorAddon, so it

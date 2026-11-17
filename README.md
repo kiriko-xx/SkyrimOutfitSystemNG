@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.24**（修 1.5.23 的「只显示头手 / 切套装时 46 槽外露」：贴件改回用引擎传进来的 `ActorWeightModel`（`rdi`），不再清空重贴、不再还原真甲；1.5.18–1.5.22 的失败版本源码存档在 git tag `v1.5.22-archive`；版本与哈希见 [VERSIONS.md](VERSIONS.md)）
+- 当前版本：**1.5.25**（修 1.5.24 的「幻化件有了但身体没了」：删除 `ClearSlots`，离开幻化集的槽不再清空、原样交回引擎；身体（32 槽）不再变空模型。1.5.18–1.5.22 的失败版本源码存档在 git tag `v1.5.22-archive`，1.5.17 成品包在 `SkyrimOutfitSystemNG-1.5.17.zip`；版本与哈希见 [VERSIONS.md](VERSIONS.md)）
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 
