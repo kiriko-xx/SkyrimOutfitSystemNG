@@ -29,6 +29,7 @@ namespace SOS::HairTintDiagnostics
 		bool g_haveSample = false;
 		std::string g_lastSample;
 		std::uint64_t g_sequence = 0;
+		std::chrono::steady_clock::time_point g_lastSampleTime{};
 
 		bool Enabled()
 		{
@@ -160,6 +161,7 @@ namespace SOS::HairTintDiagnostics
 		g_haveSample = false;
 		g_lastSample.clear();
 		g_sequence = 0;
+		g_lastSampleTime = {};
 	}
 
 	void SampleOnMainThread(std::uint32_t a_coveredSlotMask)
@@ -169,6 +171,11 @@ namespace SOS::HairTintDiagnostics
 			g_haveSample = false;
 			return;
 		}
+		const auto now = std::chrono::steady_clock::now();
+		if (now - g_lastSampleTime < std::chrono::milliseconds(250)) {
+			return;
+		}
+		g_lastSampleTime = now;
 		const auto events = g_events.exchange(0, std::memory_order_relaxed);
 		Scan scan;
 		scan.text << std::setprecision(9);

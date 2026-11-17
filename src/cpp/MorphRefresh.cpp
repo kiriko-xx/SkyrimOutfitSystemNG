@@ -258,7 +258,7 @@ namespace SOS::MorphRefresh
 			};
 		}
 
-		constexpr auto kPollInterval = std::chrono::milliseconds(250);
+		constexpr auto kPollInterval = std::chrono::milliseconds(33);
 		constexpr auto kForceWindow = std::chrono::milliseconds(4000);
 		constexpr auto kApplyDelay = std::chrono::milliseconds(150);
 		// A morph or inflation provider usually writes several values in a row
@@ -725,6 +725,9 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			bool any = false;
 			std::uint64_t signature = ComputeProviderSignature(a_actor, &any);
+			if (g_api) {
+				return signature;
+			}
 			if (!any) {
 				signature = 1469598103934665603ull;
 			}
@@ -1147,8 +1150,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				return;
 			}
 			const auto id = a_actor->GetFormID();
-			const auto baseline = ComputeSignature(a_actor);
 			const auto providerSignature = ComputeProviderSignature(a_actor, nullptr);
+			const auto baseline = g_api ? providerSignature : ComputeSignature(a_actor);
 			const auto now = std::chrono::steady_clock::now();
 			std::lock_guard lock(g_mutex);
 			// A check scheduled by the earlier provider pass would compare against
@@ -1226,6 +1229,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			std::size_t slots{ 0 };
 			std::size_t targets{ 0 };
 			std::size_t nodes{ 0 };
+			std::unordered_set<RE::NiAVObject*> replayed;
 			for (const bool firstPerson : { false, true }) {
 				auto* biped = a_actor->GetBiped(firstPerson).get();
 				if (!biped) {
@@ -1257,7 +1261,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					// Only the immediate re-morph needs the interface. The .tri
 					// target above is what makes RaceMenu morph the clone itself,
 					// and that works with no interface at all.
-					if (g_api) {
+					if (g_api && replayed.insert(node).second) {
 						morphPush::g_selfWrite.store(true, std::memory_order_release);
 						g_api->ApplyVertexDiff(a_actor, node, false);
 						morphPush::g_selfWrite.store(false, std::memory_order_release);
@@ -1278,6 +1282,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					SKSE::log::debug("MorphRefresh: re-morphed {:08X} on {} node(s), {} .tri target(s) of {} slot(s) ({}); the vertices {}.",
 						id, nodes, targets, slots, BakeReasonText(a_reason),
 						before == after ? "did not change (not proof of success)" : "moved");
+					SKSE::log::debug("MorphRefresh: clone replay CPU time {} us on {} unique node(s) (includes target checks and evidence hashes, not GPU completion).",
+						std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - now).count(), nodes);
 				} else {
 					SKSE::log::debug("MorphRefresh: {:08X} has no BodyMorph interface; {} .tri target(s) of {} slot(s) stay armed for RaceMenu's own pass ({}).",
 						id, targets, slots, BakeReasonText(a_reason));
@@ -1563,9 +1569,9 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					continue;
 				}
 
-				const auto signature = ComputeSignature(actor);
 				bool anyProvider = false;
 				const auto providerSignature = ComputeProviderSignature(actor, &anyProvider);
+				const auto signature = g_api ? providerSignature : ComputeSignature(actor);
 				bool changed = false;
 				{
 					std::lock_guard lock(g_mutex);

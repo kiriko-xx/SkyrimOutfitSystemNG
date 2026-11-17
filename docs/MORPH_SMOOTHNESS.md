@@ -1,0 +1,11 @@
+# 已成功跟随后改善阶梯感的候选
+
+用户确认46d0d48在ScreenArcherMenu和OBody NG均跟随，但相对裸体过渡有阶梯/轻微卡顿。最新日志连续generic observer间隔约255–272ms，与250ms采样限制吻合。SLIF仍未获实测确认。
+
+本轮仅性能路径：轮询250→33ms（目标约30次/秒，实际受输入heartbeat与SKSE任务调度限制）；有公开BodyMorph接口时签名只用权威provider值，不再每次混入全角色几何哈希。Poll与Absorb复用一次读取，避免同一周期重复VisitMorphValues。fallback无接口时旧几何路径保留。
+
+Bake内以当前NiAVObject指针集合去重，一个多槽clone一次只ApplyVertexDiff一次，1P/3P不同节点各自处理。发色只读诊断仍250ms节流且节流前不消费事件，未写颜色。重放仍只在morph值变化/既有事件触发，不伪造插值、不写预设、不改基础钩子。
+
+已有5秒证据采样周期附clone replay CPU time微秒，含目标检查与证据哈希，不是GPU完成时间，也不是每次刷新分布。提高频率可能增加主线程负担，不能由离线编译承诺平滑度。若仍卡，需结合CPU时间、实际变化频率与ExtraLogging关闭对照。建议常规游戏ExtraLogging=off，仅短时采日志。
+
+验收同套有TRI服装/同一滑块渐变速度下对照46d0d48与本候选，检查连续过渡、主线程卡顿、返回原值、OBody切预设；SLIF另测。继续仅用OutfitSystemNG.dll，禁旧名SkyrimOutfitSystemNG.dll。发色未解决且低优先级。
