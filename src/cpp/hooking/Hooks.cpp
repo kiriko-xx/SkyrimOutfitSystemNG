@@ -3,10 +3,11 @@
 //
 // Every game address is declared once as REL::RelocationID(seID, aeID) - the
 // CommonLibSSE-NG address table. There is no second copy of the hook code and no
-// per-runtime offset table: the address library says which function a hook lives
-// in, FindCallInFunction locates the call inside that function, and the trampoline
-// is written there. A runtime that recompiled the function only moves the site -
-// the hook finds it again instead of disabling itself.
+// per-runtime offset table. Most hooks scan inside the resolved host function.
+// DontVanillaSkinPlayer is register-sensitive and instead requires host +0x302;
+// finding the same callee elsewhere does not establish its r13 contract.
+// A failed check disables that hook rather than substituting a scanned call.
+// This shared SE/AE implementation is not a claim of full AE runtime validation.
 //
 // Only where the *injected machine code* itself differs does the trampoline branch
 // on REL::Module::IsAE():
@@ -78,7 +79,8 @@ namespace Hooking {
                     return;
                 }
 
-                DontVanillaSkinPlayer_Hook = FindCallInFunction("DontVanillaSkinPlayer", DontVanillaSkinPlayer_Hook_ID, TESObjectARMO_ApplyArmorAddon);
+                // r13 is part of this exact site's contract, not the callee's ABI.
+                DontVanillaSkinPlayer_Hook = FindExpectedCallAtOffset("DontVanillaSkinPlayer", DontVanillaSkinPlayer_Hook_ID, TESObjectARMO_ApplyArmorAddon, 0x302);
                 if (!DontVanillaSkinPlayer_Hook) {
                     return;
                 }

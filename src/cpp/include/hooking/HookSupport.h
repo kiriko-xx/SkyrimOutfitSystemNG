@@ -48,6 +48,26 @@ namespace Hooking
 	// site that does not match the recorded callee.
 	std::uintptr_t FindCallInFunctionOrOffset(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, std::ptrdiff_t a_legacyOffset);
 
+	// Pure admission rules shared with the source-extraction regression test.
+	namespace SiteContract
+	{
+		constexpr bool ContainsRange(std::uintptr_t a_begin, std::size_t a_size, std::uintptr_t a_address, std::size_t a_width)
+		{
+			return a_address >= a_begin && a_width <= a_size && a_address - a_begin <= a_size - a_width;
+		}
+
+		constexpr bool IsExpectedCallSite(std::uintptr_t a_site, std::uintptr_t a_nominal, bool a_validRange, std::uint8_t a_opcode, bool a_reachesExpected)
+		{
+			return a_site == a_nominal && a_validRange && a_opcode == 0xE8 && a_reachesExpected;
+		}
+	}
+
+	// Register-sensitive hooks must never select another call just because its callee
+	// matches. Only host + a_offset is admitted: E8, in .text, reaching a_target
+	// directly or through the existing same-module one-hop check. Scans only diagnose
+	// rejection; E9 and calls redirected outside the module are never overwritten.
+	std::uintptr_t FindExpectedCallAtOffset(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, std::size_t a_offset);
+
 	// How far into a function body the call scan looks. All the hooks patch a call in
 	// the first few hundred bytes of their host function (the deepest is 0x373).
 	inline constexpr std::ptrdiff_t kBodyScanLimit = 0x800;

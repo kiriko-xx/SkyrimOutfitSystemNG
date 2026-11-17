@@ -42,6 +42,9 @@ namespace Hooking {
             if (::VirtualQuery(a_pointer, &info, sizeof(info)) == 0) return false;
             if (info.State != MEM_COMMIT) return false;
             if ((info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0) return false;
+            const auto access = info.Protect & 0xFF;
+            if (access != PAGE_READONLY && access != PAGE_READWRITE && access != PAGE_WRITECOPY &&
+                access != PAGE_EXECUTE_READ && access != PAGE_EXECUTE_READWRITE && access != PAGE_EXECUTE_WRITECOPY) return false;
             const auto regionEnd = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
             return address + 0x20 <= regionEnd;
         }
@@ -78,7 +81,18 @@ namespace Hooking {
             return false;
         }
         if (!service->inner().enabled_c()) return false;
-            auto actor = skyrim_cast<RE::Actor*>(target);
+        // A readable hook register is not necessarily a live TESForm. Verify its
+        // registry identity before using a non-RTTI form conversion.
+        if (target->GetFormType() != RE::FormType::ActorCharacter ||
+            RE::TESForm::LookupByID(target->GetFormID()) != target) {
+            static std::atomic_bool reported{ false };
+            if (!reported.exchange(true, std::memory_order_relaxed)) {
+                LOG(warn, "ShouldOverrideSkinning: register target 0x{:X} is not a registered Character; keeping vanilla skinning. Check the hook site contract.",
+                    reinterpret_cast<std::uintptr_t>(target));
+            }
+            return false;
+        }
+        auto actor = target->As<RE::Actor>();
         if (!actor) {
             LOG(warn, "Target failed to cast to RE::Actor");
             return false;
@@ -133,11 +147,10 @@ namespace Hooking {
             LogExit exitPrint("DontVanillaSkinPlayer.ShouldOverride"sv);
             if (!ShouldOverrideSkinning(target)) { return false; }
             auto svc = outfit_service_get_singleton_ptr();
-            auto actor = skyrim_cast<RE::Actor*>(target);
+            auto actor = target->As<RE::Actor>();
             if (!actor) {
-                // Actor failed to cast...
-                LOG(warn, "ShouldOverride: Failed to cast target to Actor.");
-                return true;
+                LOG(warn, "ShouldOverride: Failed to identify target as Actor; keeping vanilla skinning.");
+                return false;
             }
             auto outfit = svc->inner().current_outfit_ptr(actor->GetFormID());
             if (!outfit) return false;

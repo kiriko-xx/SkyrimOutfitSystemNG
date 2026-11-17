@@ -263,6 +263,50 @@ namespace Hooking
 		return 0;
 	}
 
+	std::uintptr_t FindExpectedCallAtOffset(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, std::size_t a_offset)
+	{
+		if (!RequireIds(a_hook, { a_host, a_target })) return 0;
+
+		const auto entry = a_host.address();
+		const auto expected = a_target.address();
+		const auto text = TextSegment();
+		const auto begin = text.address();
+		const auto size = text.size();
+		// Subtraction-based bounds checks reject invalid/overflowing ranges before
+		// pointer arithmetic or byte reads, including an offset past the end of .text.
+		const bool validEntry = SiteContract::ContainsRange(begin, size, entry, 1);
+		const bool validOffset = validEntry && a_offset <= size - (entry - begin);
+		const auto nominal = validOffset ? entry + a_offset : entry;
+		const bool validRange = validOffset && SiteContract::ContainsRange(begin, size, nominal, 5);
+		const auto opcode = validRange ? *reinterpret_cast<const std::uint8_t*>(nominal) : 0;
+		const auto target = validRange && opcode == 0xE8 ? BranchTarget(nominal) : 0;
+		const bool reachesExpected = validRange && opcode == 0xE8 &&
+			SiteContract::ContainsRange(begin, size, expected, 1) &&
+			SiteContract::ContainsRange(begin, size, target, 5) && Reaches(nominal, expected);
+		if (SiteContract::IsExpectedCallSite(nominal, nominal, validRange, opcode, reachesExpected)) {
+			LogSiteBytes(a_hook, nominal);
+			return nominal;
+		}
+
+		LOG(err, "{}: required host +0x{:X} call-site contract failed; hook stays disabled. Same-callee candidates do not verify the register contract and will NOT be substituted.", a_hook, a_offset);
+		LogModuleIdentity(a_hook);
+		if (validOffset) {
+			LogSiteBytes(a_hook, nominal);
+			LogCodeWindow(a_hook, nominal, 0x20, 0x20);
+		} else {
+			LOG(err, "{}: host/offset is outside .text; no nominal bytes can be read safely.", a_hook);
+		}
+		if (validEntry) {
+			const auto scanSize = std::min(static_cast<std::size_t>(kBodyScanLimit), size - (entry - begin));
+			const auto candidates = CallsReaching(entry, entry + scanSize, expected);
+			LOG(err, "{}: {} same-callee scan candidate(s), DIAGNOSTIC ONLY (byte scan, not instruction decoding).", a_hook, candidates.size());
+			for (const auto candidate : candidates) {
+				LOG(err, "{}: diagnostic candidate host +0x{:X}; NOT a replacement site.", a_hook, candidate - entry);
+			}
+		}
+		return 0;
+	}
+
 	void LogSiteBytes(const char* a_hook, std::uintptr_t a_site)
 	{
 		if (!InText(a_site, 5)) {

@@ -1,5 +1,6 @@
 param(
-    [string] $LogPath = (Join-Path $PSScriptRoot '../../../bug/skse64.log')
+    [string] $LogPath = (Join-Path $PSScriptRoot '../../../bug/skse64.log'),
+    [switch] $ModelOnly
 )
 $ErrorActionPreference = 'Stop'
 
@@ -33,6 +34,7 @@ function Register-Replayed([int] $Listener, [string] $Sender, [int] $NumPlugins,
 function Assert-That([bool] $Condition, [string] $Message) {
     if (-not $Condition) { throw "ASSERT FAILED: $Message" }
 }
+if (-not $ModelOnly) {
 $lines = Get-Content -LiteralPath $LogPath
 $names = @{ SKSE = 0 }
 foreach ($line in $lines) {
@@ -70,6 +72,8 @@ Assert-That (-not $script:Buckets[139].Contains(132)) 'skee132 absent from sende
 Assert-That ($script:Buckets[95].Contains(132)) 'skee132 present in OBody95 sender bucket'
 Assert-That ($script:Buckets[139].Contains(95)) 'OBody95 present in outfit139 sender bucket'
 Write-Output "PASS capture: $registrationCount registrations; sender139=[$actual]; 139->skee132 impossible; 95->skee132 and 139->OBody95 registered."
+
+}
 
 # Hypothetical ACTUAL load order, not a filename sorting guarantee:
 # our real handle H=95 loads before skee S=132. The latter's wildcard
