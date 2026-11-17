@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.22**
+- 当前版本：**1.5.17**（1.5.18–1.5.22 因实机问题整体回退，源码存档在 git tag `v1.5.22-archive`；版本与哈希见 [VERSIONS.md](VERSIONS.md)）
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 
@@ -37,6 +37,10 @@ VS2022 + CMake >= 3.21 + vcpkg（triplet `x64-windows-static`，静态 CRT），
 - 本机没有安装 Skyrim，所有游戏内行为**未实机验证**（静态验证项见 `docs/DELIVERY.md`）。
 - 旧 co-save（protobuf，版本 ≤ 6）读档时自动迁移为 JSON（版本 7），版本 3 及更早不支持。
 - `RemoveActor` 拒绝移除玩家；VR 未构建。
+
+## 版本管理
+
+2026-11-17 之前本项目没有 git 仓库，项目根只有成品包 `SkyrimOutfitSystemNG-1.5.17.zip` … `-1.5.22.zip`（各带 `.zip.sha256`），**1.5.17–1.5.21 的源码没有快照**。现在仓库已 `git init`，`v1.5.22-archive` 是第一个记录；每个交付版本定稿后在 `dist/` 收尾并打 `vX.Y.Z` tag。完整列表、哈希与回退规则见 [VERSIONS.md](VERSIONS.md)。
 
 ## 许可
 
