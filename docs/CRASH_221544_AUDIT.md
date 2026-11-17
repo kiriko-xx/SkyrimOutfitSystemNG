@@ -27,6 +27,22 @@
 - 既有generic observer、slider9例、hair recovery25例、read-only/fast-path检查通过。没有证明真实Main::threadID值、引擎场景phase、任务在主线程执行频率或CTD消失。
 - 不以局部raw指针改NiPointer伪称修复：取slot瞬间和引擎重建仍需同一同步域。RaceMenu自己的partition上传有renderer/skin锁，不给本插件遍历额外保证。
 
+## d026448 实机失败：22:59:25 新现场
+
+- 新 `bug/SkyrimOutfitSystemNG.log:78,883` 确认 accepted=27200/27200，worker24848被deferred。`:5292` 场景恢复、`:5296–5297` 13节点重放也均为27200；线程门禁生效但用户报告同样隐形/CTD，不能宣称线程修正已解决。
+- 新 `bug/crash-2026-11-17-22-59-25.log:5–15` 为SkyrimSE.exe+131C6F6，`mov rdx, [rax+0x70]`，RAX=0x0002329422948000，线程27200。异常记录fault=FFFFFFFFFFFFFFFF与计算地址不符，不能据此伪造具体损坏成员。`:64–81` 是灯光/场景剔除到Main更新调用链，不同于前次EffectShader崩点。`:187–221` 栈扫描出现Omega skeleton；它不是已证明的坏对象。
+- 插件`:5292` 22:59:21.894052恢复，`:5296` 21.896886显式clone重放（vertices未变），`:5299` 22.046799额外ApplyBodyMorphs；这是NotifyRebuilt旧延迟队列，在clone-only实时观察者之外仍会写整个actor。固定150ms不是装备完成屏障，重复全actor写入是否必要/是否触发CTD尚待隔离。
+- 新 `bug/SLIFNG.log:26–44` 膨胀值从0.1566667到0.33999988，部分Apply位于21800/27292/27304/27300，并非27200；这是独立provider的线程证据，不是认定SLIF导致崩溃。SOS门禁不会串行化第三方写入。
+- 不能把灯光插件出现在栈中、内存使用较高、或场景结束后约三秒崩溃当作因果证明。下一步审计SOS自身额外全actor写入与clone-only路径的重复性。
+
+## 下一隔离改动：缩限重建后的形变范围
+
+NotifyRebuilt保留原延迟/去重队列，但consumer改为RequestBake(kRebuilt)，不再ApplyBodyMorphs整个actor。即时NotifySlotApplied与通用33ms provider观察者不变，仍用同一ApplyVertexDiff克隆路径，基础钩子及发色算法不动。此改动只隔离本插件不必要的全actor额外写入，不消除第三方并发、不宣称提供节点生命周期屏障或已修CTD。新增morph_rebuilt_scope.ps1是源码静态范围守卫；既有generic/read-only/fast/hair25通过，仍需游戏验证。两名独立审计子代理均执行失败，未提供结论，不引用其审查背书。
+
+## 内存清理后构建复核
+
+用户清理内存后同一源码重试，BUILD_EXIT=0。新增重建范围静态守卫、Scene FIFO九组、线程predicate五例、generic连续变化mock与hair recovery二十五例全部通过。前两次C3859/C1076/1455为构建资源失败，未用旧DLL冒充。仍未取得下一候选的游戏内验证，CTD根因与修复效果未知。
+
 ## 当前验证边界
 
 本机没有该游戏运行现场；尚无证据证明着色器坏指针由哪个写入产生。不能把机械球/显存接近上限/TRI加载告警当作确定根因。当前开发主线另含未完成的Apparel Preview调用链修复，不可直接把dist开发DLL当本次可安装候选。

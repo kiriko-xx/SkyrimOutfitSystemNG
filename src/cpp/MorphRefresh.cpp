@@ -1752,9 +1752,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				}
 			}
 
-			// RaceMenu rebuilds the meshes asynchronously, so applying the stored
-			// morphs right after the equipment refresh can still hit the old
-			// clone. Run once shortly after the hook rebuilt the slots.
+			// Revisit current display clones; this delay is not a completion fence.
+			// Do not broaden rebuild repair to a whole-actor morph pass.
 			std::vector<RE::FormID> applyNow;
 			{
 				std::lock_guard lock(g_mutex);
@@ -1772,9 +1771,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					std::lock_guard lock(g_mutex);
 					g_applyScheduled.erase(id);
 				}
-				if (auto* actor = RE::TESForm::LookupByID<RE::Actor>(id)) {
-					ApplyMorphs(actor);
-				}
+				RequestBake(id, BakeReason::kRebuilt);
 			}
 		}
 
