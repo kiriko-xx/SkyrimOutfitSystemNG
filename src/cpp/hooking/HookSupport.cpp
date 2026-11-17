@@ -369,6 +369,28 @@ namespace Hooking
 		std::string hex;
 		for (SIZE_T i = 0; i < read; ++i) hex += std::format("{:02X} ", bytes[i]);
 		LOG(warn, "{}: call destination bytes at 0x{:X}: {} (no execution, no writes).", a_hook, a_target, hex);
+		// Decode only the observed inline absolute-jump slot; never execute it.
+		if (read >= 14 && bytes[0] == 0xFF && bytes[1] == 0x25 &&
+			bytes[2] == 0 && bytes[3] == 0 && bytes[4] == 0 && bytes[5] == 0) {
+			std::uintptr_t destination = 0;
+			for (std::size_t i = 0; i < sizeof(destination); ++i)
+				destination |= static_cast<std::uintptr_t>(bytes[6 + i]) << (8 * i);
+			HMODULE destinationOwner = nullptr;
+			char destinationPath[1024]{};
+			const bool owned = ::GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCSTR>(destination), &destinationOwner) != 0;
+			if (owned) ::GetModuleFileNameA(destinationOwner, destinationPath, sizeof(destinationPath) - 1);
+			LOG(warn, "{}: inline FF25 destination 0x{:X}, owner {}, owner offset 0x{:X}; DIAGNOSTIC ONLY, chain not approved.",
+				a_hook, destination, owned ? destinationPath : "<no loaded module>",
+				owned ? destination - reinterpret_cast<std::uintptr_t>(destinationOwner) : 0);
+			std::uint8_t entry[32]{};
+			SIZE_T entryRead = 0;
+			if (::ReadProcessMemory(::GetCurrentProcess(), reinterpret_cast<const void*>(destination), entry, sizeof(entry), &entryRead) && entryRead <= sizeof(entry)) {
+				std::string entryHex;
+				for (SIZE_T i = 0; i < entryRead; ++i) entryHex += std::format("{:02X} ", entry[i]);
+				LOG(warn, "{}: inline FF25 entry bytes: {} (bounded read, no execution, no writes).", a_hook, entryHex);
+			}
+		}
 	}
 
 	void LogModuleIdentity(const char* a_hook)
