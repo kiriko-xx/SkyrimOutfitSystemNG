@@ -1,5 +1,6 @@
 #include "MorphRefresh.h"
 #include "HairTintDiagnostics.h"
+#include "HairTintRecovery.h"
 
 #include "NGFeatures.h"
 #include "bindings.h"
@@ -1910,6 +1911,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		}
 		g_installed = true;
 		HairTintDiagnostics::Install();
+		HairTintRecovery::Install();
 
 		auto* messaging = SKSE::GetMessagingInterface();
 		if (!messaging) {
@@ -1986,6 +1988,7 @@ void RetryProviders()
 	void Reset()
 	{
 		HairTintDiagnostics::Reset();
+		HairTintRecovery::Reset();
 		std::lock_guard lock(g_mutex);
 		g_signatures.clear();
 		g_forced.clear();
@@ -2051,7 +2054,9 @@ void RetryProviders()
 		}
 		tasks->AddTask([retryProviders]() {
 			auto* player = RE::PlayerCharacter::GetSingleton();
-			HairTintDiagnostics::SampleOnMainThread(player ? CoveredSlotMask(player->GetFormID()) : 0);
+			const auto coveredMask = player ? CoveredSlotMask(player->GetFormID()) : 0;
+			HairTintDiagnostics::SampleOnMainThread(coveredMask);
+			HairTintRecovery::Drain(player, coveredMask);
 			if (retryProviders) {
 				RetryProviders();
 			}
