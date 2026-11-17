@@ -1,0 +1,58 @@
+//
+// Created by m on 10/8/2022.
+//
+
+#include "RE/REAugments.h"
+
+void RE::InventoryChangesAugments::ExecuteVisitor(RE::InventoryChanges* thisPtr, RE::InventoryChanges::IItemChangeVisitor * a_visitor) {
+    using func_t = decltype(&RE::InventoryChangesAugments::ExecuteVisitor);
+    REL::Relocation<func_t> func{ RELOCATION_ID(15855, 16095) };
+    return func(thisPtr, a_visitor);
+}
+
+void RE::InventoryChangesAugments::ExecuteAugmentVisitor(RE::InventoryChanges* thisPtr, RE::IItemChangeVisitorAugment * a_visitor) {
+    using func_t = decltype(&RE::InventoryChangesAugments::ExecuteAugmentVisitor);
+    REL::Relocation<func_t> func{ RELOCATION_ID(15855, 16095) };
+    return func(thisPtr, a_visitor);
+}
+
+
+void RE::InventoryChangesAugments::ExecuteVisitorOnWorn(RE::InventoryChanges* thisPtr, RE::InventoryChanges::IItemChangeVisitor * a_visitor) {
+    using func_t = decltype(&RE::InventoryChangesAugments::ExecuteVisitorOnWorn);
+    REL::Relocation<func_t> func{ RELOCATION_ID(15856, 16096) };
+    return func(thisPtr, a_visitor);
+}
+
+void RE::InventoryChangesAugments::ExecuteAugmentVisitorOnWorn(RE::InventoryChanges* thisPtr, RE::IItemChangeVisitorAugment * a_visitor) {
+    using func_t = decltype(&RE::InventoryChangesAugments::ExecuteAugmentVisitorOnWorn);
+    REL::Relocation<func_t> func{ RELOCATION_ID(15856, 16096) };
+    return func(thisPtr, a_visitor);
+}
+
+void RE::AIProcessAugments::SetEquipFlag(RE::AIProcess* thisPtr, RE::AIProcessAugments::Flag a_flag) {
+    using func_t = decltype(&RE::AIProcessAugments::SetEquipFlag);
+    REL::Relocation<func_t> func{ RELOCATION_ID(38867, 39907) };
+    return func(thisPtr, a_flag);}
+
+void RE::AIProcessAugments::UpdateEquipment(RE::AIProcess* thisPtr, RE::Actor* a_actor) {
+    using func_t = decltype(&RE::AIProcessAugments::UpdateEquipment);
+    REL::Relocation<func_t> func{ RELOCATION_ID(38404, 39395) };
+    return func(thisPtr, a_actor);
+}
+
+void RE::BipedAnimAugments::ClearBipedPart(RE::BipedAnim* a_this, RE::BIPOBJECT* a_object, bool a_arg3, std::int32_t a_arg4) {
+    using func_t = decltype(&RE::BipedAnimAugments::ClearBipedPart);
+    REL::Relocation<func_t> func{ RELOCATION_ID(15496, 15661) };
+    return func(a_this, a_object, a_arg3, a_arg4);
+}
+
+bool RE::TESObjectARMOAugments::ApplyArmorAddon(const RE::TESObjectARMO* thisPtr, RE::TESRace* a_race, RE::ActorWeightModel* a_model, bool a_isFemale) {
+    using func_t = decltype(&RE::TESObjectARMOAugments::ApplyArmorAddon);
+    REL::Relocation<func_t> func{ RELOCATION_ID(17392, 17792) };
+    return func(thisPtr, a_race, a_model, a_isFemale);}
+
+bool RE::TESObjectARMOAugments::TestBodyPartByIndex(const RE::TESObjectARMO* thisPtr, std::uint32_t a_index) {
+    using func_t = decltype(&RE::TESObjectARMOAugments::TestBodyPartByIndex);
+    REL::Relocation<func_t> func{ RELOCATION_ID(17395, 17795) };
+    return func(thisPtr, a_index);
+}
