@@ -25,6 +25,7 @@
 #include <xbyak/xbyak.h>
 
 #include "hooking/HookSupport.h"
+#include "hooking/CallSiteSnapshot.h"
 #include "hooking/Patches.hpp"
 
 namespace Hooking {
@@ -36,7 +37,7 @@ namespace Hooking {
         // Allocates the trampoline bytes next to the game code and patches the site
         // with a 5-byte branch. Templated so each generator keeps its own type.
         template <class Code>
-        bool Install(const char* a_name, std::uintptr_t a_site, Code& a_code) {
+        bool Install(const char* a_name, std::uintptr_t a_site, Code& a_code, const CallSiteSnapshot* a_original = nullptr) {
             // A full trampoline aborts the process inside do_allocate, so check first and
             // leave the hook uninstalled instead.
             if (g_localTrampoline->free_size() < a_code.getSize()) {
@@ -50,6 +51,14 @@ namespace Hooking {
             }
 
             LOG(debug, "Patching {} at addr = {:x}. base = {:x}", a_name, a_site, REL::Module::get().base());
+            if (a_original) {
+                CallSiteSnapshot::Bytes current{};
+                SIZE_T read = 0;
+                if (!::ReadProcessMemory(::GetCurrentProcess(), reinterpret_cast<const void*>(a_site), current.data(), current.size(), &read) || read != current.size() || !a_original->MatchesOriginal(current)) {
+                    LOG(err, "{}: original call changed before patch write; refusing installation.", a_name);
+                    return false;
+                }
+            }
             g_branchTrampoline->write_branch<5>(a_site, code);
             LOG(debug, "{}: patched.", a_name);
             return true;
@@ -218,55 +227,46 @@ namespace Hooking {
                 // so every ApplyArmorAddon call was refused and every slot stayed empty
                 // (the "only head and hands" report: those are the vanilla skin parts).
                 //
+                CallSiteSnapshot::Bytes originalBytes{};
+                SIZE_T bytesRead = 0;
+                if (!::ReadProcessMemory(::GetCurrentProcess(), reinterpret_cast<const void*>(CustomSkinPlayer_Hook), originalBytes.data(), originalBytes.size(), &bytesRead) || bytesRead != originalBytes.size()) return;
+                const CallSiteSnapshot original{ CustomSkinPlayer_Hook, originalBytes };
+                const auto next = original.DirectTarget();
+                if (!next || !*next) return;
                 struct Code : Xbyak::CodeGenerator {
-                    Code(std::uintptr_t a_resume, std::uintptr_t a_executeVisitorOnWorn, std::uintptr_t a_shouldOverride, std::uintptr_t a_custom) {
-                        Xbyak::Label f_Custom;
-                        Xbyak::Label f_ExecuteVisitorOnWorn;
-                        Xbyak::Label f_ShouldOverride;
-                        Xbyak::Label j_Out;
-
-                        // Run the vanilla pass first (it fills the model with the worn
-                        // armour), then attach the outfit to the very same model.
-                        push(rcx);
-                        push(rdx);
-                        sub(rsp, 0x20);
-                        call(ptr[rip + f_ExecuteVisitorOnWorn]);
-                        add(rsp, 0x20);
-
-                        // Nothing to do for actors without an illusion; the vanilla pass
-                        // has already run and the hook leaves the model untouched.
-                        mov(rcx, rbx);
-                        sub(rsp, 0x20);
-                        call(ptr[rip + f_ShouldOverride]);
-                        add(rsp, 0x20);
-                        test(al, al);
-                        jz(j_Out);
-
-                        mov(rcx, rbx);
-                        mov(rdx, rdi);
-                        sub(rsp, 0x20);
+                    Code(std::uintptr_t resume, std::uintptr_t next, std::uintptr_t custom) {
+                        Xbyak::Label f_Next, f_Custom;
+                        // The displaced worn call has two arguments; shadow space is separate.
+                        sub(rsp, 0x60);
+                        mov(ptr[rsp + 0x20], rcx);
+                        mov(ptr[rsp + 0x28], rdx);
+                        if (REL::Module::IsAE()) mov(ptr[rsp + 0x30], r15);
+                        else mov(ptr[rsp + 0x30], rdi);
+                        call(ptr[rip + f_Next]);
+                        mov(ptr[rsp + 0x40], rax);
+                        movdqu(ptr[rsp + 0x50], xmm0);
+                        mov(rcx, ptr[rsp + 0x20]);
+                        mov(rdx, ptr[rsp + 0x30]);
                         call(ptr[rip + f_Custom]);
-                        add(rsp, 0x20);
-
-                        L(j_Out);
-                        pop(rdx);
-                        pop(rcx);
-                        jmp(ptr[rip]);
-                        dq(a_resume);
-
-                        L(f_Custom);
-                        dq(a_custom);
-
-                        L(f_ExecuteVisitorOnWorn);
-                        dq(a_executeVisitorOnWorn);
-
-                        L(f_ShouldOverride);
-                        dq(a_shouldOverride);
+                        mov(rax, ptr[rsp + 0x40]);
+                        movdqu(xmm0, ptr[rsp + 0x50]);
+                        mov(rcx, ptr[rsp + 0x20]);
+                        mov(rdx, ptr[rsp + 0x28]);
+                        add(rsp, 0x60);
+                        jmp(ptr[rip]); dq(resume);
+                        L(f_Next); dq(next);
+                        L(f_Custom); dq(custom);
                     }
                 };
-
-                Code gen{ CustomSkinPlayer_Hook + 0x5, InventoryChanges_ExecuteVisitorOnWorn.address(), std::uintptr_t(ShouldOverrideSkinning), std::uintptr_t(Custom) };
-                g_customSkinPlayerInstalled = Install("custom skin player", CustomSkinPlayer_Hook, gen);
+                Code gen{ *original.ResumeAddress(), *next, std::uintptr_t(Hooking::CustomSkinPlayer::CustomFromInventoryModel) };
+                CallSiteSnapshot::Bytes currentBytes{};
+                bytesRead = 0;
+                if (!::ReadProcessMemory(::GetCurrentProcess(), reinterpret_cast<const void*>(CustomSkinPlayer_Hook), currentBytes.data(), currentBytes.size(), &bytesRead) || bytesRead != currentBytes.size() || !original.MatchesOriginal(currentBytes)) {
+                    LOG(err, "CustomSkinPlayer: call site changed during preparation; refusing to overwrite it.");
+                    return;
+                }
+                LOG(info, "CustomSkinPlayer: preserving original call destination 0x{:X}; inventory owner supplies the actor.", *next);
+                g_customSkinPlayerInstalled = Install("custom skin player", CustomSkinPlayer_Hook, gen, &original);
                 // Tells the C++ side whether the display set is attached from inside the
                 // skinning routine or from the deferred pass it drives itself.
                 SetSiteHookInstalled(g_customSkinPlayerInstalled);

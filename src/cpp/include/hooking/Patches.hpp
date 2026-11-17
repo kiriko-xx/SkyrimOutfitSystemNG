@@ -33,6 +33,9 @@ namespace Hooking {
         // actor plus both of its weight models are resolved from it.
         void CustomFromInventory(RE::InventoryChanges* inventory);
 
+        // Uses the inventory owner and the model supplied by the engine call site.
+        void CustomFromInventoryModel(RE::InventoryChanges* inventory, RE::ActorWeightModel* actorWeightModel);
+
         // actorWeightModel may be null, in which case both of the actor's weight models
         // (third person, then first person) are attached.
         void Custom(RE::Actor* target, RE::ActorWeightModel* actorWeightModel);

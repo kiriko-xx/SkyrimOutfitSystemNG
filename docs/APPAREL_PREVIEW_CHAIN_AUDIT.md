@@ -18,4 +18,10 @@
 
 不修改ApparelPreview函数/内存、不以卸载它作为最终方案。不把FF25或模块名当ABI批准，不从第三方项目复制骨架。需要保留每个精确call-site的原直接目标，而不是越过跳板调用地址库函数。Dont predicate的r13、Custom的rbx/model和原call的栈/返回契约须与捕获目标分离核实；不能用同callee的+3A8替代。
 
-应取得用户实际ApparelPreview.dll及其日志用于版本、摘要、RVA2DB50反编译比对，并检查Custom/ Shim同批hook。当前没有该DLL，本地只有公开源码，不能声称其已与现场二进制匹配。未产出新的功能修复包；6937aec仍仅取证。
+用户已提供 D:/Skyrim-dev/兼容参考/Apparel Preview/SKSE/Plugins/ApparelPreview.dll，SHA256 d450712ff73ac26f52e75769d37c92934501eb5aae07ab724e346a5ee0b009ed，包meta标0.4.3。REA核RVA2DB50恢复RCX/RDX/R8/R9后尾跳保存目标，安装函数2E0C0捕获原E8；2DD60含worn TLS包装和预览注入。证据build/apparel-043-binary-evidence.json已导出并关闭。不要再要求同一文件；公开1.2.0与该二进制版本分开。
+
+## 未发布结构修正
+
+当前Custom relay以CallSiteSnapshot捕获原五字节/直接目的地，写入前再次安全读取比较，不绕到地址库末端。0x60帧分离shadow及保存槽，保存原返回RAX/XMM0，调用CustomFromInventoryModel(inventory,model)后恢复；角色取owner不再用rbx，model仍保留引擎SE rdi/AE r15的候选契约，未经实机验证。两参worn ABI假设不授权未知外部调用，第5栈参、非标准volatile或unwind仍是限制。
+
+生产快照头真实MSVC C++20 /W4 /WX /UNDEBUG测试通过（符号极值/溢出/字节变更/不追FF25），Custom静态保护、角色/形变只读/发色guard通过；Release BUILD_EXIT0。不是引擎ABI证明。Dont/Mask链及准入尚未修完，总门禁仍可能关闭幻化，无新功能修复包。禁止读取AP私有RVA字段来批准链。

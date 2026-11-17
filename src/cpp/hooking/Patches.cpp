@@ -467,6 +467,17 @@ namespace Hooking {
         // items, and everything else - actor, race, weight models - is resolved from the
         // inventory, so the trampoline never depends on which register the game kept the
         // actor in.
+        void CustomFromInventoryModel(RE::InventoryChanges* a_inventory, RE::ActorWeightModel* a_model) {
+            if (!a_inventory || !a_model || !IsReadableObject(a_inventory)) return;
+            RE::TESObjectREFR* owner = nullptr;
+            SIZE_T copied = 0;
+            if (!::ReadProcessMemory(::GetCurrentProcess(), &a_inventory->owner, &owner, sizeof(owner), &copied) || copied != sizeof(owner)) return;
+            if (!ShouldOverrideSkinning(owner)) return;
+            auto* actor = owner->As<RE::Actor>();
+            if (!actor) return;
+            CustomOne(actor, a_model);
+        }
+
         void CustomFromInventory(RE::InventoryChanges* a_inventory) {
             if (!a_inventory) return;
             auto* owner = a_inventory->owner;
