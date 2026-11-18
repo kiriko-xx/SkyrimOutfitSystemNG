@@ -1164,14 +1164,15 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		// remove. Adopt the result as the baseline and open the usual quiet
 		// window; a genuine change that arrives inside it is still replayed by
 		// the drift logic in PollOnMainThread().
-		void AbsorbOwnWrite(RE::Actor* a_actor)
+		void AbsorbOwnWrite(RE::Actor* a_actor, std::uint64_t a_providerBeforeReplay)
 		{
 			if (!a_actor) {
 				return;
 			}
 			const auto id = a_actor->GetFormID();
-			const auto providerSignature = ComputeProviderSignature(a_actor, nullptr);
-			const auto baseline = g_api ? providerSignature : ComputeSignature(a_actor);
+			// Replay does not write provider values. A newer value observed after
+			// replay may not have reached all clones and must stay visible to the poll.
+			const auto baseline = g_api ? a_providerBeforeReplay : ComputeSignature(a_actor);
 			const auto now = std::chrono::steady_clock::now();
 			std::lock_guard lock(g_mutex);
 			// A check scheduled by the earlier provider pass would compare against
@@ -1181,7 +1182,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			auto& state = it->second;
 			state.value = baseline;
 			state.fired = baseline;
-			state.actedProvider = providerSignature;
+			state.actedProvider = a_providerBeforeReplay;
 			state.valueSince = now;
 			state.quietUntil = now + kSelfNoiseGrace;
 			state.quietFrom = now;
@@ -1249,6 +1250,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			std::size_t slots{ 0 };
 			std::size_t targets{ 0 };
 			std::size_t nodes{ 0 };
+			const auto providerBeforeReplay = g_api ? ComputeProviderSignature(a_actor) : 0;
 			std::unordered_set<RE::NiAVObject*> replayed;
 			for (const bool firstPerson : { false, true }) {
 				auto* biped = a_actor->GetBiped(firstPerson).get();
@@ -1314,7 +1316,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				morphPush::g_armed[id] = targets > 0;
 			}
 			if (nodes > 0) {
-				AbsorbOwnWrite(a_actor);
+				AbsorbOwnWrite(a_actor, providerBeforeReplay);
 			}
 			return (nodes > 0 || targets > 0) ? BakeResult::kBaked : BakeResult::kSkipped;
 		}
