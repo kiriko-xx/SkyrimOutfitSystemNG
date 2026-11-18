@@ -361,6 +361,53 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 		} g_pollTrace;
 
+		// Probe only. The SKSE UI consumer holds its queue lock while running delegates.
+		struct UIQueueProbe
+		{
+			std::atomic<DWORD> gameThread{};
+			std::atomic<bool> pending{};
+			std::atomic<std::int64_t> nextPost{}, nextReport{};
+			std::atomic<std::uint64_t> posted{}, returned{}, matched{};
+			std::atomic<DWORD> lastThread{};
+
+			void Tick(const SKSE::TaskInterface& a_tasks)
+			{
+				const auto expected = gameThread.load(std::memory_order_relaxed);
+				if (!expected || !spdlog::default_logger_raw()->should_log(spdlog::level::trace)) {
+					return;
+				}
+				const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count();
+				auto report = nextReport.load(std::memory_order_relaxed);
+				if (now >= report && nextReport.compare_exchange_strong(report, now + 1000, std::memory_order_relaxed)) {
+					SKSE::log::debug("MorphRefresh UI probe (session totals): posted={} returned={} game-thread={} last-thread={} expected={}",
+						posted.load(), returned.load(), matched.load(), lastThread.load(), expected);
+				}
+				if (pending.load(std::memory_order_relaxed)) {
+					return;
+				}
+				auto due = nextPost.load(std::memory_order_relaxed);
+				if (now < due || !nextPost.compare_exchange_strong(due, now + 100, std::memory_order_relaxed) ||
+					pending.exchange(true)) {
+					return;
+				}
+				try {
+					a_tasks.AddUITask([this, expected]() noexcept {
+						const auto current = GetCurrentThreadId();
+						lastThread.store(current, std::memory_order_relaxed);
+						if (current == expected) {
+							matched.fetch_add(1, std::memory_order_relaxed);
+						}
+						returned.fetch_add(1, std::memory_order_relaxed);
+						pending.store(false);
+					});
+					posted.fetch_add(1, std::memory_order_relaxed);
+				} catch (...) {
+					pending.store(false);
+				}
+			}
+		} g_uiQueueProbe;
+
 
 		// One queued provider retry at a time. The handshake dispatches SKSE
 		// messages, so it may only run from a main-thread task - never from an
@@ -2073,6 +2120,7 @@ void RetryProviders()
 		if (!tasks) {
 			return;
 		}
+		g_uiQueueProbe.Tick(*tasks);
 		{
 			std::lock_guard lock(g_mutex);
 			if (g_pollPending || std::chrono::steady_clock::now() - g_lastPoll < kPollInterval) {
@@ -2102,6 +2150,7 @@ void RetryProviders()
 				if (!player || !player->Is3DLoaded()) {
 					return;
 				}
+				g_uiQueueProbe.gameThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
 				g_pollTrace.accepted.fetch_add(1, std::memory_order_relaxed);
 				bool retryProviders = false;
 				{
