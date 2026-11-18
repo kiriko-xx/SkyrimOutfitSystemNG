@@ -340,6 +340,28 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		std::chrono::steady_clock::time_point g_lastProviderRetry{};
 		int g_providerRetries{ 0 };
 
+		struct PollTrace
+		{
+			std::atomic<std::uint64_t> posted{}, rejected{}, accepted{}, completed{}, samples{}, changes{}, replays{}, nodes{};
+			std::atomic<std::int64_t> nextReport{};
+
+			void Report()
+			{
+				if (!spdlog::default_logger_raw()->should_log(spdlog::level::trace)) {
+					return;
+				}
+				const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count();
+				auto next = nextReport.load(std::memory_order_relaxed);
+				if (now < next || !nextReport.compare_exchange_strong(next, now + 1000, std::memory_order_relaxed)) {
+					return;
+				}
+				SKSE::log::debug("MorphRefresh pipeline (session totals): posted={} wrong-thread={} ready={} poll-done={} player-samples={} player-changes={} player-replays={} node-calls={}",
+					posted.load(), rejected.load(), accepted.load(), completed.load(), samples.load(), changes.load(), replays.load(), nodes.load());
+			}
+		} g_pollTrace;
+
+
 		// One queued provider retry at a time. The handshake dispatches SKSE
 		// messages, so it may only run from a main-thread task - never from an
 		// SKSE message handler and never from a skinning hook.
@@ -1317,6 +1339,10 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			if (nodes > 0) {
 				AbsorbOwnWrite(a_actor, providerBeforeReplay);
+				if (id == 0x14) {
+					g_pollTrace.replays.fetch_add(1, std::memory_order_relaxed);
+					g_pollTrace.nodes.fetch_add(nodes, std::memory_order_relaxed);
+				}
 			}
 			return (nodes > 0 || targets > 0) ? BakeResult::kBaked : BakeResult::kSkipped;
 		}
@@ -1592,6 +1618,9 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					continue;
 				}
 
+				if (id == 0x14) {
+					g_pollTrace.samples.fetch_add(1, std::memory_order_relaxed);
+				}
 				bool anyProvider = false;
 				const auto providerSignature = ComputeProviderSignature(actor, &anyProvider);
 				const auto signature = g_api ? providerSignature : ComputeSignature(actor);
@@ -1684,6 +1713,9 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				EnsureProvidersForUse();
 				if (g_api) {
 					SKSE::log::debug("MorphRefresh: queueing explicit clone replay for {:08X} from the generic observer for this game-thread poll (no menu gate).", id);
+					if (id == 0x14) {
+						g_pollTrace.changes.fetch_add(1, std::memory_order_relaxed);
+					}
 					EnqueueBake(id, BakeReason::kProvider);
 					continue;
 				}
@@ -2058,13 +2090,19 @@ void RetryProviders()
 						g_pollPending = false;
 					}
 				} releasePoll;
-				if (GameState::IsLoading() || !IsGameThread()) {
+				if (GameState::IsLoading()) {
+					return;
+				}
+				if (!IsGameThread()) {
+					g_pollTrace.rejected.fetch_add(1, std::memory_order_relaxed);
+					g_pollTrace.Report();
 					return;
 				}
 				auto* player = RE::PlayerCharacter::GetSingleton();
 				if (!player || !player->Is3DLoaded()) {
 					return;
 				}
+				g_pollTrace.accepted.fetch_add(1, std::memory_order_relaxed);
 				bool retryProviders = false;
 				{
 					std::lock_guard lock(g_mutex);
@@ -2089,7 +2127,11 @@ void RetryProviders()
 				PollOnMainThread();
 				// Consume observer requests on this accepted task, not a second pool task.
 				DrainPending();
+				g_pollTrace.completed.fetch_add(1, std::memory_order_relaxed);
+				g_pollTrace.Report();
 			});
+			g_pollTrace.posted.fetch_add(1, std::memory_order_relaxed);
+			g_pollTrace.Report();
 		} catch (...) {
 			std::lock_guard lock(g_mutex);
 			g_pollPending = false;

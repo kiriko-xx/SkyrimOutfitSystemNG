@@ -14,7 +14,9 @@ $poll=$tick.IndexOf('PollOnMainThread();')
 $drain=$tick.IndexOf('DrainPending();')
 if($poll -lt 0 -or $drain -le $poll -or $replay.Contains('AddTask') -or $replay.Contains('RequestBake(')){throw 'Observer must enqueue, then drain in the same accepted poll'}
 $cpp=@'
+#include <atomic>
 #include <cassert>
+struct { std::atomic<unsigned> changes{}; } g_pollTrace;
 #include <cstdint>
 struct State { std::uint64_t actedProvider=1; };
 void* g_api=nullptr;
@@ -41,6 +43,7 @@ int main(){
  assert(requests==100); // Continuous ramps need no signature settle or quiet expiry.
  assert(changedValue(state,1)); replay(); assert(requests==101); // Return to original.
  g_api=nullptr; replay(); assert(requests==101);
+ assert(g_pollTrace.changes.load()==101);
 }
 '@
 $w=Join-Path $PSScriptRoot '../build/morph-generic-regression'
