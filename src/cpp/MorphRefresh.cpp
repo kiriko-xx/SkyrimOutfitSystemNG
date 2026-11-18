@@ -1169,23 +1169,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				if (!text || !text->value || !*text->value) { continue; }
 				const auto path = MeshRelativePath(text->value);
 				if (path.empty() || !TriFileExists(path)) { continue; }
-				if (path != text->value) {
-					auto* value = RE::malloc<char>(path.size() + 1);
-					if (!value) { continue; }
-					std::memcpy(value, path.c_str(), path.size() + 1);
-					RE::NiPointer<RE::NiStringExtraData> replacement{ RE::NiExtraData::Create<RE::NiStringExtraData>() };
-					if (!replacement) { RE::free(value); continue; }
-					replacement->SetName("BODYTRI");
-					replacement->value = value;
-					// Extra data may be shared with another clone; replace this node
-					// rather than freeing or rewriting the shared string.
-					RE::NiPointer<RE::NiExtraData> original{ extra };
-					a_node->RemoveExtraData("BODYTRI");
-					if (!a_node->AddExtraData(replacement.get())) {
-						a_node->AddExtraData(original.get());
-						continue;
-					}
-				}
+				// Normalize only for the resource lookup. Do not replace live metadata
+				// that RaceMenu or another scene consumer may still be reading.
 				return true;
 			}
 			const auto* node = a_node->AsNode();
