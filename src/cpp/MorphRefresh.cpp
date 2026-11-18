@@ -345,11 +345,20 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		// wherever it happens to run: one bake at a time, or two passes would
 		// rewrite the same clone nodes at once.
 		std::mutex g_drainMutex;
+		// 1.5.38: where a cached clone sat, so a replay can ask the engine first
+		// whether that slot still holds this very node instead of writing into a
+		// subtree the engine has already replaced.
+		struct CachedClone
+		{
+			RE::NiPointer<RE::NiAVObject> node;
+			std::uint32_t slot{ 0 };
+			bool firstPerson{ false };
+		};
 		// 1.5.37: the clone nodes the last full bake resolved, held by reference so
 		// any thread can re-morph them without walking the biped (see
 		// ReplayCachedMorphs). Replaced wholesale by every bake, cleared on reset.
 		std::mutex g_cacheMutex;
-		std::unordered_map<RE::FormID, std::vector<RE::NiPointer<RE::NiAVObject>>> g_cloneNodes;
+		std::unordered_map<RE::FormID, std::vector<CachedClone>> g_cloneNodes;
 		skee::IBodyMorphInterface* g_api{ nullptr };
 		// Version the BodyMorph interface reported; gates the v5 callback.
 		std::uint32_t g_apiVersion{ 0 };
@@ -1040,6 +1049,41 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			// (remove + reapply, the one thing that shows the real gear for a frame)
 			// has nothing left to fix.
 			std::unordered_map<RE::FormID, bool> g_armed;
+			// 1.5.38: a window in which cached clones may not be replayed. A body
+			// morph provider runs ApplyBodyMorphs over the very clones a replay
+			// would walk; when the two coincided the game died (crash
+			// 2026-11-18 16:28: the poll thread was inside skee's morph visitor on
+			// one of our clone nodes while OBody was switching presets every
+			// second). Inside the window the provider's own pass has already
+			// morphed the clones, so nothing is missed.
+			std::atomic<std::int64_t> g_replayHoldUntil{ 0 };
+			constexpr std::int64_t kReplayHoldAfterMorphPassMs = 350;
+			std::atomic<std::int64_t> g_lastStaleLog{ 0 };
+			// Floor between two cache replays, for the same reason the bake has one:
+			// every extra pass through skee is another window in which the engine
+			// may be rebuilding the very subtree being walked.
+			constexpr auto kMinReplayGap = std::chrono::milliseconds(20);
+			std::chrono::steady_clock::time_point g_lastReplay{};
+
+			std::int64_t SteadyMs()
+			{
+				return std::chrono::duration_cast<std::chrono::milliseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count();
+			}
+
+			void HoldReplays(std::int64_t a_ms)
+			{
+				const auto until = SteadyMs() + a_ms;
+				auto current = g_replayHoldUntil.load(std::memory_order_relaxed);
+				while (current < until &&
+					!g_replayHoldUntil.compare_exchange_weak(current, until, std::memory_order_relaxed)) {
+				}
+			}
+
+			bool ReplaysHeld()
+			{
+				return SteadyMs() < g_replayHoldUntil.load(std::memory_order_relaxed);
+			}
 		}
 
 		enum class BakeResult
@@ -1236,6 +1280,15 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			if (!a_node || a_path.empty() || NodeHasBodyTri(a_node)) {
 				return false;
 			}
+			// 1.5.38: never take a BODYTRI away. A clone may already carry one that
+			// RaceMenu, OBody or the engine attached, and that string is live state a
+			// scene consumer can be reading right now. Removing and re-adding it under
+			// them is what crashed the game on repeated OBody preset switches; the
+			// same fix was made in 7f5a2ce and lost again when 1.5.33 restored src
+			// from the 1.5.29 tag. Only ever add a target to a node that has none.
+			if (a_node->GetExtraData("BODYTRI")) {
+				return false;
+			}
 			RE::NiPointer<RE::NiStringExtraData> extra{ RE::NiExtraData::Create<RE::NiStringExtraData>() };
 			if (!extra) {
 				return false;
@@ -1247,11 +1300,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			std::memcpy(value, a_path.c_str(), a_path.size() + 1);
 			extra->value = value;
-			RE::NiPointer<RE::NiExtraData> original{ a_node->GetExtraData("BODYTRI") };
-			if (original) { a_node->RemoveExtraData("BODYTRI"); }
-			if (a_node->AddExtraData(extra.get())) { return true; }
-			if (original) { a_node->AddExtraData(original.get()); }
-			return false;
+			return a_node->AddExtraData(extra.get());
 		}
 
 		// The poll below watches the same vertex buffers this pass just rewrote.
@@ -1348,7 +1397,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			std::size_t nodes{ 0 };
 			const auto providerBeforeReplay = g_api ? ComputeProviderSignature(a_actor) : 0;
 			std::unordered_set<RE::NiAVObject*> replayed;
-			std::vector<RE::NiPointer<RE::NiAVObject>> holders;
+			std::vector<CachedClone> holders;
 			for (const bool firstPerson : { false, true }) {
 				auto* biped = a_actor->GetBiped(firstPerson).get();
 				if (!biped) {
@@ -1365,7 +1414,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					if (!node) {
 						continue;
 					}
-					holders.push_back(holder);
+					holders.push_back(CachedClone{ holder, i, firstPerson });
 					++slots;
 					if (const auto it = bySlot.find(i); it != bySlot.end()) {
 						// 1.5.27: the addon the engine attached this slot with is the
@@ -1507,50 +1556,83 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				DrainPending();
 			});
 		}
-
-		// 1.5.37: re-morph the clones the last full bake found. Everything read here
-		// comes from a list of reference-held nodes, so it is safe on any thread: no
-		// biped slot is dereferenced and no extra data is written. A clone the engine
-		// has replaced in the meantime is simply detached - the write goes nowhere and
-		// the next full bake refreshes the list. This is what lets a slider drag
-		// follow: the timer keeps polling off the game thread, and a bake that is only
-		// queued waits for a pass the engine does not run while the slider is held.
-		std::size_t ReplayCachedMorphs(RE::Actor* a_actor)
-		{
-			if (!a_actor || !g_api) {
-				return 0;
-			}
-			const auto id = a_actor->GetFormID();
-			std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
-			{
-				std::lock_guard cacheLock(g_cacheMutex);
-				if (const auto it = g_cloneNodes.find(id); it != g_cloneNodes.end()) {
-					nodes = it->second;
-				}
-			}
-			if (nodes.empty()) {
-				return 0;
-			}
-			// Same lock as a full bake: the two must not rewrite one clone at once.
-			std::lock_guard drainLock(g_drainMutex);
-			std::size_t done{ 0 };
-			for (auto& holder : nodes) {
-				auto* node = holder.get();
-				if (!node || !NodeHasBodyTri(node)) {
-					// Attaching the target needs the addon path and writes extra data;
-					// that stays the full bake's job, on a thread the engine expects.
-					continue;
-				}
-				morphPush::g_selfWrite.store(true, std::memory_order_release);
-				g_api->ApplyVertexDiff(a_actor, node, false);
-				morphPush::g_selfWrite.store(false, std::memory_order_release);
-				++done;
-			}
-			if (done > 0 && id == 0x14) {
-				g_pollTrace.cacheReplays.fetch_add(1, std::memory_order_relaxed);
-				g_pollTrace.nodes.fetch_add(done, std::memory_order_relaxed);
-			}
-			return done;
+
+		// 1.5.37: re-morph the clones the last full bake found. Everything read here
+		// comes from a list of reference-held nodes, so it is safe on any thread: no
+		// biped slot is dereferenced and no extra data is written. A clone the engine
+		// has replaced in the meantime is simply detached - the write goes nowhere and
+		// the next full bake refreshes the list. This is what lets a slider drag
+		// follow: the timer keeps polling off the game thread, and a bake that is only
+		// queued waits for a pass the engine does not run while the slider is held.
+		// 1.5.38: two guards before the interface is touched.
+		//   a) No 3D, no replay: while a model is rebuilt every slot is detached,
+		//      and the geometry behind a cached node is going away.
+		//   b) No replay inside the hold window: a body morph provider runs its
+		//      own ApplyBodyMorphs over these very clones, and the two passes
+		//      overlapped in skee's morph visitor on the crash of 2026-11-18
+		//      16:28. Inside the window that pass has already morphed them.
+		std::size_t ReplayCachedMorphs(RE::Actor* a_actor)
+		{
+			if (!a_actor || !g_api || !a_actor->Is3DLoaded()) {
+				return 0;
+			}
+			if (morphPush::ReplaysHeld()) {
+				return 0;
+			}
+			const auto id = a_actor->GetFormID();
+			std::vector<CachedClone> clones;
+			{
+				std::lock_guard cacheLock(g_cacheMutex);
+				if (const auto it = g_cloneNodes.find(id); it != g_cloneNodes.end()) {
+					clones = it->second;
+				}
+			}
+			if (clones.empty()) {
+				return 0;
+			}
+			// Same lock as a full bake: the two must not rewrite one clone at once.
+			std::lock_guard drainLock(g_drainMutex);
+			const auto replayAt = std::chrono::steady_clock::now();
+			if (replayAt - morphPush::g_lastReplay < morphPush::kMinReplayGap) {
+				return 0;
+			}
+			morphPush::g_lastReplay = replayAt;
+			std::size_t done{ 0 };
+			std::size_t stale{ 0 };
+			for (const auto& cached : clones) {
+				auto* node = cached.node.get();
+				if (!node || !NodeHasBodyTri(node)) {
+					// Attaching the target needs the addon path and writes extra data;
+					// that stays the full bake's job, on a thread the engine expects.
+					continue;
+				}
+				// 1.5.38: only write into a clone the engine still draws in that
+				// slot. A held node the engine has replaced is a detached subtree;
+				// handing it to skee makes skee walk objects nobody owns any more,
+				// which is exactly what an OBody preset switch leaves behind.
+				auto* biped = a_actor->GetBiped(cached.firstPerson).get();
+				if (!biped || biped->objects[cached.slot].partClone.get() != node) {
+					++stale;
+					continue;
+				}
+				morphPush::g_selfWrite.store(true, std::memory_order_release);
+				g_api->ApplyVertexDiff(a_actor, node, false);
+				morphPush::g_selfWrite.store(false, std::memory_order_release);
+				++done;
+			}
+			if (stale > 0) {
+				const auto stamp = morphPush::SteadyMs();
+				if (stamp - morphPush::g_lastStaleLog.load(std::memory_order_relaxed) >= 1000 &&
+					morphPush::g_lastStaleLog.exchange(stamp, std::memory_order_relaxed) != stamp) {
+					SKSE::log::debug("MorphRefresh: skipped {} cached clone(s) of {:08X} the engine no longer draws; the next bake refreshes the list.",
+						stale, id);
+				}
+			}
+			if (done > 0 && id == 0x14) {
+				g_pollTrace.cacheReplays.fetch_add(1, std::memory_order_relaxed);
+				g_pollTrace.nodes.fetch_add(done, std::memory_order_relaxed);
+			}
+			return done;
 		}
 
 		// skee v5, called once per morphed shape, on the thread RaceMenu morphs from.
@@ -1611,6 +1693,10 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				if (a_event && a_event->sender && a_event->eventName.c_str() &&
 					std::strcmp(a_event->eventName.c_str(), "Obody_ApplyMorph") == 0) {
 					if (auto* actor = a_event->sender->As<RE::Actor>()) {
+						// 1.5.38: OBody just ran ApplyBodyMorphs over this actor, clones
+						// included. Keep our own replay off those clones for a moment so
+						// the two never walk one subtree at the same time.
+						morphPush::HoldReplays(morphPush::kReplayHoldAfterMorphPassMs);
 						RequestBake(actor->GetFormID(), BakeReason::kProvider);
 					}
 				}
@@ -1914,21 +2000,21 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 						g_pollTrace.changes.fetch_add(1, std::memory_order_relaxed);
 					}
 					EnqueueBake(id, BakeReason::kProvider);
-					// 1.5.37: do not wait for a pass. The queued bake needs a thread
-					// that services the SKSE task queue or the engine worn pass, and on
-					// the reporting machine neither happened while a morph slider was
-					// held (1.5.36: 49 detected changes, 3 bakes). The clones the last
-					// full bake found are held by reference here, so they can be
-					// re-morphed on this thread right now.
-					const auto replayedHere = ReplayCachedMorphs(actor);
-					if (replayedHere > 0) {
-						const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-							std::chrono::steady_clock::now().time_since_epoch()).count();
-						if (stamp - morphPush::g_lastCachedLog.load(std::memory_order_relaxed) >= 1000 &&
-							morphPush::g_lastCachedLog.exchange(stamp, std::memory_order_relaxed) != stamp) {
-							SKSE::log::debug("MorphRefresh: re-morphed {:08X} on {} cached clone node(s) on thread {}; no pass was needed.",
-								id, replayedHere, GetCurrentThreadId());
-						}
+					// 1.5.37: do not wait for a pass. The queued bake needs a thread
+					// that services the SKSE task queue or the engine worn pass, and on
+					// the reporting machine neither happened while a morph slider was
+					// held (1.5.36: 49 detected changes, 3 bakes). The clones the last
+					// full bake found are held by reference here, so they can be
+					// re-morphed on this thread right now.
+					const auto replayedHere = ReplayCachedMorphs(actor);
+					if (replayedHere > 0) {
+						const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+							std::chrono::steady_clock::now().time_since_epoch()).count();
+						if (stamp - morphPush::g_lastCachedLog.load(std::memory_order_relaxed) >= 1000 &&
+							morphPush::g_lastCachedLog.exchange(stamp, std::memory_order_relaxed) != stamp) {
+							SKSE::log::debug("MorphRefresh: re-morphed {:08X} on {} cached clone node(s) on thread {}; no pass was needed.",
+								id, replayedHere, GetCurrentThreadId());
+						}
 					}
 					continue;
 				}
@@ -2269,10 +2355,13 @@ void RetryProviders()
 		morphPush::g_evidenceActor = 0;
 		morphPush::g_targetLogged.clear();
 		morphPush::g_armed.clear();
+		morphPush::g_replayHoldUntil.store(0, std::memory_order_relaxed);
+		morphPush::g_lastStaleLog.store(0, std::memory_order_relaxed);
+		morphPush::g_lastReplay = {};
 		g_triProbeLogged.clear();
-		{
-			std::lock_guard cacheLock(g_cacheMutex);
-			g_cloneNodes.clear();
+		{
+			std::lock_guard cacheLock(g_cacheMutex);
+			g_cloneNodes.clear();
 		}
 		g_triPathCache.clear();
 		g_raceMenuSliderPending.store(false, std::memory_order_release);

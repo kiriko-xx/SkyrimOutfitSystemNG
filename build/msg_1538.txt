@@ -1,0 +1,18 @@
+1.5.38 test build: never rewrite a live BODYTRI and never morph a detached clone
+
+Reinstates 7f5a2ce (preserve existing BODYTRI metadata), which was lost when
+1.5.33 restored src from the v1.5.29 tag, and adds three guards around the cached
+replay that crashed the game on the 16th OBody preset switch:
+
+- AttachBodyTri only ever adds a target to a node that has none; it no longer
+  removes and re-adds a BODYTRI that RaceMenu, OBody or the engine may be reading.
+- ReplayCachedMorphs skips a cached node that is no longer the partClone the
+  engine draws in that slot (a detached subtree left by an outfit switch).
+- Obody_ApplyMorph opens a 350 ms hold window in which our replay stays off the
+  clones OBody is morphing in its own pass, and two replays are 20 ms apart.
+- The cache entry carries slot and eye, so the replay can check the above.
+
+Crash evidence: thread 34860 (not the main thread) in PollOnMainThread ->
+ReplayCachedMorphs -> skee ApplyVertexDiff -> MorphCache::ApplyMorphs ->
+VisitObjects, on our own clone subtree; OBody applied 3BA-MY-1 about 100 ms
+before. Test build only, candidate branch, no tag.
