@@ -30,6 +30,7 @@ $cpp = @'
 #include <thread>
 #include <utility>
 #include <vector>
+namespace GameState { bool loading=false; bool IsLoading(){ return loading; } }
 thread_local unsigned mockThreadID = 1;
 unsigned GetCurrentThreadId() { return mockThreadID; }
 namespace RE {
@@ -47,8 +48,9 @@ namespace SKSE {
 struct EventName { const char* value; const char* c_str() const { return value; } };
 struct ModCallbackEvent { EventName eventName; };
 struct TaskInterface {
-    std::deque<std::function<void()>> pending;
-    void AddTask(std::function<void()> task) { pending.push_back(std::move(task)); }
+    mutable std::deque<std::function<void()>> pending;
+    bool reject=false;
+    void AddTask(std::function<void()> task) const { if(reject) throw 1; pending.push_back(std::move(task)); }
     void Drain() {
         while (!pending.empty()) {
             auto task = std::move(pending.front()); pending.pop_front(); task();
@@ -203,6 +205,13 @@ int main() {
     Tick(); assert(tasks.pending.empty());
     Emit(sink, "ostim_start"); mockThreadID = 2; tasks.Drain();
     Reset(); mockThreadID = 1; Tick(); assert(tasks.pending.empty());
+
+    // 10. Independent wakeup retries a failed submission without input.
+    tasks.reject = true; Emit(sink, "ostim_start");
+    assert(!g_drainScheduled && g_pendingEvents.size() == 1);
+    GameState::loading = true; Tick(); Emit(sink, "ostim_end");
+    assert(tasks.pending.empty() && g_pendingEvents.size() == 1);
+    GameState::loading = false; tasks.reject = false; Tick(); tasks.Drain(); Expect({"start:OStim"});
 }
 '@
 Set-Content -LiteralPath (Join-Path $work 'test_scene_queue.cpp') -Value $cpp -Encoding utf8
@@ -212,4 +221,4 @@ try {
     cmd /c $cmd
     if ($LASTEXITCODE -ne 0) { throw 'Scene outfit queue regression failed' }
 } finally { Pop-Location }
-Write-Output 'SCENE_OUTFIT_QUEUE_REGRESSION_OK: 9 groups; production dispatch/queue/sink/Tick/Reset extracted verbatim; owned FIFO with mocked task execution only; not an engine test or proof of main-thread execution.'
+Write-Output 'SCENE_OUTFIT_QUEUE_REGRESSION_OK: 10 groups; production dispatch/queue/sink/Tick/Reset extracted verbatim; owned FIFO with mocked task execution only; not an engine test or proof of main-thread execution.'

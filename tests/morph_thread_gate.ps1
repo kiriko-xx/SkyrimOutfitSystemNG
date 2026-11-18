@@ -4,9 +4,9 @@ $a = $s.IndexOf('bool IsGameThread()')
 $b = $s.IndexOf('// Minimal ABI', $a)
 if ($a -lt 0 -or $b -le $a) { throw 'Missing production thread predicate' }
 $f = $s.Substring($a, $b-$a)
-foreach ($marker in @('morphPush::g_taskQueued.store(false);', 'tasks->AddTask([retryProviders]()')) {
+foreach ($marker in @('morphPush::g_taskQueued.store(false);', 'struct ReleasePoll')) {
  $i=$s.IndexOf($marker); if($i -lt 0){throw 'Missing task entry'}
- if(-not $s.Substring($i,[Math]::Min(300,$s.Length-$i)).Contains('if (!IsGameThread())')) {throw 'Task entry lacks thread rejection'}
+ if(-not $s.Substring($i,[Math]::Min(450,$s.Length-$i)).Contains('!IsGameThread()')) {throw 'Task entry lacks thread rejection'}
 }
 $work=Join-Path $PSScriptRoot '../build/morph-thread-regression'
 New-Item -ItemType Directory -Force $work | Out-Null

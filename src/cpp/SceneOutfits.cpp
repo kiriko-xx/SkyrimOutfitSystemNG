@@ -1,4 +1,5 @@
 #include "SceneOutfits.h"
+#include "GameState.h"
 
 #include "OutfitSystem.h"
 #include "core/OutfitService.h"
@@ -185,15 +186,27 @@ namespace SOS::SceneOutfits
 						return;
 					}
 					auto* main = RE::Main::GetSingleton();
-					if (!main || main->threadID == 0 || main->threadID != GetCurrentThreadId()) {
+					if (GameState::IsLoading() || !main || main->threadID == 0 || main->threadID != GetCurrentThreadId()) {
 						g_drainScheduled = false;
-						return;  // Keep FIFO for the next input heartbeat; never spin-resubmit.
+						return;  // Keep FIFO for the next wakeup; never spin-resubmit.
 					}
 					event = g_pendingEvents.front();
 					g_pendingEvents.pop_front();
 				}
 				// Release queue lock before game calls: a callback may enqueue again.
 				DispatchSceneEvent(event);
+			}
+		}
+
+		void ScheduleDrain(SKSE::TaskInterface const* a_tasks, std::uint64_t a_generation)
+		{
+			try {
+				a_tasks->AddTask([a_generation]() { DrainSceneEvents(a_generation); });
+			} catch (...) {
+				std::lock_guard lock(g_queueMutex);
+				if (a_generation == g_generation.load(std::memory_order_acquire)) {
+					g_drainScheduled = false;
+				}
 			}
 		}
 
@@ -207,7 +220,7 @@ namespace SOS::SceneOutfits
 			}
 			{
 				std::lock_guard queueLock(g_queueMutex);
-				if (generation != g_generation.load(std::memory_order_acquire)) {
+				if (GameState::IsLoading() || generation != g_generation.load(std::memory_order_acquire)) {
 					return;
 				}
 				// FIFO is our queue-lock acquisition order, not SKSE Run order.
@@ -219,7 +232,7 @@ namespace SOS::SceneOutfits
 				g_drainScheduled = true;
 			}
 			// Capture only the owned token, never callback strings/events/actors.
-			tasks->AddTask([generation]() { DrainSceneEvents(generation); });
+			ScheduleDrain(tasks, generation);
 		}
 
 		class ModEventSink final : public RE::BSTEventSink<SKSE::ModCallbackEvent>
@@ -256,13 +269,13 @@ namespace SOS::SceneOutfits
 		const auto generation = g_generation.load(std::memory_order_acquire);
 		{
 			std::lock_guard queueLock(g_queueMutex);
-			if (generation != g_generation.load(std::memory_order_acquire) ||
+			if (GameState::IsLoading() || generation != g_generation.load(std::memory_order_acquire) ||
 				g_pendingEvents.empty() || g_drainScheduled) {
 				return;
 			}
 			g_drainScheduled = true;
 		}
-		tasks->AddTask([generation]() { DrainSceneEvents(generation); });
+		ScheduleDrain(tasks, generation);
 	}
 
 	bool Install()

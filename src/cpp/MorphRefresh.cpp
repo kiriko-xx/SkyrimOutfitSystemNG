@@ -1,4 +1,5 @@
 #include "MorphRefresh.h"
+#include "GameState.h"
 #include "HairTintDiagnostics.h"
 #include "HairTintRecovery.h"
 
@@ -1368,7 +1369,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 			tasks->AddTask([]() {
 				morphPush::g_taskQueued.store(false);
-				if (!IsGameThread()) {
+				if (!IsGameThread() || GameState::IsLoading()) {
 					return;  // Keep pending actors for the next heartbeat; never spin the task pool.
 				}
 				DrainPending();
@@ -1533,11 +1534,6 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 
 		void PollOnMainThread()
 		{
-			{
-				std::lock_guard lock(g_mutex);
-				g_pollPending = false;
-			}
-
 			const auto now = std::chrono::steady_clock::now();
 
 			// Only a split cycle (ReillusionGapMs > 0) has a second half left here.
@@ -2025,7 +2021,6 @@ void RetryProviders()
 		morphPush::g_armed.clear();
 		g_triProbeLogged.clear();
 		g_triPathCache.clear();
-		g_pollPending = false;
 		g_raceMenuSliderPending.store(false, std::memory_order_release);
 		g_lastPoll = {};
 		g_lastProviderRetry = {};
@@ -2034,61 +2029,65 @@ void RetryProviders()
 
 	void Tick()
 	{
-		const auto now = std::chrono::steady_clock::now();
-		bool retryProviders = false;
-		{
-			// Tick runs on the input thread while Reset can run on the main
-			// thread during a load; keep the throttle and the pending flag
-			// under the same lock.
-			std::lock_guard lock(g_mutex);
-			const bool incomplete = g_api == nullptr || g_obody == nullptr || g_slif == nullptr;
-			// Retry for late provider availability; a missing sender subscription
-			// cannot be repaired by repeating the exchange.
-			const auto interval = g_providerRetries < 8 ? kProviderRetryInterval : kProviderRetrySlowInterval;
-			if (incomplete && now - g_lastProviderRetry >= interval) {
-				g_lastProviderRetry = now;
-				if (g_providerRetries < 1000) {
-					++g_providerRetries;
-				}
-				retryProviders = true;
-			}
-			// The geometry probe needs no provider at all, so the poll always
-			// runs; this flag only keeps the input thread from queueing work.
-			if (g_pollPending || now - g_lastPoll < kPollInterval) {
-				if (!retryProviders) {
-					return;
-				}
-			} else {
-				g_pollPending = true;
-				g_lastPoll = now;
-			}
-		}
-
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks) {
-			std::lock_guard lock(g_mutex);
-			g_pollPending = false;
+		if (GameState::IsLoading()) {
 			return;
 		}
-		tasks->AddTask([retryProviders]() {
-			if (!IsGameThread()) {
-				std::lock_guard lock(g_mutex);
-				g_pollPending = false;
+		auto* tasks = SKSE::GetTaskInterface();
+		if (!tasks) {
+			return;
+		}
+		{
+			std::lock_guard lock(g_mutex);
+			if (g_pollPending || std::chrono::steady_clock::now() - g_lastPoll < kPollInterval) {
 				return;
 			}
-			auto* player = RE::PlayerCharacter::GetSingleton();
-			const auto coveredMask = player ? CoveredSlotMask(player->GetFormID()) : 0;
-			HairTintDiagnostics::SampleOnMainThread(coveredMask);
-			HairTintRecovery::Drain(player, coveredMask);
-			if (retryProviders) {
-				RetryProviders();
-			}
-			// Safety net for a re-morph that got rate limited or whose task was
-			// dropped: the poll picks the actor up again.
-			DrainRaceMenuSlider();
-			DrainPending();
-			PollOnMainThread();
-		});
+			g_pollPending = true;
+		}
+		try {
+			tasks->AddTask([]() {
+				struct ReleasePoll
+				{
+					~ReleasePoll()
+					{
+						std::lock_guard lock(g_mutex);
+						g_pollPending = false;
+					}
+				} releasePoll;
+				if (GameState::IsLoading() || !IsGameThread()) {
+					return;
+				}
+				auto* player = RE::PlayerCharacter::GetSingleton();
+				if (!player || !player->Is3DLoaded()) {
+					return;
+				}
+				bool retryProviders = false;
+				{
+					std::lock_guard lock(g_mutex);
+					const auto now = std::chrono::steady_clock::now();
+					g_lastPoll = now;
+					const auto interval = g_providerRetries < 8 ? kProviderRetryInterval : kProviderRetrySlowInterval;
+					if ((!g_api || !g_obody || !g_slif) && now - g_lastProviderRetry >= interval) {
+						g_lastProviderRetry = now;
+						if (g_providerRetries < 1000) {
+							++g_providerRetries;
+						}
+						retryProviders = true;
+					}
+				}
+				const auto coveredMask = CoveredSlotMask(player->GetFormID());
+				HairTintDiagnostics::SampleOnMainThread(coveredMask);
+				HairTintRecovery::Drain(player, coveredMask);
+				if (retryProviders) {
+					RetryProviders();
+				}
+				DrainRaceMenuSlider();
+				DrainPending();
+				PollOnMainThread();
+			});
+		} catch (...) {
+			std::lock_guard lock(g_mutex);
+			g_pollPending = false;
+		}
 	}
 
 	bool ShouldForceRebuild(RE::FormID a_actor)

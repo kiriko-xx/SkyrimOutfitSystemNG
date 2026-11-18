@@ -15,6 +15,7 @@
 
 #include <string>
 #include <cstring>
+#include <Windows.h>
 
 extern "C" {
 void InitializeLog() {
@@ -271,6 +272,40 @@ namespace {
         });
     }
 
+    void CALLBACK WakeRefreshQueues(PTP_CALLBACK_INSTANCE, void*, PTP_TIMER) noexcept
+    {
+        try {
+            if (!SOS::GameState::IsLoading()) {
+                SOS::SceneOutfits::Tick();
+                SOS::MorphRefresh::Tick();
+            }
+        } catch (...) {
+            // A failed task allocation must not unwind through the Win32 callback.
+        }
+    }
+
+    void StartRefreshWakeup()
+    {
+        // SKSE retains the plugin for the game process lifetime after Load succeeds.
+        static const bool started = [] {
+            if (!SKSE::GetTaskInterface()) {
+                return false;
+            }
+            const auto timer = CreateThreadpoolTimer(WakeRefreshQueues, nullptr, nullptr);
+            if (!timer) {
+                LOG(warn, "Refresh wakeup could not start (Win32 {}); retaining input fallback.", GetLastError());
+                return false;
+            }
+            constexpr DWORD periodMs = 11;
+            constexpr auto firstDue = static_cast<ULONGLONG>(-static_cast<LONGLONG>(periodMs) * 10000);
+            FILETIME due{static_cast<DWORD>(firstDue), static_cast<DWORD>(firstDue >> 32)};
+            SetThreadpoolTimer(timer, &due, periodMs, 0);
+            LOG(info, "Refresh wakeup: independent timer active; game-thread checks and input fallback retained.");
+            return true;
+        }();
+        (void)started;
+    }
+
     void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
         if (!a_msg) {
             return;
@@ -296,6 +331,7 @@ namespace {
             SOS::I18n::Init();
             LOG(debug, "Language: {}.", SOS::I18n::Status());
             SOS::Hotkeys::Install();
+            StartRefreshWakeup();
             SOS::Menu::Register();
             // The options page of the old MCM toggled the quickslot power through
             // a Papyrus quest; do it natively so it also works without the quest.
@@ -316,6 +352,7 @@ namespace {
             SOS::Compat::Reload();
             if (a_msg->type == SKSE::MessagingInterface::kNewGame) {
                 // A new game starts with a fresh player who owns no spells.
+                SOS::GameState::SetLoading(false);
                 SOS::Features::ApplyQuickslotSpell();
             }
             break;
