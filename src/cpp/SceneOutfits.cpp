@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <mutex>
 #include <set>
 #include <string>
@@ -33,13 +34,20 @@ namespace SOS::SceneOutfits
 		// under a recursive lock.
 		std::recursive_mutex g_switchMutex;
 
-		// Script events arrive on the game thread, the same thread the location
-		// change the state switching reacts to is delivered on.
+		// Script events do not always arrive on the game thread: in practice OStim
+		// and SexLab hand them over from a worker thread. The switch itself has to
+		// run on the game thread (same place the location change the state
+		// switching reacts to is handled), so an off-thread event is handed over
+		// with a single task -- the way AutoSwitch::Tick reaches the game thread.
 		bool OnGameThread()
 		{
 			auto* main = RE::Main::GetSingleton();
 			return main && main->threadID != 0 && main->threadID == GetCurrentThreadId();
 		}
+
+		// Runs on the game thread only: the outfit store, the player and the
+		// refresh all belong there.
+		void Dispatch(const std::string& a_event);
 
 		std::string ToLower(std::string_view a_text)
 		{
@@ -181,6 +189,20 @@ namespace SOS::SceneOutfits
 			SKSE::log::info("SceneOutfits: {} scene ended; '{}' restored.", a_source, previous);
 		}
 
+		void Dispatch(const std::string& a_event)
+		{
+			std::lock_guard switchLock(g_switchMutex);
+			if (a_event == "ostim_start") {
+				StartScene("OStim");
+			} else if (a_event == "ostim_end") {
+				EndScene("OStim");
+			} else if (a_event == "PlayerAnimationStart") {
+				StartScene("SexLab");
+			} else if (a_event == "PlayerAnimationEnd") {
+				EndScene("SexLab");
+			}
+		}
+
 		class ModEventSink final : public RE::BSTEventSink<SKSE::ModCallbackEvent>
 		{
 		public:
@@ -193,24 +215,21 @@ namespace SOS::SceneOutfits
 				if (name != "ostim_start" && name != "ostim_end" && name != "PlayerAnimationStart" && name != "PlayerAnimationEnd") {
 					return RE::BSEventNotifyControl::kContinue;
 				}
+				const std::string eventName(name);
 				if (!OnGameThread()) {
-					SKSE::log::warn("SceneOutfits: '{}' arrived off the game thread; the scene switch is skipped.", a_event->eventName.c_str());
+					auto* main = RE::Main::GetSingleton();
+					SKSE::log::debug("SceneOutfits: '{}' came from thread {} (game thread {}); the switch is handed to the game thread.", eventName, GetCurrentThreadId(), main ? main->threadID : 0);
+					auto* tasks = SKSE::GetTaskInterface();
+					if (!tasks) {
+						SKSE::log::warn("SceneOutfits: '{}' came from another thread and there is no task interface, so the switch cannot be handed over; the scene outfit is left as it is.", eventName);
+						return RE::BSEventNotifyControl::kContinue;
+					}
+					tasks->AddTask([eventName]() { Dispatch(eventName); });
 					return RE::BSEventNotifyControl::kContinue;
 				}
-				// The switch runs right here, the way the location sink switches an
-				// outfit from inside the event it was handed.
-				{
-					std::lock_guard switchLock(g_switchMutex);
-					if (name == "ostim_start") {
-						StartScene("OStim");
-					} else if (name == "ostim_end") {
-						EndScene("OStim");
-					} else if (name == "PlayerAnimationStart") {
-						StartScene("SexLab");
-					} else if (name == "PlayerAnimationEnd") {
-						EndScene("SexLab");
-					}
-				}
+				// On the game thread the switch runs right here, the way the location
+				// sink switches an outfit from inside the event it was handed.
+				Dispatch(eventName);
 				return RE::BSEventNotifyControl::kContinue;
 			}
 		};

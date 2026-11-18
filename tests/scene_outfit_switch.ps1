@@ -18,10 +18,19 @@ function Assert-Present([string] $haystack, [string] $needle, [string] $label) {
 
 # 1. The bespoke scene transport must be gone.
 foreach ($token in @('QueueSceneEvent', 'DrainSceneEvents', 'ScheduleDrain', 'g_pendingEvents',
-        'g_generation', 'g_drainScheduled', 'void Tick()', 'GetTaskInterface', 'AddTask',
-        'std::deque', 'GameState::IsLoading')) {
+        'g_generation', 'g_drainScheduled', 'void Tick()', 'std::deque', 'GameState::IsLoading')) {
     Assert-Absent $scene $token 'scene transport'
 }
+
+# 1b. An off-thread event may be handed to the game thread with exactly one task
+#     (the way AutoSwitch::Tick reaches the game thread) -- never with a queue.
+if (([regex]::Matches($scene, [regex]::Escape('tasks->AddTask('))).Count -ne 1) {
+    $script:fail += 'the scene switch must use exactly one task handover'
+}
+Assert-Present $scene 'tasks->AddTask([eventName]() { Dispatch(eventName); });' 'off-thread handover to the game thread'
+Assert-Present $scene 'void Dispatch(const std::string& a_event)' 'single dispatch entry'
+Assert-Present $scene 'the switch is handed to the game thread' 'off-thread diagnostic'
+Assert-Absent $scene 'the scene switch is skipped.' 'dropping an off-thread event'
 Assert-Absent $sceneHeader 'void Tick();' 'scene Tick declaration'
 Assert-Absent $main 'SceneOutfits::Tick();' 'main.cpp Tick call'
 Assert-Absent $hotkeys 'SceneOutfits::Tick();' 'NGHotkeys.cpp Tick call'
@@ -65,4 +74,4 @@ if ($fail.Count -gt 0) {
     $fail | ForEach-Object { Write-Error $_ }
     throw 'SCENE_OUTFIT_SWITCH_GUARD_FAILED'
 }
-Write-Output 'SCENE_OUTFIT_SWITCH_OK: scene switching = name lookup + setOutfitByName + refreshArmorFor, same two steps as the state switching; no queue/Tick/side mechanisms. Static only: engine behaviour unverified.'
+Write-Output 'SCENE_OUTFIT_SWITCH_OK: scene switching = name lookup + setOutfitByName + refreshArmorFor, the same two steps as the state switching; an off-thread event is handed to the game thread with a single task (no queue, no Tick, no side mechanisms). Static only: engine behaviour unverified.'

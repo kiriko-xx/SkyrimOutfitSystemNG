@@ -4,7 +4,14 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-## 1.5.33 最新说明（2026-11-18）
+## 1.5.34 最新说明（2026-11-18）
+
+修「OStim 场景开始后幻化压根没切换」（m07842）。1.5.33 把「按地点/状态切换」的线程门禁 `OnGameThread()` 一起抄进了场景模块，而 OStim / SexLab 的事件来自它们自己的工作线程 → 事件在查名字之前就被丢掉。
+
+- **改了**：`SceneOutfits.cpp` 里离线程事件改走一次 `SKSE::GetTaskInterface()->AddTask([eventName]{ Dispatch(eventName); })` 交接到游戏线程；新增单一入口 `void Dispatch(const std::string&)`；游戏线程上的事件仍内联执行。不建队列、不加 `Tick()`。
+- **没改**：换装调用序列仍是 `setOutfitByName()` + `refreshArmorFor()`（与按地点/状态切换同两步）；钩子层、注入壳、贴件语义、槽清理、`.tri` 推导、DLL 文件名（`OutfitSystemNG.dll`）零改动。
+- **未验证**：尚未实机验证。若日志出现 `scene started; 'A' -> 'A_sex'.` 而模型仍不出现，那是「切了但 3D 不刷新」的另一层问题。
+## 1.5.33 最新说明（2026-11-18，历史，其 `OnGameThread()` 门禁把工作线程场景事件整条丢弃）
 
 **验证状态（1.5.33）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning；DLL `OutfitSystemNG.dll` 1,934,848 B，FileVersion `1.5.33.0`，SHA256 `8c23e5ee…`（`build/Release` 与 `dist` 一致）。
 
@@ -197,6 +204,8 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 46. **1.5.32**：场景套装回到「找对名字 → 切套装」（m07382 / m07424）。**删除** 1.5.30 的三次补跑装备 pass 与 1.5.31 的 `rebuildActorModel()`（两者实机均无效），场景开始/结束只调 `Features::AssignOutfit()`（= 点套装列表那条函数），事件改为游戏线程同步执行（与按地点/战斗切换同构），名字查找先试 `<当前套装>_sex` 再全名忽略大小写匹配；`_sex` 套装不再有任何专属槽位/时机规则。尚未实机验证。
 
 47. **1.5.33**：场景套装回退到 1.5.29 的写法，并改成「按地点/状态切换」那套换装（m07666）。**回退** `src` 到 `v1.5.29`，撤掉 1.5.30 的补跑 pass、1.5.31 的 `rebuildActorModel()`、1.5.32 的 `Features::AssignOutfit()` 场景入口；**新增** `OutfitSystem::setOutfitByName()`，场景开始/结束都走「锁内指派 → 锁外 `refreshArmorFor()`」，与 `AutoSwitch::Evaluate()` 同构；**删除**场景专用的 SKSE 任务队列、`Tick()` 心跳与 `gc` 状态，事件改为 `ModCallbackEvent` sink 里同步执行。`AutoSwitch`（按地点/状态切换）本版一行未改。详见顶部最新说明与 `docs/DELIVERY.md` §4.61。
+
+48. **1.5.34**：修「OStim 场景开始后幻化压根没切换」（m07842）。1.5.33 的 `OnGameThread()` 门禁把工作线程送来的场景事件整条丢弃（日志：三条 `arrived off the game thread; the scene switch is skipped.`）→ 本版改为「一次 `AddTask` 交接到游戏线程 → 统一 `Dispatch()` 入口」。换装序列、钩子层、贴件语义、槽清理、`.tri` 推导、DLL 文件名一律未改。
 
 
 ## 常见问题

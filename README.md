@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.33**（修 m07666：场景（SexLab / OStim 的 `_sex`）换装按用户要求回退到 1.5.29 重做 —— 撤掉 1.5.30 的「补跑装备 pass」、1.5.31 的 `rebuildActorModel()` 与 1.5.32 的场景入口写法；新增 `OutfitSystem::setOutfitByName()`，场景开始/结束都走「锁内指派 → 锁外 `refreshArmorFor()`」，与「按地点/状态自动切换」（`AutoSwitch::Evaluate()`，本版未改）完全同构；删除场景专用的 SKSE 任务队列与 `Tick()` 心跳，事件改为 `ModCallbackEvent` sink 里同步执行。未实机验证，详见 `dist/docs/DELIVERY.md` §4.61 与 `VERSIONS.md`）
+- 当前版本：**1.5.34**（修 m07842：1.5.33 把「按地点/状态切换」的线程门禁 `OnGameThread()` 一起抄进了场景模块，而 OStim / SexLab 的事件来自它们自己的工作线程 → 事件在查名字之前就被丢弃，日志里是三条 `arrived off the game thread; the scene switch is skipped.`。本版改为「离线程事件用一个 `SKSE::GetTaskInterface()->AddTask` 交接到游戏线程 → 统一 `Dispatch()` 入口」，游戏线程上仍内联执行；不建队列、不加 `Tick()`。换装调用序列仍是 `setOutfitByName()` + `refreshArmorFor()`，钩子层 / 贴件语义 / 槽清理 / `.tri` 推导 / DLL 文件名零改动。未实机验证，详见 `dist/docs/DELIVERY.md` §4.62 与 `VERSIONS.md`）
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 

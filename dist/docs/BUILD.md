@@ -1,6 +1,13 @@
 # 构建说明（BUILD）
 
-## 1.5.33 构建与交付复核状态
+## 1.5.34 构建与交付复核状态
+
+**验证状态（1.5.34）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_34.log`，末尾 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。DLL `OutfitSystemNG.dll` 1,937,408 字节，SHA256 `e1cdb9518149d0e1f7a23d1835317620b8258c1e030d6d987b658e4718283782`，FileVersion/ProductVersion `1.5.34.0`，`build/Release` 与 `dist` 两份逐字节一致。
+
+- **本版改动面**：`src/cpp/SceneOutfits.cpp`（`ModEventSink` 离线程事件改走 `SKSE::GetTaskInterface()->AddTask([eventName]{ Dispatch(eventName); })`；新增 `void Dispatch(const std::string& a_event)` 单一入口；无任务接口时只 warn 降级）、`src/cpp/include/version.h`（PATCH 34）、`CMakeLists.txt`（VERSION 1.5.34）、`tests/scene_outfit_switch.ps1`（守卫改为「恰好一次 `AddTask` 交接」）。**钩子层、注入壳、贴件语义、槽清理、`.tri` 推导、模块文件名、换装调用序列零改动**（`AutoSwitch.*` 仍为空 diff）。
+- **构建后必查**：DLL 里 `handed to the game thread` / `came from another thread` / `there is no task interface` / `scene started;` / `setOutfitByName` / `1.5.34` 必须能搜到；`arrived off the game thread`（1.5.33 的丢事件行）以及 1.5.30/1.5.31 的 `repeating the equip pass` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 必须**一条都搜不到**。
+- **静态守卫**：`tests/scene_outfit_switch.ps1`、`skinning_stale_slots.ps1`、`morph_paths.ps1`、`morph_read_only.ps1`、`morph_slider_queue.ps1` 全部 PASS（pwsh 7，env 需带 `PATHEXT`）。
+## 1.5.33 构建与交付复核状态（历史，已被 1.5.34 取代）
 
 **验证状态（1.5.33）**：尚未实机验证。Release **全量重编** `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log` 149 行、36 个 `.cpp` 全部 CC，留档 `build/build_1_5_33.log`）。DLL `OutfitSystemNG.dll` 1,934,848 字节，SHA256 `8c23e5eec3ae0f4561125ab2cabb71e63ef7c21d01e6a8b85755687454716aaf`，FileVersion/ProductVersion `1.5.33.0`，`build/Release` 与 `dist` 两份逐字节一致。
 

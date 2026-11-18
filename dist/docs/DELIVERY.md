@@ -1,6 +1,20 @@
 # 交付说明（DELIVERY）
 
-## 1.5.33 最新交付准备（2026-11-18）
+## 1.5.34 最新交付准备（2026-11-18）
+
+**验证状态（1.5.34）**：**尚未实机验证**，不能声称已修好。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log`，留档 `build/build_1_5_34.log`）；`OutfitSystemNG.dll` 1,937,408 字节 / `e1cdb951…` / `1.5.34.0`（build/Release 与 dist 逐字节一致）。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 1,937,408 字节；`e1cdb9518149d0e1f7a23d1835317620b8258c1e030d6d987b658e4718283782`；`1.5.34.0`（build/Release 与 dist 一致） |
+| 安装包与复核记录 | SkyrimOutfitSystemNG-1.5.34.zip：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；最终 zip 大小/哈希只写包外 VERSIONS.md 与同名 .zip.sha256，包内不自引用 |
+
+- **真因（1.5.33 的线程门禁丢事件）**：用户日志 `v1-5-33-0` 里 `SceneOutfits` 只有 4 行，其中三条是 `'ostim_start' arrived off the game thread; the scene switch is skipped.`（20:37:33 线程 39516、20:38:11 线程 10604、20:38:29 线程 27040）。OStim / SexLab 的 mod 事件是从工作线程投过来的，所以「切套装」这一步压根没执行 —— 名字没查、`setOutfitByName()` 没调、`refreshArmorFor()` 没跑。
+- **修法（一个 task 交接，不建队列）**：`ModEventSink` 里离线程事件改走 `SKSE::GetTaskInterface()->AddTask([eventName]() { Dispatch(eventName); });`，把换装送到游戏线程上执行；仍在游戏线程时保留内联快路径直接 `Dispatch(eventName)`。没有队列、没有 `Tick()`、没有 generation 计数 —— 与 `AutoSwitch::Tick` 回主线程的做法一致（m07666 要求的那条路）。
+- **取证手留了线程号**：离线程时打 debug `SceneOutfits: '{}' came from thread {} (game thread {}); the switch is handed to the game thread.`，下一轮日志可直接看出事件来自哪个线程、主线程是哪个。
+- **换装调用序列一个字没改**：仍是 `setOutfitByName()`（锁内指派）→ 放锁 → `OutfitSystem::refreshArmorFor()`，与「按地点/状态切换」同构；`AutoSwitch.cpp` / `AutoSwitch.h` 本版仍为空 diff。
+- **未动的东西**：基础幻化钩子（`Hooks.cpp`）、注入壳、贴件语义、槽位清理策略、`.tri` 目标推导、DLL 文件名（`OutfitSystemNG.dll`）一律未改；1.5.25 实测正常的基础幻化与空幻化不受影响。
+## 1.5.33 交付准备（历史，已被 1.5.34 取代：其 `OnGameThread()` 门禁把工作线程送来的场景事件整条丢弃）
 
 **验证状态（1.5.33）**：**尚未实机验证**，不能声称已修好。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log` 149 行，留档 `build/build_1_5_33.log`）；`OutfitSystemNG.dll` 1,934,848 字节 / `8c23e5ee…` / `1.5.33.0`（build/Release 与 dist 逐字节一致）。
 
@@ -183,6 +197,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | 「你只用找对名字然后切换，参考按地点/战斗切换幻化套装的逻辑」（m07424） | 按地点/战斗切换走的是 `AutoSwitch::Evaluate()` → `setOutfitUsingState()` → `refreshArmorFor()`，场景套装此前用的是自己拼的 `set_outfit_c()` + 补跑随访，两套路径行为不同。见 §4.60 | 1.5.32 让场景套装与菜单点击共用同一条 `Features::AssignOutfit()`，并去掉全部 `_sex` 专属的槽位/时机特判（`_sex` 套装里的规则全部由用户自己配置） |
 
 | 「依旧和之前一样的问题……我说的是 Sexlab 和 OStim 场景的专用换装 `_sex`，你不会改的是按地点/状态自动切换吧？不行直接回退到 1.5.29，从这开始改……参照按地点/状态自动切换这里的换装方法去换装」（m07666） | 先核对了改动面：`AutoSwitch.cpp` / `AutoSwitch.h` 自 1.5.29 起**一行未改**（`git diff v1.5.29 HEAD` 为空），改的确实是 SexLab/OStim 那个模块 `SceneOutfits.cpp`。但场景入口在 1.5.32 走的是菜单那条 `Features::AssignOutfit()`，且仍带着自有的 SKSE 任务队列 + `Tick()` 心跳，与状态切换的两步序列不同。见 §4.61 | 1.5.33 回退源码到 v1.5.29，删掉场景专用的队列与 `Tick()`，新增 `OutfitSystem::setOutfitByName()`，让场景入口与状态切换共用「锁内指派 + 锁外 `refreshArmorFor`」这两步 |
+| 「这次 OStim 场景开始后幻化压根没切换」（m07842，1.5.33 实机） | 日志 `v1-5-33-0` 里 `SceneOutfits` 只有 4 行，三条是 `'ostim_start' / 'ostim_end' arrived off the game thread; the scene switch is skipped.`：1.5.33 在 `ModEventSink` 里用 `OnGameThread()` 门禁把工作线程送来的事件整条丢弃，装换装逻辑根本没执行（线程 39516 / 10604 / 27040，主线程是 34628）。见 §4.62 | 1.5.34 离线程事件改用一个 `SKSE::GetTaskInterface()->AddTask(...)` 交接到游戏线程执行 `Dispatch()`，游戏线程上仍走内联快路径；不建队列、不加 `Tick()`，换装调用序列保持 `setOutfitByName()` + `refreshArmorFor()` |
 
 ## 4. 本版变更
 
@@ -1353,13 +1368,70 @@ OutfitSystem::refreshArmorFor(a_actor);   // The refresh needs the outfit lock r
 - **未实机验证**。静态侧新增 `tests/scene_outfit_switch.ps1`：断言场景模块里没有任何队列 / `Tick` / 补跑 / 重建 / `set_outfit_c` 字样，换装必须是 `setOutfitByName` 紧跟 `refreshArmorFor`，且 `AutoSwitch` 仍是同样两步顺序；另删掉过时的 `tests/scene_outfit_queue.ps1`。
 - **已知风险（写明）**：1.5.29–1.5.32 的日志都证明场景开始时装备 pass 其实执行了（`Armor Refresh for …` + `Custom: attaching 5 outfit-only piece(s) …`）。若 1.5.33 下模型仍不出现，说明差异不在这两步调用本身（换地点/快速旅行本身会让引擎重建被绘制的 3D），需按新日志另找方向，不能再用「多刷新几次」的补丁。
 
+## 4.62 1.5.34：1.5.33 把场景事件整条丢了——`OnGameThread()` 门禁与工作线程（m07842）
+
+### 症状（1.5.33 实机）
+
+OStim / SexLab 场景开始后幻化**压根没切换**（1.5.33 之前是「切了但模型不显示 / 要按一次 Tab」，这一版连切都没切）。
+
+### 日志证据（`D:/Skyrim-dev/bug/SkyrimOutfitSystemNG.log`，700,653 字节 / 7,497 行，`v1-5-33-0`，runtime `1-5-97-0`，base `0x7FF605EB0000`）
+
+- `SceneOutfits` 相关只有 4 行：一条 `SceneOutfits: SexLab / OStim scene detection installed.`（正常），加三条被丢弃：
+  - `20:37:33.801` 线程 `39516`：`'ostim_start' arrived off the game thread; the scene switch is skipped.`（warn）
+  - `20:38:11.749` 线程 `10604`：`'ostim_end' … skipped`
+  - `20:38:29.203` 线程 `27040`：`'ostim_start' … skipped`
+- 线程分布：`34628` 有 3,843 行（含 `v1-5-33-0 is loading` 与绝大部分 `Custom: attaching …` / 蒙皮日志，是游戏主线程）；`14492` / `3768` / `27040` / `39184` / `2492` / `38112` / `39516` 各几十到近千行。
+- 同一份日志里其它环节都正常：`RaceMenu BodyMorph v4 acquired through skee`、基础钩子全部装好、菜单里切套装时 `Armor Refresh for …` + `Custom: attaching N outfit-only piece(s) …` 照常出现。
+
+### 真因
+
+1.5.33 按 m07666 重写 `SceneOutfits.cpp` 时，把 `AutoSwitch` 的线程模型也照抄了进来 —— 包括 `OnGameThread()`（`RE::Main::GetSingleton()->threadID == GetCurrentThreadId()`）。但两者的**触发源根本不同**：`AutoSwitch` 的 `TESActorLocationChangeEvent` / `Tick` 都在游戏线程上，而 OStim / SexLab 的 mod 事件是从它们自己的工作线程投过来的。于是：
+
+```cpp
+if (!OnGameThread()) {
+    SKSE::log::warn("SceneOutfits: '{}' arrived off the game thread; the scene switch is skipped.", name);
+    return kContinue;
+}
+```
+
+这一行把三条事件全部丢掉：名字没查、`setOutfitByName()` 没调、`refreshArmorFor()` 没跑 —— 所以症状是「压根没切换」，而不是上一版那种「切了但模型不出来」。1.5.29–1.5.32 之所以能切（即使模型不显示），是因为那时还有 SKSE 任务队列 / `AddTask` 把换装投到主线程。
+
+### 修法
+
+1. **离线程事件用一个 task 交接**：`const std::string eventName(name);` → `tasks->AddTask([eventName]() { Dispatch(eventName); });`。要交接的是「事件名」，不是 `RE::TESObjectREFR*` / sink 内的临时对象 —— 事件到主线程时 sink 早返回了。
+2. **游戏线程上的事件仍走内联快路径**：直接 `Dispatch(eventName)`，与 `AutoSwitch` 在 sink 里同步换装的做法一致，不加额外延迟。
+3. **新增单一入口 `Dispatch(const std::string& a_event)`**：`std::lock_guard switchLock(g_switchMutex);` 内按事件名调 `StartScene()` / `EndScene()`，两条路径共用同一份逻辑。
+4. **不建队列、不加 `Tick()`、不做 generation 计数**：队列那套是 1.5.33 按用户要求删掉的（m07666），这里只借「一次 `AddTask`」这一个既有 API，与 `AutoSwitch::Tick` 回主线程的手段相同。
+5. **任务接口缺失时只降级不崩**：`SKSE::GetTaskInterface()` 为空时 warn `… there is no task interface, so the switch cannot be handed over; the scene outfit is left as it is.`，不尝试别的投递方式。
+6. **留线程号便于下一轮取证**：离线程时 debug `SceneOutfits: '{}' came from thread {} (game thread {}); the switch is handed to the game thread.`
+
+### 新日志（1.5.34）
+
+| 日志 | 含义 / 处置 |
+| --- | --- |
+| `SceneOutfits: 'ostim_start' came from thread 39516 (game thread 34628); the switch is handed to the game thread.` | 正常路径（debug，需 Verbose）：事件来自工作线程，已用一个 task 交接到游戏线程 |
+| `SceneOutfits: OStim scene started; 'A' -> 'A_sex'.` | 开关真正执行了（info，无需 Verbose）；紧跟同一瞬的 `Armor Refresh for …` + `Custom: attaching N outfit-only piece(s)` |
+| `SceneOutfits: 'ostim_start' came from another thread and there is no task interface, so the switch cannot be handed over; the scene outfit is left as it is.` | SKSE 任务接口不可用（极端情况）：本版不换装，也不崩 |
+| `'ostim_start' arrived off the game thread; the scene switch is skipped.` | **1.5.33 的丢事件行，1.5.34 起不应再出现**；若见到，说明装的不是 1.5.34 |
+
+### 兼容性
+
+- 钩子层 / 注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / DLL 文件名一律未改：`src/cpp/hooking/*` 本版零改动。
+- `AutoSwitch.cpp` / `AutoSwitch.h` 本版仍为空 diff（可 `git diff v1.5.33 HEAD -- src/cpp/AutoSwitch.*` 复核）。
+- 场景套装仍只做「找对名字 → `setOutfitByName()` + `refreshArmorFor()`」；`_sex` 套装里的槽位规则依旧由用户自己在套装编辑器里配置。
+
+### 未验证
+
+- 「场景开始/结束不按键就切」未实机验证：本版只保证事件不再被丢弃、开关会在游戏线程上执行。若日志出现 `scene started; 'A' -> 'A_sex'.` 而模型仍不出现，那说明问题回到「切了但 3D 不更新」那一层（1.5.30 / 1.5.31 试过的方向），需要按新日志再定位，不是本版能声称修好的。
+- `AddTask` 交接会晚一个任务周期（下一次主线程任务）才换装，正常感知不到；若某些机型上看到明显延迟，可以再讨论是否在主线程上直接 `Dispatch()`。
+
 ## 5. 静态验证
 
 
 | 项 | 结果 |
 | --- | --- |
-| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.33 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log` 149 行，旁路留档 `build/build_1_5_33.log`） |
-| 版本资源 | `FileVersion = 1.5.33.0` / `ProductVersion = 1.5.33.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
+| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.34 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_34.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
+| 版本资源 | `FileVersion = 1.5.34.0` / `ProductVersion = 1.5.34.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
 | 导入表 | 仅 KERNEL32 / USER32 / ole32 / VERSION / SHELL32 |
 | 延迟导入 | 目录 RVA = 0、size = 0（无延迟导入项） |
 | 导出 | SKSEPlugin_Load / SKSEPlugin_Query / SKSEPlugin_Version 均存在 |
@@ -1376,6 +1448,7 @@ OutfitSystem::refreshArmorFor(a_actor);   // The refresh needs the outfit lock r
 | 1.5.31 关键字符串 | `Model Rebuild for` / `Skipping model rebuild for` / `asking the game to rebuild the model of` / `so the illusion reaches the drawn 3D` / `could not be assigned for the` / `could not be restored after the` / `rebuildActorModel` 可检索；`FileVersion = 1.5.31.0`、`ProductVersion = 1.5.31.0`；DLL 1,941,504 字节，SHA256 `c8c8ae5db004c0017b029110b23dd707e1e519789c2acf81ba637a5ed63ad6b2`；模块文件名仍 `OutfitSystemNG.dll` |
 | 1.5.32 关键字符串（历史） | `no '{}' outfit for the {} scene` / `could not be assigned for the` / `could not be restored after the` / `SceneOutfits: ` / `1.5.32` 可检索；1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` **已全部从 DLL 中消失**；`FileVersion = 1.5.32.0`、`ProductVersion = 1.5.32.0`（PowerShell `VersionInfo` 实测）；DLL 1,937,920 字节，sha256 `da9ec8995c599f00cb249b611d66a13c2f3f030f845951b3d6b5eacdca05f875`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.33 关键字符串 | `setOutfitByName` / `SceneOutfits: ` / `scene started;` / `scene ended;` / `create an outfit with exactly that name` / `the scene switch is skipped` / `1.5.33` 可检索；1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 以及 1.5.32 队列相关的 `scene event dropped` **已全部从 DLL 中消失**；`FileVersion = 1.5.33.0`、`ProductVersion = 1.5.33.0`（PowerShell `VersionInfo` 实测）；DLL 1,934,848 字节，sha256 `8c23e5eec3ae0f4561125ab2cabb71e63ef7c21d01e6a8b85755687454716aaf`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist |
+| 1.5.34 关键字符串 | `handed to the game thread` / `came from thread` / `there is no task interface` / `scene started;` / `scene ended;` / `setOutfitByName` / `1.5.34` 可检索；1.5.33 的丢弃行 `arrived off the game thread` **已从 DLL 中消失**，1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 仍全部不存在；`FileVersion = 1.5.34.0`、`ProductVersion = 1.5.34.0`（PowerShell `VersionInfo` 实测）；DLL 1,937,408 字节，sha256 `e1cdb9518149d0e1f7a23d1835317620b8258c1e030d6d987b658e4718283782`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist |
 | 1.5.29 关键字符串 | `detached ` / `illusion clone(s) whose slot left the display set` / `lost the illusion in slot mask` / `after 3 rebuilds` / `rebuilding the actor` / `left to the engine` 可检索；`ClearBipedPart` 与 `IllusionMissingSlots` 作为内部符号不出现在字符串表（前者只剩一处调用）；FileVersion 1.5.29.0、DLL 1,936,384 B / `4f0bcae1…`、导入依赖未新增 |
 | 1.5.27 关键字符串 | `uses .tri ` / `has no .tri beside it` / `Probed: ` / `the armour addon the engine attached` / `has no armour addon yet` / `leaving the clones to the next morph pass instead of cycling` / `but the illusion carries .tri targets` / `every illusion clone whose armour model ships a .tri` / `1.5.27` 均可检索；1.5.26 的 `.tri morph targets are attached to every illusion clone` 已从 DLL 中消失；`carries a .tri morph target on` / `stay armed` / `BODYTRI` / `MorphShapeCallback` 仍在；`FileVersion = 1.5.27.0`、`ProductVersion = 1.5.27.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,875,456 字节，sha256 `22eb7794…a91af178f`；导入依赖未新增 |
 | 1.5.25 关键字符串 | `left to the engine` / `slot {:02} item {:08X} addon {:08X} part {} clone {}` / `1.5.25` 均可检索；1.5.24 的 `cleared for` 与 `ClearBipedPart` / `ClearSlots` 已从 DLL 中消失；`FileVersion = 1.5.25.0`、`ProductVersion = 1.5.25.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,866,240 字节，sha256 `ae797d9d…efc3936b5`；导入依赖未新增 |
@@ -1461,6 +1534,8 @@ OutfitSystem::refreshArmorFor(a_actor);   // The refresh needs the outfit lock r
 53. **1.5.32 场景套装只做切换（对应 m07382 / m07424）**：①装 `Data/SKSE/Plugins/OutfitSystemNG.dll`，确认旧名 `SkyrimOutfitSystemNG.dll` 已删；②进 OStim 场景，**不要按 Tab / Z**，看 `_sex` 套装是否直接出现；③场景结束，同样不要按任何窗口，看是否直接变回普通幻化。日志判定（需开 Verbose）：只应有 `SceneOutfits: OStim scene started; '…' -> '…_sex'` 与其后的 `Armor Refresh for …` + `Custom: attaching N outfit-only piece(s) …`，**不应再有** `repeating the equip pass for` / `follow-up N of 3` / `Model Rebuild for`。若套装名对不上，会看到 `no '…' outfit for the … scene`（`_sex` 套装名必须与当前套装名严格对应，大小写不敏感）。见 §4.60 与 TESTING §3.44。
 54. **1.5.33 场景套装换装改为「状态切换那套方法」（对应 m07666）**：①确认装的是 `Data/SKSE/Plugins/OutfitSystemNG.dll`，旧名 `SkyrimOutfitSystemNG.dll` 已删；②进 OStim / SexLab 场景，**不要按 Tab / Z**，看 `<当前套装>_sex` 是否直接出现；③场景结束，同样不要按任何窗口，看是否直接变回普通幻化。日志判定：应看到 `SceneOutfits: OStim scene started; 'A' -> 'A_sex'.`（info，无需 Verbose）紧跟同一瞬的 `Armor Refresh for …` + `Custom: attaching N outfit-only piece(s) …`；`SceneOutfits: OStim scene ended; 'A' restored.` 同理。**不应再出现** 1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up N of 3` / `Model Rebuild for`。若模型仍不出现，把这 20 行一起发回。见 §4.61 与 TESTING §3.45。
 
+55. **1.5.34 场景事件不再被线程门禁丢掉（对应 m07842）**：①确认装的是 `Data/SKSE/Plugins/OutfitSystemNG.dll`（1.5.34.0），旧名 `SkyrimOutfitSystemNG.dll` 已删；②进 OStim / SexLab 场景，**不要按 Tab / Z**，看 `<当前套装>_sex` 是否切过去；③场景结束，同样不按键，看是否切回普通幻化。日志判定（要开 Verbose 才看得到交接行）：应先见 `SceneOutfits: 'ostim_start' came from thread <工作线程> (game thread <主线程>); the switch is handed to the game thread.`，紧跟（下一任务周期）`SceneOutfits: OStim scene started; 'A' -> 'A_sex'.` → `Armor Refresh for …` → `Custom: attaching N outfit-only piece(s) …`。**不应再出现** 1.5.33 的 `arrived off the game thread; the scene switch is skipped.`（出现即说明装的不是 1.5.34）。若 `scene started` 有了但模型还不出现，把那 20 行发回 —— 那是「切了但 3D 不刷新」另一层问题，不在本版范围内。见 §4.62 与 TESTING §3.46。
+
 ## 7. 已知限制
 - SMP 重置依赖 Faster HDT-SMP 的 Papyrus 静态函数 `DynamicHDT.ResetPhysics`；没装 FSMP 时开关无效但不报错。
 - SexLab / OStim 场景套装只对玩家生效（事件不带参与者列表；OStim 的 NPC 子线程不处理）。
@@ -1503,6 +1578,8 @@ OutfitSystem::refreshArmorFor(a_actor);   // The refresh needs the outfit lock r
 - 1.5.30 的「场景切换补跑 pass」未实机验证：前提是「所有切换入口都经过 `Features::RefreshActor()`」；若某条路径（例如第三方 mod 自己改装备、或 OStim 内部直接换装）没有经过它，表现仍是「要按一次键」。随访次数与延迟（120 / 400 / 900 ms）按菜单路径的观察估定，不保证每个 load order 都够；不够时表现为「慢一瞬才更新」，而不是不更新。
 - 1.5.31 的「重建模型让幻化上屏」未实机验证：前提是 `Actor::Update3DModel()` 真的会让引擎重走 biped→3D 并采用脚本刚写进去的克隆（依据是菜单开合时引擎自己做的正是这件事）。若某个 load order 里重建之后仍不显示，说明还有一层缓存（例如 ENB / 框架缓存了节点），需要按新日志再定位；重建每次切换只发生一次，不会循环。
 
+- 1.5.34 的「离线程事件用 task 交接」未实机验证：本版只保证事件不再被 `OnGameThread()` 丢掉、换装会在游戏线程执行。若日志出现 `scene started; 'A' -> 'A_sex'.` 与随后的 `attaching …` 而模型仍不出现，那属于「切了但被绘制的 3D 不更新」的另一层（1.5.30/1.5.31 试过的两个方向都被实机否掉），本版不声称已解决。
+
 ## 8. 排查速查
 
 | 日志 | 含义 / 处置 |
@@ -1528,7 +1605,9 @@ OutfitSystem::refreshArmorFor(a_actor);   // The refresh needs the outfit lock r
 | `Custom: … slot NN item … addon … part … clone …` | 贴件后的槽状态（debug）：`addon 0` = ARMA 没解析出来；`part true` = 几何已建；`clone 0x0` 本身不算失败证据 |
 | `Custom: detached N illusion clone(s) whose slot left the display set (mask 0x…) for …` | 1.5.29 起：这些槽里是我们上一套的幻化克隆、且没有真实穿戴物打底，已拆掉（debug） |
 | `MorphRefresh: … lost the illusion in slot mask 0x…; rebuilding the actor's equipment.` | 1.5.29 起：主线程对账发现幻化槽里没有几何，用普通装备刷新重建（debug，同角色 300 ms 退避、最多 3 次） |
-| `MorphRefresh: … still holds no illusion geometry in slot mask 0x… after 3 rebuilds; it is left alone from now on.` | 三次重建仍空，本版不再尝试；多半是该件 `ApplyArmorAddon` 被拒或无可用 ARMA（warn，每角色一次） |
+| `SceneOutfits: 'ostim_start' came from thread 39516 (game thread 34628); the switch is handed to the game thread.` | 1.5.34 起（debug）：事件来自工作线程，已用一个 task 交接到游戏线程；后面的线程号在排查「事件到底从哪来」时最有用 |
+| `SceneOutfits: … came from another thread and there is no task interface, so the switch cannot be handed over; the scene outfit is left as it is.` | SKSE 任务接口不可用（极端情况）：本版不换装也不崩，其它功能不受影响 |
+| `… arrived off the game thread; the scene switch is skipped.` | **1.5.33 的丢事件行，1.5.34 起不应出现**；看到它说明装的不是 1.5.34 || `MorphRefresh: … still holds no illusion geometry in slot mask 0x… after 3 rebuilds; it is left alone from now on.` | 三次重建仍空，本版不再尝试；多半是该件 `ApplyArmorAddon` 被拒或无可用 ARMA（warn，每角色一次） |
 | `Custom: the weight model 0x… does not point at a biped model of …` | `ModelBiped` 校验没通过（模型指针不是该 actor 的两套 biped 之一），该次不清理遗留槽，只打一次 |
 | `Illusion display is active: the player skinning hooks are installed.` | 1.5.23 起唯一的“幻化可用”判定行：藏真甲与贴件两个钩子都装上了 |
 | `address library id N is missing` | 该运行时缺 ID，对应钩子被跳过；查 Hooks.cpp 的 ID 对 |
@@ -1644,5 +1723,6 @@ OutfitSystem::refreshArmorFor(a_actor);   // The refresh needs the outfit lock r
 - 策略序列化：`OutfitSystemData.json` 必须写数字 id（`PolicyToInt`），字符串码只用于导入兼容；新增策略时同时更新 `kPolicies`、`PolicyFromInt` 的逆映射与词典文案。
 - `MenuUI` 里调用新增的 `ig*` 之前先看 `ImGuiApi::Api::Extras` 有没有：可选绑定缺失时不能让菜单整块失效。
 - 场景套装（`SceneOutfits.cpp`）只负责「找对名字 → `OutfitSystem::setOutfitByName()` + `OutfitSystem::refreshArmorFor()`」，与「按地点/状态切换」（`AutoSwitch::Evaluate()`）共用同一个两步序列。任何与某个 mod 场景相关的槽位特判、时机特判、补跑、重建、SKSE 任务队列、`Tick()` 心跳都不许加回这里：`_sex` 套装里的规则全部由用户自己在套装编辑器里配置（m07424 / m07666 原话）。
+- 场景事件的线程门禁只能「交接」不能「丢弃」：OStim / SexLab 的事件来自它们自己的工作线程，`if (!OnGameThread()) return;` 会把整条场景换装丢掉（1.5.33 → m07842）。正确写法是 `SKSE::GetTaskInterface()->AddTask([eventName]{ Dispatch(eventName); })` 交接一次，游戏线程上仍走内联快路径。
 - 改「场景套装」时如果发现自己在写新的调度/刷新机制，先去看 `AutoSwitch::Evaluate()` 怎么做的：用户明确要求照抄那条路（m07666）——「参照按地点/状态自动切换这里的换装方法去换装」。
 - 「按地点/状态切换」（`AutoSwitch.cpp`）与「场景套装」（`SceneOutfits.cpp`）是两个不同模块，用户报告场景问题时不要改错文件；核对办法是 `git diff <上个 tag> HEAD -- src/cpp/AutoSwitch.*` 是否为空。

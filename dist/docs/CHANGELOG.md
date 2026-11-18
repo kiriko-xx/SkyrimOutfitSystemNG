@@ -1,5 +1,24 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.34] - 2026-11-18
+
+### 修复：场景事件被线程门禁整条丢弃（m07842）
+
+**用户报告**：「这次 OStim 场景开始后幻化压根没切换」。
+
+**真因**：1.5.33 重写 `SceneOutfits.cpp` 时把 `AutoSwitch` 的线程模型（`OnGameThread()`）也照抄了进来，并写成 `if (!OnGameThread()) { warn; return kContinue; }`。但 OStim / SexLab 的 mod 事件是从它们自己的工作线程投过来的，于是事件在查名字之前就被丢掉 —— 用户日志 `v1-5-33-0` 里三条 `'ostim_start' / 'ostim_end' arrived off the game thread; the scene switch is skipped.`（线程 39516 / 10604 / 27040，主线程 34628）就是这三条被丢的事件。
+
+**修法**：
+
+1. `ModEventSink` 内离线程事件改走 `SKSE::GetTaskInterface()->AddTask([eventName]() { Dispatch(eventName); });`，把换装交接到游戏线程；游戏线程上的事件仍内联 `Dispatch(eventName)`。
+2. 新增单一入口 `void Dispatch(const std::string& a_event)`：`std::lock_guard switchLock(g_switchMutex);` 内按事件名调 `StartScene()` / `EndScene()`。
+3. 不建队列、不加 `Tick()`、不做 generation 计数（队列那套是 1.5.33 按 m07666 删掉的），只借「一次 `AddTask`」这一个既有 API。
+4. 任务接口缺失时 warn `… there is no task interface, so the switch cannot be handed over; the scene outfit is left as it is.`，不换装也不崩。
+5. 离线程时 debug 打 `SceneOutfits: '{}' came from thread {} (game thread {}); the switch is handed to the game thread.`，为下一轮取证留线程号。
+
+**未改动**：换装调用序列仍是 `setOutfitByName()` + `OutfitSystem::refreshArmorFor()`；`AutoSwitch.*` 仍为空 diff；钩子层 / 注入壳 / 贴件语义 / 槽清理 / `.tri` 推导 / DLL 文件名零改动。
+
+**未验证**：尚未实机验证。若日志出现 `scene started; 'A' -> 'A_sex'.` 但模型仍不出现，那是「切了但 3D 不刷新」的另一层问题（1.5.30/1.5.31 的方向已被实机否掉），需按新日志再定位。
 ## [1.5.33] - 2026-11-18
 
 ### 修复：场景套装回退到 1.5.29，只保留「找名字 → 用状态切换那套方法换装」（m07666）
