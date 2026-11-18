@@ -1,0 +1,29 @@
+1.5.36 test build: poll the morphs from any thread, bake from the engine worn pass
+
+1.5.35 asked every poll who the thread was and threw the poll away when the answer
+was "not the game thread". One session shows what that costs: 640 of 1241 polls were
+rejected, in runs of up to 33 s, and the longest runs sat exactly on the seconds a
+body morph slider was dragged - the illusion kept the shape the drag started from and
+only refreshed once the player opened a menu (a menu pass is what finally gets a task
+onto the game thread).
+
+- OnGameThread() now only classifies and logs; the poll runs from the thread that
+  asks for it (timer, or the skinning hooks).
+- DrainPending() is serialised with a mutex: two threads can ask for a bake now.
+- Only the repairs that drive the engine from outside the morph path (hair tint,
+  provider dispatch, reillusion, the equip refresh behind a dropped illusion) stay
+  main-thread only.
+- New SkinTick(): the poll+bake is also driven from ShouldOverrideSkinning(), i.e.
+  from inside the engine worn pass, which runs continuously while a slider is dragged
+  and on the engine own thread. This is the anchor that replaces the dead per-frame
+  pump.
+- Removed the 1.5.35 FramePump (Main::Update id 35565/36564 has no call site in this
+  executable) and the whole FindCallsInModule scan that only it used, and the SKSE
+  AddTask path in Tick: no more task spam that gets thrown away.
+
+Guard tests: morph_thread_gate rewritten for the new design, generic observer anchor
+moved to the poll body. 7/7 pass.
+
+Test package: SkyrimOutfitSystemNG-1.5.36-test.zip (single DLL, MO2 installable).
+Not tagged, not merged into main: this stays on candidate/menu-morph-live until the
+reporting machine confirms the drag follows.

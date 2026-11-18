@@ -1,38 +1,50 @@
 $ErrorActionPreference = 'Stop'
+# 1.5.36: the poll no longer asks who the thread is. 1.5.35 gated every poll on the
+# game thread id and the reporting machine rejected 640 of 1241 polls - in runs that
+# sat exactly on the seconds a body morph slider was dragged - while the engine's own
+# worn passes ran on those same worker threads. The poll now runs wherever it is
+# asked from, and the bake is only allowed off the main thread from inside the
+# engine's own worn pass (SkinTick).
 $s = Get-Content -Raw (Join-Path $PSScriptRoot '../src/cpp/MorphRefresh.cpp')
-$a = $s.IndexOf('bool IsGameThread()')
+$a = $s.IndexOf('bool OnGameThread()')
 $b = $s.IndexOf('// Minimal ABI', $a)
 if ($a -lt 0 -or $b -le $a) { throw 'Missing production thread predicate' }
 $f = $s.Substring($a, $b-$a)
 
-# The fallback task entry still rejects the wrong thread. Since 1.5.35 it is no longer
-# the primary path: the per-frame pump (FrameTick) is, and that one cannot be rejected.
-$start = $s.IndexOf('morphPush::g_taskQueued.store(false);')
-if ($start -lt 0) { throw 'Missing task entry' }
-if (-not $s.Substring($start,[Math]::Min(450,$s.Length-$start)).Contains('!IsGameThread()')) { throw 'Task entry lacks thread rejection' }
+if ($s.Contains('IsGameThread')) { throw 'The poll is still gated on the game thread identity' }
+foreach ($leftover in @('g_pollTrace.rejected', 'wrong-thread={')) { if ($s.Contains($leftover)) { throw "The rejected-as-wrong-thread path is still there: $leftover" } }
 
-$tick = $s.IndexOf("void Tick()")
-if ($tick -lt 0) { throw 'Missing fallback tick' }
-$tickTask = $s.IndexOf('tasks->AddTask([]() {', $tick)
-if ($tickTask -lt 0) { throw 'Missing fallback task' }
-$tickWindow = $s.Substring($tickTask,[Math]::Min(900,$s.Length-$tickTask))
-if (-not $tickWindow.Contains('!IsGameThread()')) { throw 'Fallback task lacks thread rejection' }
-if (-not $tickWindow.Contains('ClaimPollSlot()')) { throw 'Fallback task must share the poll slot with the pump' }
-if (-not $s.Substring($tick,[Math]::Min(1200,$s.Length-$tick)).Contains('g_lastPost')) { throw 'Fallback posting must be throttled' }
+# Two poll sources, one throttle, one entry point each.
+$tick = $s.IndexOf('void Tick()')
+if ($tick -lt 0) { throw 'Missing timer tick' }
+$tickWindow = $s.Substring($tick, [Math]::Min(1600, $s.Length-$tick))
+if (-not $tickWindow.Contains('PollOnce(false)')) { throw 'The timer no longer polls' }
+if ($tickWindow.Contains('AddTask')) { throw 'The timer still posts a task; that is the path that was rejected' }
 
-# The pump, and the anchor it is installed on.
-$pump = $s.IndexOf('void FrameTick()')
-if ($pump -lt 0) { throw 'Missing per-frame pump' }
-$pumpBody = $s.Substring($pump,[Math]::Min(2600,$s.Length-$pump))
-foreach ($needle in @('ClaimPollSlot()', 'RunPollBody()', 'the pump leaves the poll to the timer')) {
- if (-not $pumpBody.Contains($needle)) { throw "Per-frame pump lacks $needle" }
+$skin = $s.IndexOf('void SkinTick()')
+if ($skin -lt 0) { throw 'Missing engine-side anchor entry point' }
+$skinWindow = $s.Substring($skin, [Math]::Min(400, $s.Length-$skin))
+if (-not $skinWindow.Contains('PollOnce(true)')) { throw 'The engine anchor does not poll with baking allowed' }
+
+$poll = $s.IndexOf('void PollOnce(bool a_allowBake)')
+if ($poll -lt 0) { throw 'Missing shared poll entry point' }
+$pollBody = $s.Substring($poll, [Math]::Min(2200, $s.Length-$poll))
+foreach ($needle in @('ClaimPollSlot()', 'RunPollBody(mainThread, mainThread || a_allowBake)', 'reentry.exchange(true')) {
+ if (-not $pollBody.Contains($needle)) { throw "Poll entry point lacks $needle" }
 }
+
+# The engine-side anchor is the skinning hook, and it has to be a real call site.
+$patches = Get-Content -Raw (Join-Path $PSScriptRoot '../src/cpp/hooking/Patches.cpp')
+if (-not $patches.Contains('SOS::MorphRefresh::SkinTick();')) { throw 'The skinning pass does not drive the poll' }
+$overrideStart = $patches.IndexOf('bool ShouldOverrideSkinning(')
+$overrideEnd = $patches.IndexOf('class EquippedArmorVisitor', $overrideStart)
+if ($overrideStart -lt 0 -or $overrideEnd -le $overrideStart) { throw 'Missing skinning entry point' }
+if (-not $patches.Substring($overrideStart, $overrideEnd-$overrideStart).Contains('SkinTick()')) { throw 'The anchor is not inside the skinning entry point' }
+
 $hooks = Get-Content -Raw (Join-Path $PSScriptRoot '../src/cpp/hooking/Hooks.cpp')
-if (-not $hooks.Contains('SOS::MorphRefresh::FrameTick')) { throw 'The anchor does not call the pump' }
-if (-not $hooks.Contains('REL::RelocationID MainUpdate(')) { throw 'The anchor lost its address library entry' }
-if (-not $hooks.Contains('FindCallsInModule("FramePump"')) { throw 'The anchor lost its call-site scan' }
+if ($hooks.Contains('FramePump') -or $hooks.Contains('FrameTick')) { throw 'The dead per-frame pump is still installed' }
 $main = Get-Content -Raw (Join-Path $PSScriptRoot '../src/cpp/main.cpp')
-if (-not $main.Contains('Hooking::ApplyFramePumpHook()')) { throw 'The pump is not installed' }
+if ($main.Contains('ApplyFramePumpHook')) { throw 'The dead per-frame pump is still installed' }
 
 $work=Join-Path $PSScriptRoot '../build/morph-thread-regression'
 New-Item -ItemType Directory -Force $work | Out-Null
@@ -48,16 +60,16 @@ std::uint32_t GetCurrentThreadId(){return mockCurrent;}
 $cpp += $f
 $cpp += @'
 int main(){
- assert(!IsGameThread());
+ assert(!OnGameThread());
  RE::Main main; RE::Main::instance=&main;
- assert(!IsGameThread());
- main.threadID=42; assert(!IsGameThread());
- mockCurrent=42; assert(IsGameThread());
- mockCurrent=43; assert(!IsGameThread());
+ assert(!OnGameThread());
+ main.threadID=42; assert(!OnGameThread());
+ mockCurrent=42; assert(OnGameThread());
+ mockCurrent=43; assert(!OnGameThread());
 }
 '@
 Set-Content (Join-Path $work 'gate.cpp') $cpp -Encoding utf8
 $vc='C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Auxiliary/Build/vcvars64.bat'
 Push-Location $work
 try { cmd /c ('call "'+$vc+'" >nul && cl /nologo /EHsc /std:c++20 /W4 /WX /UNDEBUG gate.cpp /Fe:gate.exe && gate.exe'); if($LASTEXITCODE -ne 0){throw 'Thread predicate regression failed'} } finally { Pop-Location }
-Write-Output 'MORPH_THREAD_GATE_OK: production predicate 5 cases; fallback task still rejects the wrong thread and shares the poll slot; per-frame pump installed on the Main::Update call site; not engine phase proof'
+Write-Output 'MORPH_THREAD_GATE_OK: predicate 5 cases; the poll runs wherever it is asked and is not gated on thread identity; the bake is allowed off the main thread only from the engine worn pass; the dead per-frame pump is gone'

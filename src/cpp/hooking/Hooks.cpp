@@ -24,7 +24,6 @@
 #include <xbyak/xbyak.h>
 
 #include "hooking/HookSupport.h"
-#include "MorphRefresh.h"
 #include "hooking/Patches.hpp"
 
 namespace Hooking {
@@ -526,92 +525,7 @@ namespace Hooking {
                 g_branchTrampoline->write_branch<5>(InventoryChanges_ExecuteVisitorOnWorn_Hook, code);
             }
         }// namespace RTTIPrinter
-        // The morph poll has to run on the game thread every frame. The only place
-        // guaranteed to be there is the game's own per-frame update, whose function is
-        // not in the address library - so the anchor is the call to Main::Update,
-        // found by scanning .text. The call itself is kept; the pump runs in front of
-        // it, which is why no function prologue is ever overwritten.
-        namespace FramePump {
-            // Main::Update: the per-frame update of the game loop.
-            REL::RelocationID MainUpdate(35565, 36564);
-
-            constexpr std::size_t kMaxFramePumpSites = 4;
-
-            bool Apply() {
-                if (!RequireIds("FramePump", { MainUpdate })) {
-                    return false;
-                }
-
-                const auto sites = FindCallsInModule("FramePump", MainUpdate);
-                if (sites.empty()) {
-                    LOG(warn, "FramePump: the per-frame pump is off; the morph refresh keeps using its timer.");
-                    return false;
-                }
-
-                const auto base = REL::Module::get().base();
-                std::size_t installed = 0;
-                for (const auto site : sites) {
-                    if (installed >= kMaxFramePumpSites) {
-                        break;
-                    }
-
-                    // The patched instruction is a 5-byte call, so nothing sits on the
-                    // stack: this block has to make the call itself. The four argument
-                    // registers are saved because the pump is a C++ function and
-                    // Main::Update still has to receive the original rcx.
-                    struct Code : Xbyak::CodeGenerator {
-                        Code(std::uintptr_t a_resume, std::uintptr_t a_mainUpdate) {
-                            Xbyak::Label f_Pump;
-                            Xbyak::Label f_MainUpdate;
-
-                            push(rcx);
-                            push(rdx);
-                            push(r8);
-                            push(r9);
-                            sub(rsp, 0x20);
-                            call(ptr[rip + f_Pump]);
-                            add(rsp, 0x20);
-                            pop(r9);
-                            pop(r8);
-                            pop(rdx);
-                            pop(rcx);
-
-                            sub(rsp, 0x20);
-                            call(ptr[rip + f_MainUpdate]);
-                            add(rsp, 0x20);
-
-                            jmp(ptr[rip]);
-                            dq(a_resume);
-
-                            L(f_Pump);
-                            dq(std::uintptr_t(SOS::MorphRefresh::FrameTick));
-
-                            L(f_MainUpdate);
-                            dq(a_mainUpdate);
-                        }
-                    };
-
-                    Code gen{ site + 0x5, MainUpdate.address() };
-                    if (!Install("frame pump", site, gen)) {
-                        continue;
-                    }
-                    ++installed;
-                    LOG(info, "FramePump: the morph poll runs in front of the game update (call to Main::Update at rva 0x{:X}).", site - base);
-                }
-
-                if (installed == 0) {
-                    LOG(warn, "FramePump: {} call site(s) to Main::Update were found but none accepted the trampoline; the morph refresh keeps using its timer.", sites.size());
-                    return false;
-                }
-                return true;
-            }
-        }// namespace FramePump
-
     }// namespace Detail
-
-    bool ApplyFramePumpHook() {
-        return Detail::FramePump::Apply();
-    }
 
     void ApplyPlayerSkinningHooks() {
         LOG(debug, "Installing skinning hooks for runtime {}.", REL::Module::get().version().string());

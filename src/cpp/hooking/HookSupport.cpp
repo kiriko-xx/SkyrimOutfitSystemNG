@@ -263,32 +263,6 @@ namespace Hooking
 		return 0;
 	}
 
-	std::vector<std::uintptr_t> FindCallsInModule(const char* a_hook, const REL::RelocationID& a_target)
-	{
-		if (!IdExists(a_target)) {
-			LOG(err, "{}: address library id {} is missing for runtime {}; the hook stays disabled.", a_hook, a_target.id(), REL::Module::get().version().string());
-			return {};
-		}
-
-		const auto base = REL::Module::get().base();
-		const auto target = a_target.address();
-		const auto text = TextSegment();
-		const auto sites = CallsReaching(text.address(), text.address() + text.size(), target);
-		if (sites.empty()) {
-			LOG(warn, "{}: .text holds no call to 0x{:X} (rva 0x{:X}); the hook stays disabled so the game keeps running.", a_hook, target, target - base);
-			LogModuleIdentity(a_hook);
-			return {};
-		}
-
-		for (std::size_t i = 0; i < sites.size() && i < 8; ++i) {
-			LOG(debug, "{}: call to 0x{:X} at rva 0x{:X}.", a_hook, target, sites[i] - base);
-		}
-		if (sites.size() > 8) {
-			LOG(debug, "{}: {} further call(s) to 0x{:X} not listed.", a_hook, sites.size() - 8, target);
-		}
-		return sites;
-	}
-
 	void LogSiteBytes(const char* a_hook, std::uintptr_t a_site)
 	{
 		if (!InText(a_site, 5)) {

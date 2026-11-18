@@ -9,8 +9,8 @@ $a=$s.IndexOf('if (g_api) {',$a)
 $b=$s.IndexOf('if (Settings::Get().morphProviderFirst', $a)
 $replay=$s.Substring($a,$b-$a)
 if($replay.Contains('IsMenuOpen') -or -not $replay.Contains('EnqueueBake(id, BakeReason::kProvider)')){throw 'Replay must be menu-independent'}
-$tick=$s.Substring($s.IndexOf('void Tick()'))
-$poll=$tick.IndexOf('PollOnMainThread();')
+$tick=$s.Substring($s.IndexOf('void RunPollBody('))
+$poll=$tick.IndexOf('PollOnMainThread(a_mainThread);')
 $drain=$tick.IndexOf('DrainPending();')
 if($poll -lt 0 -or $drain -le $poll -or $replay.Contains('AddTask') -or $replay.Contains('RequestBake(')){throw 'Observer must enqueue, then drain in the same accepted poll'}
 $cpp=@'

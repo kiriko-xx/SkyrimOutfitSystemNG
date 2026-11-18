@@ -84,6 +84,13 @@ namespace Hooking {
             return false;
         }
         if (!service->inner().should_override(actor->GetFormID())) return false;
+        // Engine-side anchor for the morph refresh. This runs once per displayed
+        // slot of every worn pass the engine builds - on the engine's own thread,
+        // and continuously while a body morph slider is dragged. It is throttled
+        // to one poll per 33 ms and refuses re-entry, so the cost here is a
+        // mutex; the poll under it is what makes the illusion follow the morphs
+        // without waiting for a menu to be opened.
+        SOS::MorphRefresh::SkinTick();
         return true;
     }
 

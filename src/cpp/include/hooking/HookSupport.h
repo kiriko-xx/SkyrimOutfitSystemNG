@@ -48,14 +48,6 @@ namespace Hooking
 	// site that does not match the recorded callee.
 	std::uintptr_t FindCallInFunctionOrOffset(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, std::ptrdiff_t a_legacyOffset);
 
-	// Every 5-byte call in .text that reaches a_target, in address order. For hooks
-	// whose host function is not in the address library: the engine calls Main::Update
-	// once per frame from its own loop, and that call site is the only place a
-	// per-frame hook can be placed without touching a function prologue. The walk
-	// covers the whole .text, so it runs once at install time and reports what it
-	// found instead of guessing.
-	std::vector<std::uintptr_t> FindCallsInModule(const char* a_hook, const REL::RelocationID& a_target);
-
 	// How far into a function body the call scan looks. All the hooks patch a call in
 	// the first few hundred bytes of their host function (the deepest is 0x373).
 	inline constexpr std::ptrdiff_t kBodyScanLimit = 0x800;

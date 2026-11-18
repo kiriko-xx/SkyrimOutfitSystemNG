@@ -25,18 +25,17 @@ namespace SOS::MorphRefresh
 	// Forgets every signature and pending rebuild (new game / load).
 	void Reset();
 
-	// Cheap heartbeat from the input sink. It schedules a main-thread poll at
-	// most four times per second; the poll is where the actual provider calls
-	// happen. This is the fallback: on a machine where the task queue does not
-	// hand tasks to the game thread, it spends most of its time being rejected.
+	// Cheap heartbeat from the input sink / the 11 ms timer. It polls directly on
+	// the calling thread - no SKSE task, because on the reporting machine those
+	// tasks ran on worker threads and were thrown away as "wrong thread" for
+	// whole drags. Thread identity is logged, never enforced.
 	void Tick();
 
-	// The same poll, driven from the per-frame anchor in front of the game's
-	// update. This one cannot be rejected for the wrong thread, which is what
-	// makes a body morph slider follow while it is being dragged instead of only
-	// after the drag ends. Called every frame: it throttles itself and refuses
-	// re-entry, so callers do not need to.
-	void FrameTick();
+	// The same poll, asked for from the skinning hooks - i.e. from inside the worn
+	// pass the engine runs itself, on whatever thread the engine runs it. This is
+	// the anchor that keeps the illusion following a body morph slider while it is
+	// dragged. It throttles itself and refuses re-entry, so callers need not.
+	void SkinTick();
 
 	// True while the illusion slots of this actor must be detached and rebuilt
 	// from scratch so that a fresh .tri morph target is loaded.
