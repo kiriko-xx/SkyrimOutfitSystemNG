@@ -4,7 +4,17 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-## 1.5.28 最新说明（2026-11-17）
+## 1.5.30 最新说明（2026-11-18）
+
+**验证状态（1.5.30）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning；DLL 1,939,456 B，FileVersion `1.5.30.0`，SHA256 `2d0d968953abe0c3715cf1e2e8b882b2d410d937fc30e0a8659dda451d79cfda`，`build/Release` 与 `dist` 一致。
+
+- **模块改名（重要）**：从 1.5.30 起插件文件名是 **`OutfitSystemNG.dll`**。安装前请删除旧的 `Data/SKSE/Plugins/SkyrimOutfitSystemNG.dll`，两个名字同时存在会双加载。插件内部身份不变：日志仍写 `SkyrimOutfitSystemNG.log`，Papyrus 名、翻译文件前缀、存档标识都不变，存档可继续用。
+- **修「场景里切 `_sex` 不显示、必须按一次 Tab/Z 才更新」（m06712）**：真因不是调度器坏了，而是「幻化集已切换」不等于「渲染模型已更新」——一次装备 pass 只把 `addon`/`part` 写进 biped 槽，真正被渲染的克隆几何要由后续 pass 物化。快速换装窗之所以「一按就出来」，是因为开关菜单让引擎自己连跑十几轮 pass；脚本路径（场景开始/结束）一次 pass 之后没有任何后续 pass。现在每次切换后由 `MorphRefresh::RequestOutfitPasses()` 补跑 120 / 400 / 900 ms 三次装备 pass，日志会看到 `MorphRefresh: repeating the equip pass for <FormID> (follow-up N of 3), because one pass alone does not materialise the illusion.`
+- **统一入口**：`Features::RefreshActor()` 末尾调用上面的补跑；`SceneOutfits` 的两处场景切换改为走 `Features::RefreshActor(player)`，与「点套装列表」共用同一条序列。新增的切换入口也必须走它。
+- **未改动**：幻化钩子（`Hooks.cpp` 注入壳、站点选择）、贴件语义、槽清理策略、`.tri` 目标附加逻辑全部保持 1.5.29 状态；1.5.25 已实测确认的基础幻化与空幻化不受影响。
+- **未实机验证项**：三次 follow-up 是否能覆盖所有套装的物化时机；某件装备若 900 ms 后仍未物化，可再加一档延迟（结构无需改动）。
+
+## 1.5.28 说明（历史）
 
 **验证状态（1.5.28）**：尚未实机验证，不能声称已实机修好。生产函数路径回归 6/6 通过；最终 Release BUILD_EXIT=0，DLL 版本/哈希与交付副本一致。包内逐文件清单见 SHA256SUMS.txt；最终 zip 大小、哈希及解包复核记录见包外 VERSIONS.md 与同名 .zip.sha256，避免自引用。
 
@@ -149,6 +159,8 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 42. **1.5.28**：修正 1.5.27 的双 meshes 前缀探测与 BODYTRI 误计数，分离实际 addon/sex/1P/3P 缓存，保留有效 biped 回调、仅 selfWrite 防重入，provider 前采几何签名，自动刷新改为 RequestBake（不摘穿）。尚未实机；详见顶部最新说明。
 
 43. **1.5.29**：修"场景结束后幻化件残留、要再按一次键才刷新"（m05502）。1.5.25 起把所有"离开幻化集的槽"都只打 `left to the engine`，但当引擎那边没有真甲可重建（场景套装、非穿戴幻化件）时，我们上一套的克隆就没人拆——场景结束回普通幻化会停在旧外观。现在：①`Patches.cpp` 用 `AppliedState { displayMask; ownedMask; }` 记录"哪些槽里的克隆是我们放的、且没有真实穿戴物打底"，离开幻化集时只在"我们放的 + 无人真实穿戴 + 非皮肤槽 + 槽里仍有 `partClone`"四条同时成立才拆（`Custom: detached N illusion clone(s) whose slot left the display set …`），其余仍交回引擎；②`MorphRefresh.cpp` 主线程新增幻化几何对账（`IllusionMissingSlots` → `refreshArmorFor` 重建，300 ms 退避、最多 3 次），对账只认"幻化集说有、biped 槽里没有"，不认任何框架名字。基础幻化钩子与 1.5.25 的槽策略未动。尚未实机验证。
+
+44. **1.5.30**：修「OStim/SexLab 场景里切 `_sex` 套装不显示，必须按一次 Tab/Z 才更新」与「场景结束回普通幻化不刷新」（m06712），并按 m06781 把模块文件名改为 **`OutfitSystemNG.dll`**。真因不是调度器坏了，而是「幻化集已切换」不等于「渲染模型已更新」：一次装备 pass 只把 `addon`/`part` 写进 biped 槽，真正被渲染的克隆几何由紧随其后的 pass 物化 —— 菜单路径之所以灵，是开关菜单让引擎连跑十几轮 pass；脚本路径一次 pass 之后就没有后续 pass 了。修法：①`MorphRefresh::RequestOutfitPasses(actor)` 在每次切换后补跑 120 / 400 / 900 ms 三次装备 pass（主线程 `DrainOutfitPasses()`，幻化总开关关闭时不跑）；②`Features::RefreshActor()` 末尾统一调用它，`SceneOutfits` 两处改走 `Features::RefreshActor(player)`，与「点列表」共用同一条序列；③模块改名为 `OutfitSystemNG.dll`，插件身份（`Plugin::NAME`、日志文件名 `SkyrimOutfitSystemNG.log`、Papyrus 翻译前缀、存档标识）一律不变，**旧名 `SkyrimOutfitSystemNG.dll` 必须删除**（否则双加载）。基础幻化钩子、贴件语义、槽清理策略均未改动。尚未实机验证。
 
 ## 常见问题
 

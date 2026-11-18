@@ -45,6 +45,14 @@ namespace SOS::Features
 		// Faster HDT-SMP reset), which the menu and the quick picker used to
 		// miss when they only poked the AI process directly.
 		::OutfitSystem::refreshArmorFor(a_actor);
+
+		// One equip pass fills the biped entries, but the clones the game draws
+		// are materialised by the passes that follow it. That is why a scripted
+		// switch (a scene, a hotkey) used to show nothing until the player
+		// opened the outfit list, while picking from that list appeared at once:
+		// opening and closing it pokes the equip manager many times. Ask for the
+		// same bounded series of follow-up passes so every path behaves alike.
+		MorphRefresh::RequestOutfitPasses(a_actor);
 	}
 
 	std::vector<std::string> OutfitNames(bool a_favoritesOnly)

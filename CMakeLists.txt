@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(SkyrimOutfitSystemNG VERSION 1.5.29 LANGUAGES CXX)
+project(SkyrimOutfitSystemNG VERSION 1.5.30 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,10 +71,22 @@ target_compile_definitions(SkyrimOutfitSystemNG PRIVATE
 )
 
 # ---------------------------------------------------------------------------
+# Module file name
+# ---------------------------------------------------------------------------
+# SKSE hands interface exchange broadcasts only to the plugins that were already
+# registered when the sender registered its own listener, so an early module name
+# matters for reaching skee64 (see docs/RACEMENU_V4_AUDIT.md). The plugin identity
+# stays SkyrimOutfitSystemNG: the log file name, the Papyrus translation prefix and
+# the save facing name are built from Plugin::NAME and must not move. Only the file
+# on disk changes, and the old name has to stay out of Data/SKSE/Plugins so the
+# game never loads two copies.
+set_target_properties(SkyrimOutfitSystemNG PROPERTIES OUTPUT_NAME "OutfitSystemNG")
+
+# ---------------------------------------------------------------------------
 # Deploy
 # ---------------------------------------------------------------------------
 add_custom_command(TARGET SkyrimOutfitSystemNG POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_SOURCE_DIR}/dist/SKSE/Plugins"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:SkyrimOutfitSystemNG>" "${CMAKE_CURRENT_SOURCE_DIR}/dist/SKSE/Plugins/SkyrimOutfitSystemNG.dll"
-    COMMENT "Deploying SkyrimOutfitSystemNG.dll to dist/SKSE/Plugins"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:SkyrimOutfitSystemNG>" "${CMAKE_CURRENT_SOURCE_DIR}/dist/SKSE/Plugins/OutfitSystemNG.dll"
+    COMMENT "Deploying OutfitSystemNG.dll to dist/SKSE/Plugins"
 )

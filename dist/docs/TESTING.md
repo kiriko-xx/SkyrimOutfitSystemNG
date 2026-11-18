@@ -731,6 +731,22 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 - **E1 崩溃回归**：按 m05502 A 组顺序（场景中不改装 → 结束场景）连续 10 次，不应崩溃。若崩溃，提交 `crash-*.log` + 同一次会话的 `SkyrimOutfitSystemNG.log`；重点看崩溃前最后一次 `detached` / `rebuilding` 行的时间戳与崩溃时间是否同一帧。
 - **F1 空幻化回归**：切到空套装 → 应显示裸体（1.5.25 已验收行为），不得出现任何幻化件残留，也不得出现空模型。
 
+## 3.42 1.5.30 切换套装后自动补跑装备 pass（m06712）+ 模块改名（m06781）
+
+前置：准备 A = `_sex` 场景套装（覆盖槽与普通套装不同）、B = 普通套装、C = 空套装；OStim 或 SexLab 至少一个；日志开 Verbose（debug 才看得到 `repeating the equip pass`）。
+
+- **A1 场景开始不必弹窗**（本版重点）：触发场景 → 自动切到 A → **全程不按 Tab/Z**，角色身上应在 1 秒内显示 A 的幻化件。日志：三行 `MorphRefresh: repeating the equip pass for <FormID> (follow-up 1 of 3)` / `2 of 3` / `3 of 3`，每行紧跟 `OutfitSystem.cpp … Armor Refresh for <name>` 与 `Custom: attaching N outfit-only piece(s) …`。
+- **A2 不能再出现「按一次窗才出来」**：A1 之后按 Tab/Z 开窗再关闭，外观**不应**变化（说明第一次就已经对了）。若仍要按键才更新，把该段日志发回：重点看三次 follow-up 是否都在场景切换后 1 秒内发生、以及当时 `Illusion display is active` 是否成立。
+- **B1 场景结束自动回滚**：结束场景 → 自动切回 B → 不按键，模型一次刷新内变成 B；A 独有槽（如 CK 槽 34）不得残留（与 1.5.29 的 `detached` / `left to the engine` 判据叠加看）。
+- **B2 三次 follow-up 是有限次**：日志里每个切换点最多 3 行 follow-up，**不得**出现刷屏或随时间无限重复；`follow-up 4 of 3` 之类不存在。
+- **B3 幻化关闭时不补跑**：把 `Hooks` 那侧的幻化总开关打到关闭态（例如临时换回只有一半钩子的构建）→ 日志出现 `Illusion display is off for this session` → 此后不应有任何 `repeating the equip pass`（`DrainOutfitPasses()` 首行即返回）。
+- **C1 菜单路径不重复加倍**：点快速换装窗切套装 20 次 —— 每次仍只有 3 行 follow-up（`Features::RefreshActor()` 是唯一入口，不得出现同一次切换两套 follow-up 交错）。
+- **C2 无递归**：日志中 `Armor Refresh` 的间隔应稳定在 ~120/400/900 ms 三档；若出现「Armor Refresh → repeating → Armor Refresh → repeating …」无限链，说明有入口把 `refreshArmorFor` 又带回了 `Features::RefreshActor`，属回归。
+- **D1 加载稳定**：装新 DLL（`OutfitSystemNG.dll`，**旧名 `SkyrimOutfitSystemNG.dll` 必须删除**）→ 日志仍写入 `SkyrimOutfitSystemNG.log`（插件身份不变），Papyrus 翻译文件名不变，存档可继续用。
+- **D2 双加载反例**：故意把旧名与新名同时放进 `Data/SKSE/Plugins` → 应能观察到两份插件实例（日志重复初始化 / 菜单重复），这是**错误配置**；按 D1 删掉旧名后恢复正常。
+- **E1 性能**：1000+ 套装列表下按 C1 反复切 20 次，帧率与 1.5.29 相比无可感知下降；三次 follow-up 不得在菜单打开时造成输入卡顿。
+- **F1 基础幻化回归（1.5.25 验收项）**：普通换装 / 空幻化 C / 身体槽（CK 槽 32）均正常，不得出现空模型或残留件；`Custom: detached` 与 `lost the illusion in slot mask` 不应因本版而新增。
+
 ## 4. 性能协议（1000+ 套装）
 
 用 Papyrus 生成 1000 个套装后测：

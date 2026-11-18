@@ -1,5 +1,18 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.30] - 2026-11-18
+
+### 修复：场景里切 `_sex` 套装不显示、必须弹一次窗（m06712）；模块改名 `OutfitSystemNG.dll`（m06781）
+
+- **症状**：OStim 场景开始时 `_sex` 套装不生效（角色还是裸的或上一套），场景结束回普通幻化也不更新；按一次 Tab/Z 打开快速换装窗口后立刻正常。用户建议「直接把点套装列表切换的逻辑拿过来用」。
+- **证据**（`SkyrimOutfitSystemNG.log`，1,767,358 字节 / 18,260 行，v1-5-29-0）：17:51:50.339 一次 `Armor Refresh` + `Custom: attaching 5 outfit-only piece(s) … (mask 0x00002096)`，17:51:50.357 场景开始；之后 16.5 秒零钩子调用。按秒统计 `CustomOne`：17:51:50 = 2，而用户按下 Tab 的 17:52:06/07 = 2 + 28，之后 17:52:11 = 2 —— 引擎在那一秒连跑 14 轮 pass。
+- **真因**：「幻化集已切换」不等于「渲染模型已更新」。一次装备 pass 只把 `addon`/`part` 写进 biped 槽，真正被渲染的克隆几何由紧随其后的 pass 物化；菜单路径之所以灵，是开关菜单让引擎连跑十几轮 pass。脚本路径（`SceneOutfits`）一次 pass 之后没有任何后续 pass。1.5.29 的 `IllusionMissingSlots` 只看 `partClone` 是否为空，在这个时序下永远判不出来（一次 pass 后为空属正常中间态，全日志 `clone 1` 0 条）。
+- **修法一（有限次随访 pass，`MorphRefresh.cpp`）**：新增 `RequestOutfitPasses(actor)` → 登记 3 次随访（120 / 400 / 900 ms）；主线程 `PollOnMainThread()` 中的 `DrainOutfitPasses()` 到期调 `OutfitSystem::refreshArmorFor()`，并打 debug `repeating the equip pass for <FormID> (follow-up N of 3), because one pass alone does not materialise the illusion.`；幻化总开关关闭时直接返回。
+- **修法二（统一入口）**：`Features::RefreshActor()` 末尾调用 `RequestOutfitPasses()`；`SceneOutfits` 的两处 `OutfitSystem::refreshArmorFor(player)` 改为 `Features::RefreshActor(player)`，于是「点列表」与「脚本切换」走同一条序列。
+- **修法三（模块改名）**：`CMakeLists.txt` 设 `OUTPUT_NAME "OutfitSystemNG"`、部署到 `dist/SKSE/Plugins/OutfitSystemNG.dll`；旧名不再发布并在仓库内删除。插件身份（`Plugin::NAME`、日志文件名 `SkyrimOutfitSystemNG.log`、Papyrus 翻译前缀、存档标识）一律不变。用户安装时必须删除旧的 `SkyrimOutfitSystemNG.dll`，否则双加载。
+- **不动的东西**：`Hooks.cpp` 钩子、注入壳代码、贴件语义、槽清理策略均未改；1.5.25 已实测确认的基础幻化与空幻化不受影响。
+- **未验证**：本机没有 Skyrim。「不弹窗也能显示」与 120/400/900 ms 三档延迟未实机验证；若某套件仍需更多 pass，可再加一档而不改结构。
+
 ## [1.5.29] - 2026-11-18
 
 ### 修复：场景结束后幻化件残留，"要再按一次键才刷新"（m05502）

@@ -1,6 +1,14 @@
 # 构建说明（BUILD）
 
-## 1.5.29 构建与交付复核状态
+## 1.5.30 构建与交付复核状态
+
+**验证状态（1.5.30）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`）。最终 DLL `dist/SKSE/Plugins/OutfitSystemNG.dll` = `build/Release/OutfitSystemNG.dll` = `1,939,456` 字节，FileVersion/ProductVersion `1.5.30.0`，SHA256 `2d0d968953abe0c3715cf1e2e8b882b2d410d937fc30e0a8659dda451d79cfda`。
+
+- **模块改名（1.5.30 起）**：`CMakeLists.txt` 用 `set_target_properties(... OUTPUT_NAME "OutfitSystemNG")`，POST_BUILD 部署到 `dist/SKSE/Plugins/OutfitSystemNG.dll`；工程名与 `buildtask_msbuild.bat` 编的 `build\SkyrimOutfitSystemNG.vcxproj` **不变**。`dist` 与 `build/Release` 里旧名 `SkyrimOutfitSystemNG.dll` 已删除，避免双加载。插件内部身份不变：日志仍写 `SkyrimOutfitSystemNG.log`，翻译文件前缀、Papyrus 名、存档标识都不动。
+- **配置注意**：`buildtask_msbuild.bat` 内部的 `ZERO_CHECK` 会重跑 cmake configure（自带完整环境，vcpkg 走缓存），因此 `build/SkyrimOutfitSystemNG.vcxproj` 由 `CMakeLists.txt` 重新生成；**不要**在裸 `run_code` 里单独跑 `cmake -S . -B build`（本机 `vswhere` 返回空 → `Unable to find a valid Visual Studio instance` / `No CMAKE_CXX_COMPILER could be found`，且会改写 `CMakeCache.txt`）。
+- 安装包 `SkyrimOutfitSystemNG-1.5.30.zip`（包名沿用，模块文件名已改）：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；最终 zip 大小与哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256`。
+
+## 1.5.29 构建与交付复核状态（历史）
 
 **验证状态（1.5.29）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_29.log`）。最终 DLL `1,936,384` 字节，FileVersion/ProductVersion `1.5.29.0`，SHA256 `4f0bcae1e5926763c3d9592ab01812c8f7b968d6e8c7ef37d0ac002c3cb84c92`，`build/Release` 与 `dist` 副本一致。源码守卫测试：`pwsh` 7 下 `tests/*.ps1` 12/14 通过（2 条失效断言是既有问题）。安装包 `SkyrimOutfitSystemNG-1.5.29.zip`：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；最终 zip 大小与哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256`。
 

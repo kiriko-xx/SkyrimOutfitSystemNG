@@ -20,7 +20,9 @@
 | 1.5.27 | 2026-11-17 | 1,085,341 | `5979290d01fb375c1d2a46040f4d799d21fa9db3cde2e528a365853d3569cfe9` | **实机仍不跟随**；`.tri` 路径改问引擎已解析的 `biped->objects[slot].addon`（不再用 `GetArmorAddon(race)`），四个候选名全试，`.nif` 自带目标也计入，克隆件武装后不再 `CycleIllusion`；DLL 1,875,456 B / `22eb7794…` |
 
 | 1.5.28 | 2026-11-17 | 1,126,775 | `4894dcbc71c6a1cf445c87c301d13804aeb47791ed32d0ffc3ee0a1a41613b35` | **已被 1.5.29 取代**；实机反馈 m05502（场景结束残留 + 一次渲染期崩溃）后不再作为候选；修双 meshes 前缀、校验 BODYTRI 可读资源、ARMA/sex/1P/3P 缓存、回调过滤与 provider 基线；自动刷新不摘幻化；DLL 1,878,016 B / `fe5c79b5b1f1e1fc3153870dd6b61cf293081805cab407ad3ea41ed1621bb553` / 1.5.28.0；31 条目解包哈希31/31、清单30/30 |
-| 1.5.29 | 2026-11-18 | 1,161,851 | `e581230e2fc8b75e9d1f161d59cf0dfed8852b4ea37db2b1676b934f121f6521` | **当前候选，待实机**；修场景结束后的幻化残留（窄清我们自己的克隆）与主线程幻化几何对账（`IllusionMissingSlots` → `refreshArmorFor`）；基础幻化钩子未动；DLL 1,936,384 B / `4f0bcae1e5926763c3d9592ab01812c8f7b968d6e8c7ef37d0ac002c3cb84c92` / 1.5.29.0 |
+| 1.5.29 | 2026-11-18 | 1,161,851 | `e581230e2fc8b75e9d1f161d59cf0dfed8852b4ea37db2b1676b934f121f6521` | **已被 1.5.30 取代**；修场景结束后的幻化残留（窄清我们自己的克隆）与主线程幻化几何对账（`IllusionMissingSlots` → `refreshArmorFor`）；基础幻化钩子未动；DLL 1,936,384 B / `4f0bcae1e5926763c3d9592ab01812c8f7b968d6e8c7ef37d0ac002c3cb84c92` / 1.5.29.0 |
+
+| 1.5.30 | 2026-11-18 | 1,170,589 | `8d0db7dc23a6f1609b7206d0ab9ba6194f2a4d2c9d2a7e71f89dede1cda9989b` | **当前候选，待实机**；场景切换补跑有限次装备 pass（120/400/900 ms，`Features::RefreshActor` 统一入口）修「切 `_sex` 必须弹一次窗」；模块改名为 `OutfitSystemNG.dll`（内部插件名不变，旧名必须删除防双加载）；DLL 1,939,456 B / `2d0d968953abe0c3715cf1e2e8b882b2d410d937fc30e0a8659dda451d79cfda` / 1.5.30.0 |
 
 各包旁的 `.zip.sha256` 内容为「哈希 + 两个空格 + 包名」+ CRLF，可直接 `certutil -hashfile` 复核。
 
@@ -37,7 +39,8 @@
 | 1.5.27 | git tag `v1.5.27` |
 | 1.5.28 | git tag `v1.5.28` |
 | 1.5.29 | git tag `v1.5.29` |
-| 当前 dist | 1.5.29 的候选交付（31 文件 / 2,658,394 B；DLL 1,936,384 B / 1.5.29.0 / `4f0bcae1…`），SHA256SUMS.txt 30 行复核 30/30；游戏内行为尚未验证 |
+| 1.5.30 | git tag `v1.5.30` |
+| 当前 dist | 1.5.30 的候选交付（31 文件；`SKSE/Plugins/OutfitSystemNG.dll` 1,939,456 B / 1.5.30.0 / `2d0d9689…`；旧名 `SkyrimOutfitSystemNG.dll` 已删除），SHA256SUMS.txt 30 行复核 30/30；游戏内行为尚未验证 |
 
 1.5.22 的交付目录存档在 `build/dist_1_5_22/`（build/ 不入库）。
 
@@ -47,3 +50,24 @@
 - 每次定稿一个交付版本：先把 `dist/` 收尾，再 `git tag vX.Y.Z`（tag 打在当时那份源码上），随后打包 zip 并更新本文件。
 - 回退 = 直接装对应版本的 zip；**不要**在没有源码快照的版本之间做“源码回退”，只能以二进制为准。
 - 回退 1.5.17 之后，如果要从源码继续 1.5.17 的行为基线，需要以 1.5.22 的源码为底做行为级裁剪（1.5.18 起的改动集中在 MorphRefresh / HookSupport / Hooks / Patches，以及 09:46–10:41 那批菜单与 i18n 改动），并且必须逐项对照本文件里的版本说明。
+
+## 回退与合并（用户 m06712 要求：随时可回退、可合并有用版本）
+
+**回退（推荐、唯一安全途径）**：装对应版本的成品包即可 —— 仓库根有 1.5.17–1.5.30 的 `SkyrimOutfitSystemNG-<版本>.zip`，每个包旁有 `.zip.sha256`（内容为 `hash + 两空格 + 文件名`）。想完全干净地回退：删掉 `Data/SKSE/Plugins/` 下的 `OutfitSystemNG.dll` **和** `SkyrimOutfitSystemNG.dll`，再解压目标包覆盖。
+
+**源码级回退**：`git tag` 逐版对应（见上表）。`git checkout v1.5.29` 可回到那一版源码，`git diff v1.5.29 v1.5.30 -- src/` 可看单版差异。注意 1.5.17–1.5.21 **没有源码快照**，只能以二进制回退。
+
+**合并有用版本**（例如把 1.5.29 的残留克隆窄清搬到更新的分支上）：
+
+```
+git switch -c merge/from-1.5.29 v1.5.30
+git cherry-pick -n v1.5.29          # -n 不自动提交，便于取舍
+git diff --cached -- src/            # 逐个 hunk 看，只要想要的部分
+git commit -m "merge: bring 1.5.29 stale-clone narrow clear forward"
+```
+
+跨多个版本时用 `git diff v1.5.27 v1.5.29 -- src/cpp/` 先看区间差异，再按文件挑（`git checkout v1.5.29 -- src/cpp/hooking/Patches.cpp` 会把整份文件换成那一版，慎用）。
+
+**合并时绝对不能动的底线**：①`Hooks.cpp` 的注入壳与站点选择（`FindCallInFunctionOrOffset`）不要跨版本混用，1.5.17 与 1.5.22+ 的契约不同；②不得恢复任何 `ClearBipedPart` / `ClearSlots` 对 `BipedAnim::objects[bit]` 的清空（1.5.24 的 bug）；③`.tri` 目标必须无条件贴，不得再以拿到 skee 接口为前提（1.5.20–1.5.25 的 bug）；④模块名字段只能出现一个 DLL（`OutfitSystemNG.dll`）。
+
+**每次发布固定顺序**（避免台账自引用死循环）：改 `version.h`/`CMakeLists` → 构建 → 收尾 `dist/` → 重算 `SHA256SUMS.txt` → 打包并记录 zip 大小/哈希到本文件 → `git add -A` + `git commit` + `git tag vX.Y.Z`。不要在 commit 消息或本文件里写自身提交哈希。

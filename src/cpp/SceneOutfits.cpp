@@ -1,6 +1,7 @@
 #include "SceneOutfits.h"
 #include "GameState.h"
 
+#include "NGFeatures.h"
 #include "OutfitSystem.h"
 #include "core/OutfitService.h"
 #include "core/Settings.h"
@@ -99,7 +100,7 @@ namespace SOS::SceneOutfits
 				auto service = outfit_service_get_mut_singleton_ptr();
 				service->inner().set_outfit_c(candidate.c_str(), player->GetFormID());
 			}
-			OutfitSystem::refreshArmorFor(player);
+			Features::RefreshActor(player);
 			SKSE::log::debug("SceneOutfits: {} scene started; '{}' -> '{}'.", a_source, current, candidate);
 		}
 
@@ -133,7 +134,7 @@ namespace SOS::SceneOutfits
 				auto service = outfit_service_get_mut_singleton_ptr();
 				service->inner().set_outfit_c(previous.c_str(), player->GetFormID());
 			}
-			OutfitSystem::refreshArmorFor(player);
+			Features::RefreshActor(player);
 			SKSE::log::debug("SceneOutfits: {} scene ended; '{}' restored.", a_source, previous);
 		}
 
