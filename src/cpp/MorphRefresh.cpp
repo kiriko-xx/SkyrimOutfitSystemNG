@@ -337,8 +337,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		slif::IQueryInterface1* g_slif{ nullptr };
 		std::atomic<bool> g_obodyReady{ false };
 		bool g_installed{ false };
-		bool g_pollPending{ false };
 		std::chrono::steady_clock::time_point g_lastPoll{};
+		std::chrono::steady_clock::time_point g_lastPost{};
 		std::chrono::steady_clock::time_point g_lastProviderRetry{};
 		int g_providerRetries{ 0 };
 
@@ -1484,11 +1484,14 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		void DrainRaceMenuSlider()
 		{
 			if (!g_raceMenuSliderPending.exchange(false, std::memory_order_acq_rel)) { return; }
-			auto* ui = RE::UI::GetSingleton();
-			if (g_api && ui && ui->IsMenuOpen("RaceSex Menu")) {
-				if (auto* player = RE::PlayerCharacter::GetSingleton(); player && player->Is3DLoaded()) {
-					RequestBake(player->GetFormID(), BakeReason::kProvider);
-				}
+			// No menu name is checked here any more. The event is the signal, and a
+			// menu-name gate is exactly what kept this path from ever firing on the
+			// reporting machine: the slider was dragged from Screen Archer Menu, so
+			// "RaceSex Menu" was never open and the whole branch was dead. Any menu
+			// that drives RaceMenu's morph values reaches this now.
+			if (!g_api) { return; }
+			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && player->Is3DLoaded()) {
+				RequestBake(player->GetFormID(), BakeReason::kProvider);
 			}
 		}
 
@@ -2152,6 +2155,7 @@ void RetryProviders()
 		g_triPathCache.clear();
 		g_raceMenuSliderPending.store(false, std::memory_order_release);
 		g_lastPoll = {};
+		g_lastPost = {};
 		g_lastProviderRetry = {};
 		g_providerRetries = 0;
 		{
@@ -2160,6 +2164,101 @@ void RetryProviders()
 			g_lastReattach = {};
 		}
 	}
+
+		// One poll per kPollInterval at most, whichever source asks for it: the
+		// per-frame pump or the fallback timer task. The stamp is taken here, not in
+		// the caller, so a task that finds the window closed costs nothing and the
+		// timer cannot spin at 90 posts a second the way it did while its tasks were
+		// being rejected for the wrong thread.
+		bool ClaimPollSlot()
+		{
+			std::lock_guard lock(g_mutex);
+			const auto now = std::chrono::steady_clock::now();
+			if (now - g_lastPoll < kPollInterval) {
+				return false;
+			}
+			g_lastPoll = now;
+			return true;
+		}
+
+		// Everything a poll does, minus the thread and interval decisions. Game thread
+		// only.
+		void RunPollBody()
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player || !player->Is3DLoaded()) {
+				return;
+			}
+			bool retryProviders = false;
+			{
+				std::lock_guard lock(g_mutex);
+				const auto now = std::chrono::steady_clock::now();
+				const auto interval = g_providerRetries < 8 ? kProviderRetryInterval : kProviderRetrySlowInterval;
+				if ((!g_api || !g_obody || !g_slif) && now - g_lastProviderRetry >= interval) {
+					g_lastProviderRetry = now;
+					if (g_providerRetries < 1000) {
+						++g_providerRetries;
+					}
+					retryProviders = true;
+				}
+			}
+			const auto coveredMask = CoveredSlotMask(player->GetFormID());
+			HairTintDiagnostics::SampleOnMainThread(coveredMask);
+			HairTintRecovery::Drain(player, coveredMask);
+			if (retryProviders) {
+				RetryProviders();
+			}
+			DrainRaceMenuSlider();
+			PollOnMainThread();
+			// Consume observer requests on this poll instead of a second pool task.
+			DrainPending();
+		}
+
+		// The morph poll, driven by the game's own per-frame update. The SKSE task
+		// queue is not a game-thread queue: on the reporting machine roughly half of
+		// every second was rejected as "wrong thread", in runs of up to 33 s, and those
+		// runs sat exactly on the minutes a body morph slider was being dragged - the
+		// illusion then stayed at the old shape for as long as the drag lasted. This
+		// entry point cannot be rejected: it runs inside Main::Update, and it refuses
+		// re-entry because the poll itself may run the skinning hooks.
+		void FrameTick()
+		{
+			if (!g_installed || GameState::IsLoading()) {
+				return;
+			}
+			static std::atomic<bool> reentry{ false };
+			if (reentry.exchange(true, std::memory_order_acq_rel)) {
+				return;
+			}
+			struct Release
+			{
+				~Release() { reentry.store(false, std::memory_order_release); }
+			} release;
+			{
+				const auto* main = RE::Main::GetSingleton();
+				const auto expected = main ? main->threadID : 0;
+				const auto current = GetCurrentThreadId();
+				static std::atomic<bool> loggedThread{ false };
+				if (expected != 0 && current != expected) {
+					// The anchor is not where it should be; fall back to the timer instead
+					// of touching the biped from the wrong thread.
+					if (!loggedThread.exchange(true, std::memory_order_relaxed)) {
+						SKSE::log::warn("MorphRefresh: the frame pump runs on thread {} but the game thread is {}; the pump leaves the poll to the timer.", current, expected);
+					}
+					return;
+				}
+				if (!loggedThread.exchange(true, std::memory_order_relaxed)) {
+					SKSE::log::info("MorphRefresh: the morph poll runs on the frame pump, thread {} = game thread {}; it no longer waits for a task.", current, expected);
+				}
+			}
+			if (!ClaimPollSlot()) {
+				return;
+			}
+			g_pollTrace.accepted.fetch_add(1, std::memory_order_relaxed);
+			RunPollBody();
+			g_pollTrace.completed.fetch_add(1, std::memory_order_relaxed);
+			g_pollTrace.Report();
+		}
 
 	void Tick()
 	{
@@ -2172,22 +2271,18 @@ void RetryProviders()
 		}
 		g_uiQueueProbe.Tick(*tasks);
 		{
+			// Posting is throttled separately from accepting: a rejected task used to
+			// leave g_lastPoll untouched, so the 11 ms timer queued 60-80 tasks a
+			// second that all threw themselves away.
 			std::lock_guard lock(g_mutex);
-			if (g_pollPending || std::chrono::steady_clock::now() - g_lastPoll < kPollInterval) {
+			const auto now = std::chrono::steady_clock::now();
+			if (now - g_lastPost < kPollInterval) {
 				return;
 			}
-			g_pollPending = true;
+			g_lastPost = now;
 		}
 		try {
 			tasks->AddTask([]() {
-				struct ReleasePoll
-				{
-					~ReleasePoll()
-					{
-						std::lock_guard lock(g_mutex);
-						g_pollPending = false;
-					}
-				} releasePoll;
 				if (GameState::IsLoading()) {
 					return;
 				}
@@ -2196,44 +2291,20 @@ void RetryProviders()
 					g_pollTrace.Report();
 					return;
 				}
-				auto* player = RE::PlayerCharacter::GetSingleton();
-				if (!player || !player->Is3DLoaded()) {
+				if (!ClaimPollSlot()) {
+					// The frame pump already polled inside this interval.
 					return;
 				}
 				g_uiQueueProbe.gameThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
 				g_pollTrace.accepted.fetch_add(1, std::memory_order_relaxed);
-				bool retryProviders = false;
-				{
-					std::lock_guard lock(g_mutex);
-					const auto now = std::chrono::steady_clock::now();
-					g_lastPoll = now;
-					const auto interval = g_providerRetries < 8 ? kProviderRetryInterval : kProviderRetrySlowInterval;
-					if ((!g_api || !g_obody || !g_slif) && now - g_lastProviderRetry >= interval) {
-						g_lastProviderRetry = now;
-						if (g_providerRetries < 1000) {
-							++g_providerRetries;
-						}
-						retryProviders = true;
-					}
-				}
-				const auto coveredMask = CoveredSlotMask(player->GetFormID());
-				HairTintDiagnostics::SampleOnMainThread(coveredMask);
-				HairTintRecovery::Drain(player, coveredMask);
-				if (retryProviders) {
-					RetryProviders();
-				}
-				DrainRaceMenuSlider();
-				PollOnMainThread();
-				// Consume observer requests on this accepted task, not a second pool task.
-				DrainPending();
+				RunPollBody();
 				g_pollTrace.completed.fetch_add(1, std::memory_order_relaxed);
 				g_pollTrace.Report();
 			});
 			g_pollTrace.posted.fetch_add(1, std::memory_order_relaxed);
 			g_pollTrace.Report();
 		} catch (...) {
-			std::lock_guard lock(g_mutex);
-			g_pollPending = false;
+			// A failed task allocation must not unwind into the calling sink.
 		}
 	}
 

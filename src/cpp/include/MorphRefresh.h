@@ -27,8 +27,16 @@ namespace SOS::MorphRefresh
 
 	// Cheap heartbeat from the input sink. It schedules a main-thread poll at
 	// most four times per second; the poll is where the actual provider calls
-	// happen.
+	// happen. This is the fallback: on a machine where the task queue does not
+	// hand tasks to the game thread, it spends most of its time being rejected.
 	void Tick();
+
+	// The same poll, driven from the per-frame anchor in front of the game's
+	// update. This one cannot be rejected for the wrong thread, which is what
+	// makes a body morph slider follow while it is being dragged instead of only
+	// after the drag ends. Called every frame: it throttles itself and refuses
+	// re-entry, so callers do not need to.
+	void FrameTick();
 
 	// True while the illusion slots of this actor must be detached and rebuilt
 	// from scratch so that a fresh .tri morph target is loaded.

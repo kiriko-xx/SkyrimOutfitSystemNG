@@ -134,6 +134,10 @@ void ApplySkinningHooks() {
     }
 
     Hooking::ApplyPlayerSkinningHooks();
+    // The morph poll runs in front of the game update, so a morph change reaches
+    // the illusion in the frame it happens. It reuses the trampoline above and
+    // simply stays off when no anchor can be taken.
+    Hooking::ApplyFramePumpHook();
     LOG(info, "Skinning hooks applied.");
 }
 
