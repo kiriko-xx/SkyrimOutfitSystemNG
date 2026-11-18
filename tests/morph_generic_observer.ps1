@@ -8,7 +8,11 @@ $a=$s.IndexOf('EnsureProvidersForUse();', $b)
 $a=$s.IndexOf('if (g_api) {',$a)
 $b=$s.IndexOf('if (Settings::Get().morphProviderFirst', $a)
 $replay=$s.Substring($a,$b-$a)
-if($replay.Contains('IsMenuOpen') -or -not $replay.Contains('RequestBake(id, BakeReason::kProvider)')){throw 'Replay must be menu-independent'}
+if($replay.Contains('IsMenuOpen') -or -not $replay.Contains('EnqueueBake(id, BakeReason::kProvider)')){throw 'Replay must be menu-independent'}
+$tick=$s.Substring($s.IndexOf('void Tick()'))
+$poll=$tick.IndexOf('PollOnMainThread();')
+$drain=$tick.IndexOf('DrainPending();')
+if($poll -lt 0 -or $drain -le $poll -or $replay.Contains('AddTask') -or $replay.Contains('RequestBake(')){throw 'Observer must enqueue, then drain in the same accepted poll'}
 $cpp=@'
 #include <cassert>
 #include <cstdint>
@@ -17,7 +21,7 @@ void* g_api=nullptr;
 namespace SKSE::log { template<class... T> void debug(T...){} }
 enum class BakeReason{kProvider};
 unsigned requests=0;
-void RequestBake(unsigned id,BakeReason){assert(id==0x14);++requests;}
+void EnqueueBake(unsigned id,BakeReason){assert(id==0x14);++requests;}
 bool changedValue(State& state,std::uint64_t providerSignature){bool changed=false;
 if(false){}
 '@

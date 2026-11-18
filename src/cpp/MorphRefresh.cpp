@@ -1354,13 +1354,16 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 		}
 
+		void EnqueueBake(RE::FormID a_id, BakeReason a_reason)
+		{
+			std::lock_guard lock(morphPush::g_queueMutex);
+			morphPush::g_pending.insert(a_id);
+			morphPush::g_reason = a_reason;
+		}
+
 		void RequestBake(RE::FormID a_id, BakeReason a_reason)
 		{
-			{
-				std::lock_guard lock(morphPush::g_queueMutex);
-				morphPush::g_pending.insert(a_id);
-				morphPush::g_reason = a_reason;
-			}
+			EnqueueBake(a_id, a_reason);
 			if (morphPush::g_taskQueued.exchange(true)) {
 				return;
 			}
@@ -1680,8 +1683,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				// A missing target is repaired in place, never by exposing real gear.
 				EnsureProvidersForUse();
 				if (g_api) {
-					SKSE::log::debug("MorphRefresh: queueing explicit clone replay for {:08X} from the generic observer (no menu gate).", id);
-					RequestBake(id, BakeReason::kProvider);
+					SKSE::log::debug("MorphRefresh: queueing explicit clone replay for {:08X} from the generic observer for this game-thread poll (no menu gate).", id);
+					EnqueueBake(id, BakeReason::kProvider);
 					continue;
 				}
 				if (Settings::Get().morphProviderFirst && ProviderCanMorph()) {
@@ -2083,8 +2086,9 @@ void RetryProviders()
 					RetryProviders();
 				}
 				DrainRaceMenuSlider();
-				DrainPending();
 				PollOnMainThread();
+				// Consume observer requests on this accepted task, not a second pool task.
+				DrainPending();
 			});
 		} catch (...) {
 			std::lock_guard lock(g_mutex);
