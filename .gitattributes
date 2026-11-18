@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# 交付目录必须与成品包逐字节一致：不做任何换行转换
+dist/** -text
