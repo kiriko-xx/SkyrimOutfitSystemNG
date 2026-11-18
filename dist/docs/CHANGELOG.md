@@ -1,5 +1,18 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.29] - 2026-11-18
+
+### 修复：场景结束后幻化件残留，"要再按一次键才刷新"（m05502）
+
+- **症状 A**：OStim 场景中 `_sex` 幻化没显示（看到裸体），场景结束切回普通幻化时**闪退**。**症状 B**：场景中按 Tab/Z 打开快换窗后 `_sex` 生效，结束场景切回普通幻化**没有**闪退，但模型仍是旧的一套，需要**再按一次** Tab/Z 才正确。
+- **证据**（`SkyrimOutfitSystemNG-TAB.log`）：`_sex` 套装掩码 `0x00002096`（bit 0,1,2,4,7,13），普通套装 `0x00002186`（bit 1,2,7,8,13）；**差集 bit 4（CK 槽 34）只在 `_sex` 里**。6143 贴完 `_sex` 后到 8961 那次 `Armor Refresh` 之间，该槽的幻化克隆没有任何人拆，而引擎也没有可重建的真甲 —— 于是视觉一直停在 `_sex` 的那件。
+- **真因**：1.5.25 为了修「身体槽永久空模型」，把所有「离开幻化集的槽」一律只打 `Custom: N slot(s) left the display set …; left to the engine`，没有区分两种截然不同的情况：槽里是**引擎自己维护的真实条目**（交回引擎正确），还是槽里是**我们上一套贴上去的克隆**（交回引擎就没人拆了）。
+- **修法一（只拆自己的残留克隆，`Patches.cpp`）**：`g_appliedMasks`（uint32）升级为 `AppliedState { displayMask; ownedMask; }`，`ownedMask` 只记录「贴进去时没有真实穿戴物打底」的槽。离开幻化集的槽只在四条同时成立时 `ClearBipedPart` 并打 `Custom: detached N illusion clone(s) whose slot left the display set (mask 0x…) for …`（debug）：①`previousOwned & flag`（上一轮是我们放的）；②`wornBySlot[bit] == nullptr`（无人真实穿戴）；③`(skinMask & flag) == 0`（不是 `Actor::GetSkin()` 的皮肤/身体槽）；④`anim && anim->objects[bit].partClone`（槽里确实还挂着克隆）。不满足仍打 `left to the engine`。
+- **修法二（幻化几何对账，`MorphRefresh.cpp`）**：新增只读的 `CustomSkinPlayer::IllusionMissingSlots(actor)`（按已记录 `displayMask` 查 `objects[bit].partClone`，要求 `anim->root` 非空）与 `ReattachDroppedIllusion()`；主线程任务发现缺失就用**已经验收的** `::OutfitSystem::refreshArmorFor(actor)` 重建，同角色 300 ms 退避、最多 3 次，超限 warn `still holds no illusion geometry … after 3 rebuilds; it is left alone from now on.` 并放手。这段代码里没有任何 OStim / SexLab / SAM / OBody / RaceMenu / SLIF 名字（守卫测试会拦）。
+- **不动的东西**：`Hooks.cpp`、注入壳代码、站点解析、贴件语义、1.5.25 的「不清空引擎槽」策略全部未改；基础幻化行为与 1.5.25 一致。
+- **新增测试**：`tests/skinning_stale_slots.ps1`（`ClearBipedPart` 在 `Patches.cpp` 只出现一次且四个条件齐全、`IllusionMissingSlots` 只读、重建函数不含框架名）。
+- **未验证**：本机没有 Skyrim。同批日志里的 `EXCEPTION_ACCESS_VIOLATION` at `SkyrimSE.exe+12BACD7`（`test byte ptr [rax+0xF4], 0x01`，RAX=0，发生在 `hdtSMP64` → 渲染/剔除阶段）**与本插件的关系没有证据**，本版不加任何"防崩"逻辑，只记录分析与判据（`docs/CRASH_221544_AUDIT.md`）。
+
 ## [1.5.28] - 2026-11-17
 
 ### 资源路径、回调与无摘穿刷新修正（待实机）

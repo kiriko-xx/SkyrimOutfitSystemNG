@@ -1,6 +1,19 @@
 # 交付说明（DELIVERY）
 
-## 1.5.28 最新交付准备（2026-11-17）
+## 1.5.29 最新交付准备（2026-11-18）
+
+**验证状态（1.5.29）**：**尚未实机验证**，不能声称已修好。静态侧：Release `BUILD_EXIT=0`（0 error / 0 warning）；`tests/*.ps1` 共 14 条源码守卫 12 条通过，2 条失效断言是既有问题（`hair_tint_read_only.ps1` 的锚点 `tasks->AddTask([retryProviders]()` 在 HEAD 已被重构掉、`skse_listener_replay.ps1` 硬绑旧插件索引 139/132），与本次改动无关；新增 `tests/skinning_stale_slots.ps1` 通过。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 1,936,384 字节；`4f0bcae1e5926763c3d9592ab01812c8f7b968d6e8c7ef37d0ac002c3cb84c92`；`1.5.29.0`（build/Release 与 dist 一致） |
+| 安装包与复核记录 | SkyrimOutfitSystemNG-1.5.29.zip：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；最终 zip 大小/哈希只写包外 VERSIONS.md 与同名 .zip.sha256，包内不自引用 |
+
+- **只改两处**：①离开幻化集的残留克隆改成「只拆我们自己的」窄清（1.5.25 的交回引擎在引擎没有真甲可重建时会留下上一套的幻化件）；②主线程新增幻化几何对账，发现幻化槽没有几何就用已验收的 `OutfitSystem::refreshArmorFor` 重建。基础幻化钩子（`Hooks.cpp`）、贴件语义、槽位清理策略一律未动，1.5.25 已实测正常的行为不受影响。
+- **框架无关**：对账与重建里没有任何 OStim / SexLab / SAM / OBody / RaceMenu / SLIF 名字，只依赖「幻化集里有这个槽、但 biped 槽里没有 `partClone`」这一自身状态；守卫测试会拦住后续改动引入框架分支。
+- **崩溃未实证**：同批日志里的 `EXCEPTION_ACCESS_VIOLATION`（SkyrimSE.exe+12BACD7，读 `[rax+0xF4]`，RAX=0，发生在 `hdtSMP64` → 渲染/剔除阶段）与本插件的关系**没有证据**，本版不加任何「防崩」逻辑，只记录分析与判据，见 `docs/CRASH_221544_AUDIT.md`。
+
+## 1.5.28 交付准备（历史，已被 1.5.29 取代）
 
 **验证状态（1.5.28）**：尚未实机验证，不能声称已实机修好。生产函数路径回归 6/6 通过；最终 Release BUILD_EXIT=0，DLL 版本/哈希与交付副本一致。包内逐文件清单见 SHA256SUMS.txt；最终 zip 大小、哈希及解包复核记录见包外 VERSIONS.md 与同名 .zip.sha256，避免自引用。
 
@@ -1078,13 +1091,62 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 
 本机没有 Skyrim。判定：幻化一套带 `.tri` 的护甲，开 Verbose，切一次套装后看 `uses .tri <file>` 与该角色第一次的 `carries a .tri morph target on N of M cloned slot(s)` —— `N` 应等于幻化覆盖的槽数（例：0x00010086 的 4 个槽）。然后拖 Body Morphs 滑块 / 换 OBody 预设 / SLIF 膨胀，幻化件应实时跟着变，且日志里不再出现 `taking the illusion off for one engine pass`。若 `N` 仍为 0，把 `has no .tri beside it … Probed: …` 那几行发回，那里会直接列出试过的四个文件名与该件真实模型路径。
 
+## 4.57 1.5.29：场景结束后幻化件残留与「要再按一次键才刷新」
+
+### 症状（m05502，两组 7f5a2ce 日志）
+
+- A 组：OStim 场景中 `_sex` 幻化没显示（看到裸体），场景结束切回普通幻化时闪退。
+- B 组：场景中按 Tab/Z 打开快速换装窗后 `_sex` 幻化生效；场景结束切回普通幻化**没有**闪退，但模型仍是旧的一套，需要**再按一次** Tab/Z 让窗口重刷才正确。
+
+### 日志证据
+
+- `SkyrimOutfitSystemNG-TAB.log`：6112 打开快选窗 → 6119 `Armor Refresh for JueLunV6` → 6143 `Custom: attaching 5 outfit-only piece(s) of 5 displayed (mask 0x00002096, outfit revision true …)` → 6198 `OStim started … _sex` → 之后 **16.7–34.9 秒之间零条 CustomOne**（18 秒里没有任何蒙皮 pass，这段时间用户看到的自然是裸体或旧外观）→ 34.989 起跨线程贴件风暴 → 8961 又一次 `Armor Refresh` → 9041/9136 贴普通套装 `mask 0x00002186` → 9149 `SceneOutfits.cpp:137 … ended; restored`。
+- 两套套装覆盖的槽不同：`_sex` 是 `0x00002096`（bit 0,1,2,4,7,13），普通套装是 `0x00002186`（bit 1,2,7,8,13）。**bit 4（CK 槽 34）只在 `_sex` 里有** —— 退出场景后，这个槽的幻化克隆没有任何人拆，而引擎也不会为它重建真甲，于是视觉一直停在 `_sex` 的那件，直到下一次 Armor Refresh。
+
+### 真因
+
+1.5.25 起「离开幻化集的槽一律只打 `left to the engine`、绝不清空」，这是为了避免再出现 1.5.24 的身体空模型（m02242）。但当时没有区分两种情况：**槽里原本是引擎的真实条目**（交回引擎正确），还是**槽里是我们上一套幻化的克隆**（交回引擎就没人拆了）。后一种情况在「引擎那边没有真甲可重建」（场景套装、幻化件本来就不是穿戴物）时就会残留。
+
+### 修法（两条，都在主线程，均不引入框架分支）
+
+1. **只拆自己的残留克隆**（`Patches.cpp`）。`g_appliedMasks`（uint32）升级为 `AppliedState { displayMask; ownedMask; }`，其中 `ownedMask` 记录「当我们贴进该槽的东西里，有多少件是**没有真实穿戴物打底**的」（即 `applySet` 中 `wornBySlot[bit] == nullptr` 的槽）。离开幻化集的槽只有在**四个条件同时成立**时才拆：
+   - `previousOwned & flag`：这个克隆是我们上一轮自己放的；
+   - `wornBySlot[bit] == nullptr`：现在这一轮没有真实穿戴物占用该槽；
+   - `(skinMask & flag) == 0`：不是 `Actor::GetSkin()` 提供的皮肤/身体槽；
+   - `anim && anim->objects[bit].partClone`：槽里确实还挂着克隆。
+
+   满足则 `ClearBipedPart` 并打 `Custom: detached N illusion clone(s) whose slot left the display set (mask 0x…, …) for <FormID>.`；不满足仍打原来的 `left to the engine`。
+
+2. **幻化几何对账**（`MorphRefresh.cpp` 主线程任务）。新增 `CustomSkinPlayer::IllusionMissingSlots(actor)`：只读，按已记录的 `displayMask` 检查每个幻化槽的 `objects[bit].partClone`（要求 `anim->root` 非空，避免在 3D 未就绪时误判），返回缺失槽掩码。`Tick` 的主线程任务里（在已有的玩家分支后面）若发现缺失，就调 `ReattachDroppedIllusion()` → 用**已经验收的** `::OutfitSystem::refreshArmorFor(actor)` 重建（同一条路径场景套装结束恢复也在用），并对同一角色做 300 ms 退避、最多 3 次；三次仍缺失就 warn 一次 `still holds no illusion geometry … after 3 rebuilds` 并放手，不再空转。
+
+这条对账不针对任何 mod：OStim/SexLab 场景、OBody 换预设、手动换装、读档后只要出现「幻化集说该有、biped 槽里没有」，都会被它修一次。
+
+### 新的日志
+
+| 日志 | 含义 |
+| --- | --- |
+| `Custom: detached N illusion clone(s) whose slot left the display set (mask 0x…) for <FormID>.` | 窄清生效：这些槽里是我们上一套的克隆，已拆掉（debug） |
+| `Custom: N slot(s) left the display set (mask 0x…); left to the engine for <FormID>.` | 这些槽交回引擎（槽里原本是引擎的真实条目，或没有克隆可拆） |
+| `MorphRefresh: <FormID> lost the illusion in slot mask 0x…; rebuilding the actor's equipment.` | 对账发现幻化槽空了，正在用普通刷新重建（debug，同角色 300 ms 退避） |
+| `MorphRefresh: <FormID> still holds no illusion geometry in slot mask 0x… after 3 rebuilds; it is left alone from now on.` | 三次重建仍空，多半是 `ApplyArmorAddon` 拒绝或没有可用的 ARMA（warn，每角色一次） |
+
+### 兼容性
+
+- 不改 `Hooks.cpp`、不改注入壳代码、不加任何字节偏移：1.5.23–1.5.25 的钩子行为与 1.5.25 已实测正常的基础幻化完全不变。
+- 拆克隆只发生在「我们放的 + 无真实穿戴物 + 非皮肤槽」的槽上，引擎自己的条目一律不碰（1.5.24/1.5.25 的教训写成守卫测试 `tests/skinning_stale_slots.ps1`，`ClearBipedPart` 在 `Patches.cpp` 里只允许出现一次，且前后必须是这四个条件）。
+- 对账与重建里不出现任何第三方 mod 名字（守卫测试会拦），因此换框架、升级框架都不影响。
+
+### 未验证
+
+本机没有 Skyrim。判定方式：复现 m05502 的 B 组 —— OStim 场景中用 Tab 切到 `_sex`，结束场景看是否**不需要再按键**就换回普通幻化；日志里应看到 `detached …` 或 `lost the illusion in slot mask … rebuilding` 之一，**不应**再需要第二次 Tab。A 组的崩溃（`EXCEPTION_ACCESS_VIOLATION` 于渲染阶段读空指针）与本版的关系仍未实证；若重装后仍崩，请连同 `crash-*.log` 与同一次会话的 `SkyrimOutfitSystemNG.log` 一起发回，本版新增的 `detached` / `rebuilding` 行可以判断是否是本插件在错误时机改了 biped。
+
 ## 5. 静态验证
 
 
 | 项 | 结果 |
 | --- | --- |
-| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.27 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_27.log`） |
-| 版本资源 | `FileVersion = 1.5.27.0` / `ProductVersion = 1.5.27.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
+| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.29 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_29.log`） |
+| 版本资源 | `FileVersion = 1.5.29.0` / `ProductVersion = 1.5.29.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
 | 导入表 | 仅 KERNEL32 / USER32 / ole32 / VERSION / SHELL32 |
 | 延迟导入 | 目录 RVA = 0、size = 0（无延迟导入项） |
 | 导出 | SKSEPlugin_Load / SKSEPlugin_Query / SKSEPlugin_Version 均存在 |
@@ -1097,6 +1159,7 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 | 1.5.22 关键字符串 | `the function at rva` / `does not call ` / `hooking the first one` / `the deferred pass` / `CustomSkinPlayer.CustomOne` / `the skinning routine of this game build has no call site` 均可检索；`FileVersion = 1.5.22.0`、`ProductVersion = 1.5.22.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,859,584 字节，sha256 `ca0d3aad…76f94158`；导入依赖未新增（只用已有 KERNEL32 / SKSE 接口与 `SKSE::GetTaskInterface()`） |
 | 1.5.24 关键字符串 | `outfit-only piece(s) of` / `slot {:02} clone ` / `left the display set (mask ` / `ApplyArmorAddon refused` / `does not point at a biped model of` / `1.5.24` 均可检索；`FileVersion = 1.5.24.0`、`ProductVersion = 1.5.24.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,866,752 字节，sha256 `2530C1E5FDE6CF22E87C011BAC0D078F22EF7C53407771DCD6CCC47F71A0204B`；导入依赖未新增 |
 | 1.5.26 关键字符串 | `carries a .tri morph target on` / `no interface needed` / `stay armed` / `.tri morph targets are attached to every illusion clone` / `only adds the immediate re-morph` / `has no BodyMorph interface;` / `1.5.26` 均可检索；1.5.20 的 `.tri morph target support` 已从 DLL 中消失；`MorphShapeCallback` / `Obody_ApplyMorph` / `BODYTRI` 仍在；`FileVersion = 1.5.26.0`、`ProductVersion = 1.5.26.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,868,288 字节，sha256 `7ca36b0d…e54fecf`；导入依赖未新增 |
+| 1.5.29 关键字符串 | `detached ` / `illusion clone(s) whose slot left the display set` / `lost the illusion in slot mask` / `after 3 rebuilds` / `rebuilding the actor` / `left to the engine` 可检索；`ClearBipedPart` 与 `IllusionMissingSlots` 作为内部符号不出现在字符串表（前者只剩一处调用）；FileVersion 1.5.29.0、DLL 1,936,384 B / `4f0bcae1…`、导入依赖未新增 |
 | 1.5.27 关键字符串 | `uses .tri ` / `has no .tri beside it` / `Probed: ` / `the armour addon the engine attached` / `has no armour addon yet` / `leaving the clones to the next morph pass instead of cycling` / `but the illusion carries .tri targets` / `every illusion clone whose armour model ships a .tri` / `1.5.27` 均可检索；1.5.26 的 `.tri morph targets are attached to every illusion clone` 已从 DLL 中消失；`carries a .tri morph target on` / `stay armed` / `BODYTRI` / `MorphShapeCallback` 仍在；`FileVersion = 1.5.27.0`、`ProductVersion = 1.5.27.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,875,456 字节，sha256 `22eb7794…a91af178f`；导入依赖未新增 |
 | 1.5.25 关键字符串 | `left to the engine` / `slot {:02} item {:08X} addon {:08X} part {} clone {}` / `1.5.25` 均可检索；1.5.24 的 `cleared for` 与 `ClearBipedPart` / `ClearSlots` 已从 DLL 中消失；`FileVersion = 1.5.25.0`、`ProductVersion = 1.5.25.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,866,240 字节，sha256 `ae797d9d…efc3936b5`；导入依赖未新增 |
 | 1.5.23 关键字符串 | `the site this hook has used since 1.0.0` / `legacy site rva` / `is not a 5-byte call either` / `Illusion display is active: the player skinning hooks are installed.` / `1.5.23` 均可检索；`FileVersion = 1.5.23.0`、`ProductVersion = 1.5.23.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,863,168 字节，sha256 `be282e7a…7569991df`；导入依赖未新增 |
@@ -1173,6 +1236,8 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 47. **1.5.25 身体不再变空模型（对应 m02242）**：装 1.5.25 后，切套装 / 在物品栏脱掉 32 槽护甲 / 切到空幻化套装时，日志里应只出现 `Custom: N slot(s) left the display set (mask 0x…); left to the engine for …`，**不应再有 `cleared for …`**；身体（CK 槽 32，掩码 `0x00000004`）必须始终是原版皮肤/身体。开 Verbose logging 还能看到每个贴过的槽 `Custom: … slot NN item … addon … part … clone …`：`addon` 非 0、`part true` 才算真正建出几何。
 49. **1.5.27 `.tri` 目标终于贴上了（对应 m02992）**：装 1.5.27 后开 Verbose，切一次幻化套装，日志里每个幻化件应出现一条 `MorphRefresh: <armor> slot model <path> (from the armour addon the engine attached) uses .tri <file>.`；随后该角色第一次的 `carries a .tri morph target on N of M cloned slot(s)` 里 **N 应等于幻化覆盖的槽数**（0x00010086 那套是 4）。若出现 `has no .tri beside it … Probed: a, b, c, d.`，说明该件四个候选名都不存在 —— 把这行发回（里面有真实模型路径），那是这套衣服本身没有 `.tri`，不是代码问题。拖 Body Morphs 滑块 / 换 OBody 预设 / SLIF 膨胀时幻化件应实时跟随，并且**不应再出现** `taking the illusion off for one engine pass`。见 §4.56 与 TESTING §3.40。
 
+50. **1.5.29 场景结束后的残留幻化与「再按一次键」（对应 m05502）**：复现 B 组 —— OStim 场景中用 Tab/Z 打开快速换装窗切到 `_sex` 套装，结束场景回普通幻化后**不要**再按键，看模型是否已经变回普通套装。日志判定：应出现 `Custom: detached N illusion clone(s) whose slot left the display set (mask 0x…)`（1.5.29 新增）或 `MorphRefresh: … lost the illusion in slot mask 0x…; rebuilding the actor's equipment.`（debug），随后是普通套装的 `attaching N outfit-only piece(s)`；**不应**再需要第二次 Tab。若三次重建后仍看到 `still holds no illusion geometry … after 3 rebuilds`，把该行连同前 40 行发回（多半是件数/ARMA 问题，不是残留）。A 组的崩溃（`EXCEPTION_ACCESS_VIOLATION` 在渲染/剔除阶段读 `[rax+0xF4]`）仍与本插件关系未证，若重装后仍崩，请把 `crash-*.log` 与同一次会话的 `SkyrimOutfitSystemNG.log` 一起发回。见 §4.57 与 TESTING §3.41。
+
 ## 7. 已知限制
 - SMP 重置依赖 Faster HDT-SMP 的 Papyrus 静态函数 `DynamicHDT.ResetPhysics`；没装 FSMP 时开关无效但不报错。
 - SexLab / OStim 场景套装只对玩家生效（事件不带参与者列表；OStim 的 NPC 子线程不处理）。
@@ -1209,6 +1274,8 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 - 1.5.26 的蒙皮网格几何探测未实机验证：`rawVertexData` 是 GPU 上传前的绑定姿势顶点，理论上动画不影响；若某些驱动/ENB 组合下该缓冲被清空，探测会退化成「读不到数据」（返回 0，跳过该形状），不影响贴件与 `.tri` 跟随。
 - 1.5.27 的 `.tri` 目标推导未实机验证：模型路径改问 `biped->objects[i].addon`（引擎解析结果），候选名扩到四个。若某套幻化件的 `.tri` 目录/名字完全不符合这四个候选（例如 `.tri` 与 `.nif` 不同目录、或叫 `body_1_morph.tri`），该件仍不会跟随，日志里是 `has no .tri beside it … Probed: …`（每个护甲/性别一次）。另外 `BODYTRI` 的 value 必须是引擎堆内存（插件静态 CRT），沿用 1.5.20 的实现。
 
+- 1.5.29 的「残留克隆窄清 + 幻化几何对账」未实机验证，两条判据都基于源码推理：①拆克隆的前提是 `ownedMask` 只记录「贴进去时没有真实穿戴物打底」的槽，若某套幻化的件恰好与真实穿戴件同槽（引擎通道先贴真甲、我们再覆盖），该槽不会被计入 `ownedMask`，退出时不会拆 —— 表现是仍残留旧件（下一轮的 `attaching` 会覆盖回来，但若两套件数不同就会看到旧的那件）；②对账依赖 `BipedAnim::objects[bit].partClone` 非空来判断「幻化在不在」，若引擎在某些情况下保留 `partClone` 但几何已失效（顶点缓冲被清），对账不会触发。两种情况的日志分别是「有 `left to the engine` 但没有 `detached`」与「完全没有对账行」，可据此区分。
+
 ## 8. 排查速查
 
 | 日志 | 含义 / 处置 |
@@ -1232,6 +1299,9 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 | `Custom: ApplyArmorAddon refused …` | 引擎拒绝为这件建 addon，该槽会空着（5 秒节流） |
 | `Custom: N slot(s) left the display set (mask 0x…); left to the engine for …` | 1.5.25 起：这些槽不再由幻化接管，原样交回引擎（不再清空；1.5.24 的 `cleared for …` 已删除，更早的 `restored N real piece(s)` 也已删除） |
 | `Custom: … slot NN item … addon … part … clone …` | 贴件后的槽状态（debug）：`addon 0` = ARMA 没解析出来；`part true` = 几何已建；`clone 0x0` 本身不算失败证据 |
+| `Custom: detached N illusion clone(s) whose slot left the display set (mask 0x…) for …` | 1.5.29 起：这些槽里是我们上一套的幻化克隆、且没有真实穿戴物打底，已拆掉（debug） |
+| `MorphRefresh: … lost the illusion in slot mask 0x…; rebuilding the actor's equipment.` | 1.5.29 起：主线程对账发现幻化槽里没有几何，用普通装备刷新重建（debug，同角色 300 ms 退避、最多 3 次） |
+| `MorphRefresh: … still holds no illusion geometry in slot mask 0x… after 3 rebuilds; it is left alone from now on.` | 三次重建仍空，本版不再尝试；多半是该件 `ApplyArmorAddon` 被拒或无可用 ARMA（warn，每角色一次） |
 | `Custom: the weight model 0x… does not point at a biped model of …` | `ModelBiped` 校验没通过（模型指针不是该 actor 的两套 biped 之一），该次不清理遗留槽，只打一次 |
 | `Illusion display is active: the player skinning hooks are installed.` | 1.5.23 起唯一的“幻化可用”判定行：藏真甲与贴件两个钩子都装上了 |
 | `address library id N is missing` | 该运行时缺 ID，对应钩子被跳过；查 Hooks.cpp 的 ID 对 |
@@ -1319,6 +1389,7 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 - 游戏版本升级：只改 `src/cpp/hooking/Hooks.cpp` 里各 `REL::RelocationID(seID, aeID)` 的两个 ID（宿主与目标函数），站点由 `FindCallInFunction` 自动重扫，**不要再加任何字节偏移**。唯一例外是 `CustomSkinPlayer`：它走 `FindCallInFunctionOrOffset`，扫不到时才回退到 1.0.0 起的历史站点（SE `+0x81` / AE `+0x1EF`，1.5.17 在 1.5.97 上实测可用）；换运行时如果这行 warn 变成 error，说明连历史站点也不是 `E8`，此时才需要按真实反汇编重新定位。
 - `.tri` 跟随**不得**以「拿到 skee 接口」为前提：`BakeIllusion()` 只在重放那一小段用 `g_api`，贴 `BODYTRI` 必须无条件执行（1.5.26 的教训；1.5.20–1.5.25 就是因为门禁把整个机制关掉了）。
 - `.tri` 目标的模型路径**必须**用 `biped->objects[slot].addon`（引擎已解析的 ARMA）取，不要再用 `TESObjectARMO::GetArmorAddon(race)` 当主来源 —— 后者在自定义种族 / 未列种族 / 默认种族回退时返回 null，1.5.20–1.5.26 因此一个 `BODYTRI` 都没贴上（1.5.27）。
+- 幻化槽「交回引擎」与「拆掉自己的克隆」是两件不同的事（1.5.29 的教训）：1.5.25 为了不再把身体槽清空，把所有离开幻化集的槽都只打 `left to the engine`，结果引擎那边没有真甲可重建时（场景套装、非穿戴件）旧克隆永久残留，用户表现为「要再按一次键才刷新」。今后新增任何「交回引擎」的分支，都必须同时回答「这个槽里是不是我们自己放的东西」——用 `AppliedState::ownedMask` 这类记录，而不是靠猜。
 - 新增 Papyrus 函数：`OutfitSystem.cpp` 注册 + `src/papyrus/skyrimoutfitsystemnativefuncs.psc` 声明 + 重新编译 pex 入包 + `docs/PAPYRUS_API.md` 表格。
 - **兼容第三方 mod 一律走数据契约**：优先找对方“已经对外的结果”（阵营、全局变量、Papyrus getter、JSON 配置），不要去 hook 对方函数或写它的内存。这样对方升级不换契约就仍然兼容。
 - 新增 Papyrus 脚本时记得同步 dist/Scripts：漏一个 pex 就会让整类原生函数失效（1.0.1 的教训）。

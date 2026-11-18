@@ -4,7 +4,9 @@
 #include "HairTintRecovery.h"
 
 #include "NGFeatures.h"
+#include "OutfitSystem.h"
 #include "bindings.h"
+#include "hooking/Patches.hpp"
 
 #include "core/Settings.h"
 
@@ -339,6 +341,22 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		std::chrono::steady_clock::time_point g_lastPoll{};
 		std::chrono::steady_clock::time_point g_lastProviderRetry{};
 		int g_providerRetries{ 0 };
+
+		// An illusion the engine threw away without a skinning pass leaves nothing to
+		// re-attach from, so the actor keeps rendering the old gear (or none) until
+		// something else triggers an equip refresh. One entry per actor, with a small
+		// retry budget: a slot whose armour addon is refused can never hold a clone and
+		// must not rebuild the actor three times a second forever.
+		struct ReattachState
+		{
+			std::uint32_t missing{ 0 };
+			int tries{ 0 };
+			std::chrono::steady_clock::time_point due{};
+		};
+		std::mutex g_reattachMutex;
+		std::unordered_map<RE::FormID, ReattachState> g_reattach;
+		std::chrono::steady_clock::time_point g_lastReattach{};
+		constexpr auto kReattachInterval = std::chrono::milliseconds(300);
 
 		struct PollTrace
 		{
@@ -1529,6 +1547,38 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		// own the clones followed and nothing else is needed; if they stand still
 		// the clone is not tracked by the provider and the cycle (the only path
 		// that reloads a .tri target) takes over.
+		// Rebuilds the actor's equipment when the illusion is gone from the biped. This
+		// is the same equip refresh a menu-triggered outfit change uses, so nothing here
+		// is specific to one framework: any code that empties the biped behind our back
+		// gets the display set back within a tick or two.
+		void ReattachDroppedIllusion(RE::Actor* a_actor, std::uint32_t a_missing, std::chrono::steady_clock::time_point a_now)
+		{
+			const auto id = a_actor->GetFormID();
+			{
+				std::lock_guard lock(g_reattachMutex);
+				if (g_reattach.size() > 256) g_reattach.clear();
+				auto& state = g_reattach.try_emplace(id).first->second;
+				if (state.missing != a_missing) {
+					state.missing = a_missing;
+					state.tries = 0;
+					state.due = {};
+				}
+				if (a_now < state.due) return;
+				if (state.tries > 3) return;
+				if (state.tries == 3) {
+					++state.tries;
+					SKSE::log::warn("MorphRefresh: {:08X} still holds no illusion geometry in slot mask 0x{:08X} after 3 rebuilds; it is left alone from now on. Report this line together with the log.", id, a_missing);
+					return;
+				}
+				if (a_now - g_lastReattach < kReattachInterval) return;
+				++state.tries;
+				state.due = a_now + std::chrono::milliseconds(1500);
+				g_lastReattach = a_now;
+			}
+			SKSE::log::debug("MorphRefresh: {:08X} lost the illusion in slot mask 0x{:08X}; rebuilding the actor's equipment.", id, a_missing);
+			::OutfitSystem::refreshArmorFor(a_actor);
+		}
+
 		void VerifyProviderPass()
 		{
 			const auto now = std::chrono::steady_clock::now();
@@ -1652,6 +1702,16 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 
 				if (id == 0x14) {
 					g_pollTrace.samples.fetch_add(1, std::memory_order_relaxed);
+				}
+				// A scene framework that strips the actor edits the biped without any
+				// pass this plugin can hook, and then the illusion stays gone until the
+				// player opens a menu. One field read per displayed slot tells whether
+				// that happened; the rebuild goes through the ordinary equip refresh.
+				if (Hooking::IllusionDisplayEnabled()) {
+					const auto missing = Hooking::CustomSkinPlayer::IllusionMissingSlots(actor);
+					if (missing != 0) {
+						ReattachDroppedIllusion(actor, missing, now);
+					}
 				}
 				bool anyProvider = false;
 				const auto providerSignature = ComputeProviderSignature(actor, &anyProvider);
@@ -2094,6 +2154,11 @@ void RetryProviders()
 		g_lastPoll = {};
 		g_lastProviderRetry = {};
 		g_providerRetries = 0;
+		{
+			std::lock_guard lock(g_reattachMutex);
+			g_reattach.clear();
+			g_lastReattach = {};
+		}
 	}
 
 	void Tick()

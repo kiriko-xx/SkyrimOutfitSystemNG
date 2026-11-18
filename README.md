@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.28**（修复 `.tri` 路径重复 `meshes` 前缀，校验 BODYTRI 类型/路径/资源，区分实际 ARMA 与第一/第三人称；纠正回调过滤与 SKSE 2.0.20 早注册订阅解释，自动 morph 刷新不再摘幻化。保持 1.5.25 已实测正常的基础幻化；本次实时形变仍待实机验证，不以资源计数代表成功。版本、哈希和回退见 [VERSIONS.md](VERSIONS.md)）
+- 当前版本：**1.5.29**（修 m05502 的两条实机症状：OStim/SexLab 场景结束后幻化件残留、要再按一次键才刷新 —— 把「离开幻化集的槽一律交回引擎」改成「只拆我们自己放的、且没有真实穿戴物打底的克隆」，并在主线程加了幻化几何对账（`IllusionMissingSlots` → `refreshArmorFor` 重建，300 ms 退避、最多 3 次）。基础幻化钩子与 1.5.25 的槽策略未动；崩溃（渲染阶段读空指针）与本插件的关系仍无证据。本次尚未实机验证。版本、哈希和回退见 [VERSIONS.md](VERSIONS.md)）
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 

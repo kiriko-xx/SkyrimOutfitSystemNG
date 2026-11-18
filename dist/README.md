@@ -148,6 +148,8 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 
 42. **1.5.28**：修正 1.5.27 的双 meshes 前缀探测与 BODYTRI 误计数，分离实际 addon/sex/1P/3P 缓存，保留有效 biped 回调、仅 selfWrite 防重入，provider 前采几何签名，自动刷新改为 RequestBake（不摘穿）。尚未实机；详见顶部最新说明。
 
+43. **1.5.29**：修"场景结束后幻化件残留、要再按一次键才刷新"（m05502）。1.5.25 起把所有"离开幻化集的槽"都只打 `left to the engine`，但当引擎那边没有真甲可重建（场景套装、非穿戴幻化件）时，我们上一套的克隆就没人拆——场景结束回普通幻化会停在旧外观。现在：①`Patches.cpp` 用 `AppliedState { displayMask; ownedMask; }` 记录"哪些槽里的克隆是我们放的、且没有真实穿戴物打底"，离开幻化集时只在"我们放的 + 无人真实穿戴 + 非皮肤槽 + 槽里仍有 `partClone`"四条同时成立才拆（`Custom: detached N illusion clone(s) whose slot left the display set …`），其余仍交回引擎；②`MorphRefresh.cpp` 主线程新增幻化几何对账（`IllusionMissingSlots` → `refreshArmorFor` 重建，300 ms 退避、最多 3 次），对账只认"幻化集说有、biped 槽里没有"，不认任何框架名字。基础幻化钩子与 1.5.25 的槽策略未动。尚未实机验证。
+
 ## 常见问题
 
 **施放 “Change Outfit” 法术没反应？** 先确认 Scripts 目录里有 SkyrimOutfitSystemNativeFuncs.pex（1.0.1 及更早漏了它，见 docs/CHANGELOG.md）。缺这个文件时 Papyrus.0.log 会出现 “Cannot open store for class “SkyrimOutfitSystemNativeFuncs””。另外快速选择窗口需要 SKSE Menu Framework；没装时法术会弹 HUD 提示而不是静默失败。

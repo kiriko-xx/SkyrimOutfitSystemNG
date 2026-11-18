@@ -301,22 +301,42 @@ namespace Hooking {
             return true;
         }
 
-        // Slots the outfit occupied the last time Custom ran for this weight model.
-        // Only used for the log line: a slot that drops out of the display set
-        // (policy changed to X, piece removed, outfit switched) is left alone on
-        // purpose, because the next skinning pass rebuilds it from the real gear or
-        // from the skin.
+        // What one pass put into a weight model. displayMask is what the outfit shows;
+        // ownedMask is the subset of slots whose piece is not genuinely worn, i.e. the
+        // only slots that can be holding a clone this plugin created. Everything else
+        // in the biped belongs to the engine and must never be touched.
+        struct AppliedState
+        {
+            std::uint32_t displayMask{ 0 };
+            std::uint32_t ownedMask{ 0 };
+        };
         std::mutex g_appliedMaskMutex;
-        std::unordered_map<std::uintptr_t, std::uint32_t> g_appliedMasks;
+        std::unordered_map<std::uintptr_t, AppliedState> g_appliedStates;
+        // The last display mask of every actor, for the main-thread check that notices
+        // when the engine threw the illusion away without a pass this plugin saw.
+        std::unordered_map<RE::FormID, std::uint32_t> g_actorDisplayMask;
 
-        std::uint32_t TakeStaleSlots(RE::ActorWeightModel* a_model, std::uint32_t a_displayMask) {
+        struct StaleSlots
+        {
+            std::uint32_t stale{ 0 };
+            std::uint32_t previousOwned{ 0 };
+        };
+
+        StaleSlots TakeStaleSlots(RE::ActorWeightModel* a_model, std::uint32_t a_displayMask, std::uint32_t a_ownedMask, RE::FormID a_actor) {
             std::lock_guard lock(g_appliedMaskMutex);
-            if (g_appliedMasks.size() > 256) g_appliedMasks.clear();
+            if (g_appliedStates.size() > 256) g_appliedStates.clear();
+            if (g_actorDisplayMask.size() > 256) g_actorDisplayMask.clear();
+            g_actorDisplayMask[a_actor] = a_displayMask;
             const auto key = reinterpret_cast<std::uintptr_t>(a_model);
-            const auto [it, inserted] = g_appliedMasks.try_emplace(key, a_displayMask);
-            const std::uint32_t stale = inserted ? 0 : (it->second & ~a_displayMask);
-            it->second = a_displayMask;
-            return stale;
+            const auto [it, inserted] = g_appliedStates.try_emplace(key, AppliedState{ a_displayMask, a_ownedMask });
+            StaleSlots result;
+            if (!inserted) {
+                result.stale = it->second.displayMask & ~a_displayMask;
+                result.previousOwned = it->second.ownedMask;
+                it->second.displayMask = a_displayMask;
+                it->second.ownedMask = a_ownedMask;
+            }
+            return result;
         }
 
         // Attaches the illusion to one weight model. Custom() below resolves the models
@@ -390,14 +410,50 @@ namespace Hooking {
                 LOG(debug, "Custom: attaching {} outfit-only piece(s) of {} displayed (mask 0x{:08X}, outfit revision {}, body morph {}) for {:08X}.", applySet.size(), displaySet.size(), displayMask, revisionRebuild, morphRebuild, actor->GetFormID());
             }
 
-            // A slot that drops out of the display set must not be torn out here.
-            // Clearing item/addon/part used to look like the tidy fix, but it also
-            // removes the engine's own skin entries and nothing rebuilds them, so the
-            // body stayed empty for the rest of the session. Leave the slot to the
-            // next skinning pass instead.
-            const std::uint32_t staleMask = TakeStaleSlots(actorWeightModel, displayMask);
-            if (staleMask != 0) {
-                LOG(debug, "Custom: {} slot(s) left the display set (mask 0x{:08X}); left to the engine for {:08X}.", std::popcount(staleMask), staleMask, actor->GetFormID());
+            // Slots of this pass whose piece is not genuinely worn: the only slots that
+            // can be holding a clone of ours.
+            std::uint32_t ownedMask = 0;
+            for (const auto* armor : applySet) {
+                if (!armor) continue;
+                const auto mask = armor->GetSlotMask().underlying();
+                for (std::uint32_t bit = 0; bit < 32; ++bit) {
+                    if ((mask & (1u << bit)) != 0 && wornBySlot[bit] == nullptr) ownedMask |= (1u << bit);
+                }
+            }
+            // The skin armour builds the body/head/hands/feet slots even when nothing is
+            // worn there. Those slots belong to the engine no matter what the display set
+            // says, which is exactly what 1.5.24 cleared away by mistake.
+            const auto* skin = actor->GetSkin();
+            const std::uint32_t skinMask = skin ? skin->GetSlotMask().underlying() : 0;
+
+            // A slot that drops out of the display set. When the engine owns the slot it
+            // is left alone: the next pass rebuilds it from the real gear or the skin, and
+            // tearing it out is what left the body empty for a whole session in 1.5.24.
+            // A clone this plugin injected into a slot that has neither real armour nor a
+            // skin part behind it is ours to remove, and leaving it is what kept the old
+            // outfit on screen after a scene ended.
+            const auto stale = TakeStaleSlots(actorWeightModel, displayMask, ownedMask, actor->GetFormID());
+            if (stale.stale != 0) {
+                auto* anim = ModelBiped(actor, actorWeightModel);
+                std::uint32_t detached = 0;
+                std::uint32_t left = 0;
+                for (std::uint32_t bit = 0; bit < 32; ++bit) {
+                    const std::uint32_t flag = 1u << bit;
+                    if ((stale.stale & flag) == 0) continue;
+                    const bool ours = (stale.previousOwned & flag) != 0 && wornBySlot[bit] == nullptr && (skinMask & flag) == 0;
+                    if (!ours || !anim || !anim->objects[bit].partClone) {
+                        left |= flag;
+                        continue;
+                    }
+                    RE::BipedAnimAugments::ClearBipedPart(anim, &anim->objects[bit], true, 0);
+                    detached |= flag;
+                }
+                if (detached != 0) {
+                    LOG(debug, "Custom: detached {} illusion clone(s) whose slot left the display set (mask 0x{:08X}) for {:08X}.", std::popcount(detached), detached, actor->GetFormID());
+                }
+                if (left != 0) {
+                    LOG(debug, "Custom: {} slot(s) left the display set (mask 0x{:08X}); left to the engine for {:08X}.", std::popcount(left), left, actor->GetFormID());
+                }
             }
 
             for (const auto* armor : applySet) {
@@ -461,6 +517,38 @@ namespace Hooking {
             auto* actor = skyrim_cast<RE::Actor*>(owner);
             if (!actor) return;
             Custom(actor, nullptr);
+        }
+
+        // Called from the main thread, outside any skinning pass. A pass is not the only
+        // thing that can empty the biped: a scene framework that strips the actor edits
+        // the biped directly, and then nothing puts the illusion back until the player
+        // opens a menu (which is what triggers the equip refresh). Comparing the mask
+        // this plugin last displayed with what the third person biped actually holds
+        // costs one field read per displayed slot and catches exactly that.
+        std::uint32_t IllusionMissingSlots(RE::Actor* a_actor) {
+            if (!a_actor) return 0;
+            std::uint32_t mask = 0;
+            {
+                std::lock_guard lock(g_appliedMaskMutex);
+                const auto it = g_actorDisplayMask.find(a_actor->GetFormID());
+                if (it == g_actorDisplayMask.end()) return 0;
+                mask = it->second;
+            }
+            if (mask == 0) return 0;
+            auto& biped = a_actor->GetBiped(false);
+            auto* anim = biped.get();
+            // No biped yet (the actor's 3D has not been built) is not a lost illusion.
+            if (!anim || !anim->root) return 0;
+            std::uint32_t missing = 0;
+            for (std::uint32_t bit = 0; bit < 32; ++bit) {
+                if ((mask & (1u << bit)) != 0 && !anim->objects[bit].partClone) missing |= (1u << bit);
+            }
+            return missing;
+        }
+
+        void ForgetActor(RE::FormID a_actor) {
+            std::lock_guard lock(g_appliedMaskMutex);
+            g_actorDisplayMask.erase(a_actor);
         }
 
         namespace {

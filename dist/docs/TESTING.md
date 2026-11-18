@@ -716,6 +716,21 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | D2 | 幻化一件 `.tri` 名不在四个候选里的护甲 | 同上；把该行发回（含模型路径与试过的四个名字）可加白名单 |
 | E1 | 反例检查（DLL 字符串） | 应有 `uses .tri ` / `has no .tri beside it` / `Probed: ` / `the armour addon the engine attached` / `leaving the clones to the next morph pass instead of cycling` / `carries a .tri morph target on`；**不应**有 `.tri morph targets are attached to every illusion clone`（1.5.26 措辞） |
 | F1 | 自定义种族角色（如自定义种族 mod）重复 A1/B1 | 1.5.27 的模型路径不再依赖 `GetArmorAddon(race)`，自定义种族下 `<path>` 仍应有值；若为 `has no armour addon yet`，说明引擎尚未解析该槽 ARMA |
+## 3.41 1.5.29 场景结束后的残留幻化与主线程对账（m05502）
+
+前置：OStim 或 SexLab 可用；准备两套幻化套装 —— A = `_sex` 场景套装（覆盖槽与普通套装不同，例如含 CK 槽 34），B = 普通套装；两者都用带 `.tri` 的护甲；日志开 Verbose。
+
+- **A1 场景中幻化生效**：触发场景 → 场景开始时自动切到 A → 角色身上应显示 A 的幻化件（不是裸体）。日志：`Patches.cpp … Custom: attaching N outfit-only piece(s) of M displayed (mask 0x…)`，掩码里包含 A 独有的槽位。
+- **A2 场景中打开快换窗不破坏幻化**：场景中按 Tab/Z 打开快速换装窗 → 关闭 → A 的幻化件仍在。
+- **B1 场景结束自动恢复（本版重点）**：结束场景 → 自动切回 B → **不要按任何键**，模型应在一次刷新内变成 B 的外观；A 独有的槽（如 CK 槽 34）不得残留 A 的件。日志判定：出现 `Custom: detached N illusion clone(s) whose slot left the display set (mask 0x…)`（我们上一套的克隆被拆）或 `MorphRefresh: … lost the illusion in slot mask 0x…; rebuilding the actor's equipment.`（对账触发重建）之一。
+- **B2 不再需要第二次按键**：B1 之后按 Tab/Z 打开快换窗再关闭，外观**不应**发生变化（说明第一次就已经对了）。
+- **B3 反向验证：不得拆引擎的槽**：切到一套比当前**少**覆盖若干槽的幻化（不含身体槽）→ 那些少掉的槽里如果是真实穿戴的护甲，必须仍显示真甲；日志应是 `left to the engine` 而不是 `detached`。身体（CK 槽 32 / 掩码 `0x4`）在任何切换后都必须是正常身体，不得空模型（1.5.25 回归项）。
+- **C1 对账不误伤**：正常换装、读档、反复切套装 20 次 —— 日志里不应出现 `lost the illusion in slot mask`（说明幻化没有掉），也不应出现 `after 3 rebuilds`。
+- **C2 对账的收敛**：故意制造一次「幻化集有该槽但没有件」（例如套装里放一件模型已丢失的护甲）→ 应看到最多 3 次 `lost the illusion … rebuilding`，然后一条 `still holds no illusion geometry … after 3 rebuilds; it is left alone from now on.`，之后**不再刷屏**，游戏不卡不崩。
+- **D1 框架无关**：不装 OStim/SexLab，用 SAM 或 OBody 换身形 + 手动切套装触发同样的「幻化集说有、biped 没有」→ 对账同样应生效（判据同 B1）。
+- **E1 崩溃回归**：按 m05502 A 组顺序（场景中不改装 → 结束场景）连续 10 次，不应崩溃。若崩溃，提交 `crash-*.log` + 同一次会话的 `SkyrimOutfitSystemNG.log`；重点看崩溃前最后一次 `detached` / `rebuilding` 行的时间戳与崩溃时间是否同一帧。
+- **F1 空幻化回归**：切到空套装 → 应显示裸体（1.5.25 已验收行为），不得出现任何幻化件残留，也不得出现空模型。
+
 ## 4. 性能协议（1000+ 套装）
 
 用 Papyrus 生成 1000 个套装后测：
@@ -1004,6 +1019,7 @@ B. 回归
 
 ## 6. 已知未验证项
 
+- 1.5.29 的「残留克隆窄清 + 幻化几何对账」未实机验证：拆克隆依赖 `ownedMask`（只有"贴进去时没有真实穿戴物打底"的槽才计入），若某套幻化件与真实穿戴件同槽，退出时不会拆、表现为残留旧件；对账依赖 `objects[bit].partClone` 非空判断"幻化在不在"，若引擎保留 `partClone` 但几何失效则不触发。两者都只做静态推理。
 - 全部游戏内行为（无游戏环境）；
 - 1.5.20 的 `.tri` 目标挂载与 `ApplyVertexDiff(…, false)` 重放全部未实机验证；特别是「skee 自己写顶点」与「我们再重放一遍」在同一帧内叠加是否会双写（理论上 `erase=false` 先用 `SHAPEDATA` 还原再重放，幂等），需按 §3.33 的 B1/C1 观察；
 - SKSE Menu Framework 3.x 的 cimgui 符号在真实运行环境下的绑定（只做了符号存在性核对）；

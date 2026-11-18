@@ -1,6 +1,12 @@
 # 构建说明（BUILD）
 
-## 1.5.28 构建与交付复核状态
+## 1.5.29 构建与交付复核状态
+
+**验证状态（1.5.29）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_29.log`）。最终 DLL `1,936,384` 字节，FileVersion/ProductVersion `1.5.29.0`，SHA256 `4f0bcae1e5926763c3d9592ab01812c8f7b968d6e8c7ef37d0ac002c3cb84c92`，`build/Release` 与 `dist` 副本一致。源码守卫测试：`pwsh` 7 下 `tests/*.ps1` 12/14 通过（2 条失效断言是既有问题）。安装包 `SkyrimOutfitSystemNG-1.5.29.zip`：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；最终 zip 大小与哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256`。
+
+> 注意：`tests/*.ps1` 必须用 **PowerShell 7**（`pwsh`）运行。Windows PowerShell 5.1 里 `String.Split(string)` 会退化成"按字符拆分"，让 `hair_recovery_guards.ps1` 之类只做字符串计数的用例假失败。
+
+## 1.5.28 构建与交付复核状态（历史）
 
 **验证状态（1.5.28）**：尚未实机验证，不能声称已实机修好。生产函数路径回归 6/6 通过；最终 Release BUILD_EXIT=0，DLL 版本/哈希与交付副本一致。包内逐文件清单见 SHA256SUMS.txt；最终 zip 大小、哈希及解包复核记录见包外 VERSIONS.md 与同名 .zip.sha256，避免自引用。
 

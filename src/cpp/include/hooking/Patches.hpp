@@ -47,6 +47,11 @@ namespace Hooking {
         // Asks for one attach pass for this actor at the end of the frame. Cheap to call
         // repeatedly: an actor that is already queued is ignored.
         void MarkAttachPending(RE::Actor* a_actor);
+
+        // Slots of the display set this plugin last applied whose clone is no longer in
+        // the third person biped: the illusion was thrown away without a skinning pass
+        // this plugin could attach from. Main thread only; 0 when nothing is missing.
+        std::uint32_t IllusionMissingSlots(RE::Actor* a_actor);
     }
 
     namespace FixEquipConflictCheck {
