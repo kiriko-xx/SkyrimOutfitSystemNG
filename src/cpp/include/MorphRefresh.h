@@ -48,11 +48,6 @@ namespace SOS::MorphRefresh
 	void NotifySlotApplied(RE::Actor* a_actor);
 
 	// Runs after every outfit change (menu, quick picker, hotkey, Papyrus, scene
-	// start, scene end). The caller already triggered one equip pass; this adds a
-	// bounded series of follow-up passes, because a single pass fills the biped
-	// but does not materialise the clone the game draws - the menu path only ever
-	// worked because closing the menu pokes the equip manager repeatedly.
-	void RequestOutfitPasses(RE::Actor* a_actor);
 
 	// Takes the illusion off, lets the engine run one pass over the real armour
 	// and puts the illusion straight back on - the same sequence a user does by

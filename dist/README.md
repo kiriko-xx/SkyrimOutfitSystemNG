@@ -4,7 +4,17 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-## 1.5.31 最新说明（2026-11-18）
+## 1.5.32 最新说明（2026-11-18）
+
+**验证状态（1.5.32）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning；DLL `OutfitSystemNG.dll` 1,937,920 B，FileVersion `1.5.32.0`，SHA256 `da9ec899…`（`build/Release` 与 `dist` 一致）。
+
+- **按用户要求删掉「_sex 套装专属逻辑」**（m07382 / m07424）：场景套装现在**只做两件事** —— 找对名字、切套装。1.5.30 的「补跑几次装备 pass」与 1.5.31 的「重建 3D 模型」全部删除：用户实机证明两者都无效（`attaching …` 每次都执行、`Model Rebuild for` 也跑了，模型仍不出现）。
+- **切换走的就是「点套装列表」那条函数**：`SceneOutfits` 的开始/结束一律调 `Features::AssignOutfit()`，与菜单里点 Wear、快速选择窗口按 E 完全同一条路；参考了按地点/战斗切换的实现方式，场景事件在**游戏线程上同步**执行（不再排进 SKSE 任务队列）。
+- **名字查找更宽容**：先试 `<当前套装>_sex`，找不到就在全部套装名里做**忽略大小写**匹配；仍没有就打一行 info 提示建一套同名套装，幻化保持不变。`_sex` 套装里的槽位规则完全由你自己在套装编辑器里配置，代码不再有任何特判。
+- **未改动**：幻化钩子、注入壳、贴件语义、槽清理、`.tri` 目标推导、DLL 文件名 `OutfitSystemNG.dll`；1.5.25 已实测确认的基础幻化与空幻化不受影响。
+- **未实机验证**：场景里身体/手/脚槽若仍为空，问题不在切换路径（1.5.31 日志里的 `HairTintDiagnostics` dump 显示这些槽其实有几何），需要另找方向；届时请连同日志与 3P/1P 段一起发回。
+
+## 1.5.31 最新说明（2026-11-18，历史，其修法已被用户否决）
 
 **验证状态（1.5.31）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning；DLL `OutfitSystemNG.dll` 1,941,504 B，FileVersion `1.5.31.0`，SHA256 `c8c8ae5d…`（`build/Release` 与 `dist` 一致）。
 
@@ -53,7 +63,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 
 ## 安装
 
-1. 用 mod 管理器安装本包（SKSE/Plugins/SkyrimOutfitSystemNG.dll、Scripts/*.pex、SkyrimOutfitSystem.esp、翻译）。
+1. 用 mod 管理器安装本包（SKSE/Plugins/OutfitSystemNG.dll、Scripts/*.pex、SkyrimOutfitSystem.esp、翻译）；若旧版本留下 `SkyrimOutfitSystemNG.dll`，**必须删掉**（两个名字同时存在会双加载）。
 2. 可选安装 **SKSE Menu Framework 3.18 或更新版本**：没有它插件照常工作（幻化、热键、Papyrus API 可用），只是没有设置菜单。3.18 与 3.23 均已实测手柄正常；3.9 等旧版在自定义窗口里收不到手柄，升级框架即可，不需要换 DLL。
 3. 进游戏打开菜单框架（默认 F1），选择 Skyrim Outfit System 分类。
 
@@ -169,8 +179,12 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 
 43. **1.5.29**：修"场景结束后幻化件残留、要再按一次键才刷新"（m05502）。1.5.25 起把所有"离开幻化集的槽"都只打 `left to the engine`，但当引擎那边没有真甲可重建（场景套装、非穿戴幻化件）时，我们上一套的克隆就没人拆——场景结束回普通幻化会停在旧外观。现在：①`Patches.cpp` 用 `AppliedState { displayMask; ownedMask; }` 记录"哪些槽里的克隆是我们放的、且没有真实穿戴物打底"，离开幻化集时只在"我们放的 + 无人真实穿戴 + 非皮肤槽 + 槽里仍有 `partClone`"四条同时成立才拆（`Custom: detached N illusion clone(s) whose slot left the display set …`），其余仍交回引擎；②`MorphRefresh.cpp` 主线程新增幻化几何对账（`IllusionMissingSlots` → `refreshArmorFor` 重建，300 ms 退避、最多 3 次），对账只认"幻化集说有、biped 槽里没有"，不认任何框架名字。基础幻化钩子与 1.5.25 的槽策略未动。尚未实机验证。
 
-44. **1.5.30**：修「OStim/SexLab 场景里切 `_sex` 套装不显示，必须按一次 Tab/Z 才更新」与「场景结束回普通幻化不刷新」（m06712），并按 m06781 把模块文件名改为 **`OutfitSystemNG.dll`**。真因不是调度器坏了，而是「幻化集已切换」不等于「渲染模型已更新」：一次装备 pass 只把 `addon`/`part` 写进 biped 槽，真正被渲染的克隆几何由紧随其后的 pass 物化 —— 菜单路径之所以灵，是开关菜单让引擎连跑十几轮 pass；脚本路径一次 pass 之后就没有后续 pass 了。修法：①`MorphRefresh::RequestOutfitPasses(actor)` 在每次切换后补跑 120 / 400 / 900 ms 三次装备 pass（主线程 `DrainOutfitPasses()`，幻化总开关关闭时不跑）；②`Features::RefreshActor()` 末尾统一调用它，`SceneOutfits` 两处改走 `Features::RefreshActor(player)`，与「点列表」共用同一条序列；③模块改名为 `OutfitSystemNG.dll`，插件身份（`Plugin::NAME`、日志文件名 `SkyrimOutfitSystemNG.log`、Papyrus 翻译前缀、存档标识）一律不变，**旧名 `SkyrimOutfitSystemNG.dll` 必须删除**（否则双加载）。基础幻化钩子、贴件语义、槽清理策略均未改动。尚未实机验证。
-45. **1.5.31**：修「场景开始 / 场景结束都必须按一次 Tab/Z 才显示幻化」（m07050）。真因是 1.5.30 只重复写 biped 条目，从未让引擎重建被绘制的 3D 模型；新增 `OutfitSystem::rebuildActorModel()`（`Actor::Update3DModel()`）挂在随访链第 2 步，并把 `SceneOutfits` 的场景开始/结束改成调用 `Features::AssignOutfit()`（与「点套装列表」同一条函数）。钩子层、贴件语义、槽清理、`.tri` 推导均未改动。
+44. **1.5.30**：修「OStim/SexLab 场景里切 `_sex` 套装不显示，必须按一次 Tab/Z 才更新」与「场景结束回普通幻化不刷新」（m06712），**（其补跑修法已被 1.5.32 删除：实机无效）** 并按 m06781 把模块文件名改为 **`OutfitSystemNG.dll`**。真因不是调度器坏了，而是「幻化集已切换」不等于「渲染模型已更新」：一次装备 pass 只把 `addon`/`part` 写进 biped 槽，真正被渲染的克隆几何由紧随其后的 pass 物化 —— 菜单路径之所以灵，是开关菜单让引擎连跑十几轮 pass；脚本路径一次 pass 之后就没有后续 pass 了。修法：①`MorphRefresh::RequestOutfitPasses(actor)` 在每次切换后补跑 120 / 400 / 900 ms 三次装备 pass（主线程 `DrainOutfitPasses()`，幻化总开关关闭时不跑）；②`Features::RefreshActor()` 末尾统一调用它，`SceneOutfits` 两处改走 `Features::RefreshActor(player)`，与「点列表」共用同一条序列；③模块改名为 `OutfitSystemNG.dll`，插件身份（`Plugin::NAME`、日志文件名 `SkyrimOutfitSystemNG.log`、Papyrus 翻译前缀、存档标识）一律不变，**旧名 `SkyrimOutfitSystemNG.dll` 必须删除**（否则双加载）。基础幻化钩子、贴件语义、槽清理策略均未改动。尚未实机验证。
+
+45. **1.5.31**：修「场景开始 / 场景结束都必须按一次 Tab/Z 才显示幻化」（m07050）。真因是 1.5.30 只重复写 biped 条目，从未让引擎重建被绘制的 3D 模型；**（其重建修法已被 1.5.32 删除：实机无效）** 新增 `OutfitSystem::rebuildActorModel()`（`Actor::Update3DModel()`）挂在随访链第 2 步，并把 `SceneOutfits` 的场景开始/结束改成调用 `Features::AssignOutfit()`（与「点套装列表」同一条函数）。钩子层、贴件语义、槽清理、`.tri` 推导均未改动。
+
+46. **1.5.32**：场景套装回到「找对名字 → 切套装」（m07382 / m07424）。**删除** 1.5.30 的三次补跑装备 pass 与 1.5.31 的 `rebuildActorModel()`（两者实机均无效），场景开始/结束只调 `Features::AssignOutfit()`（= 点套装列表那条函数），事件改为游戏线程同步执行（与按地点/战斗切换同构），名字查找先试 `<当前套装>_sex` 再全名忽略大小写匹配；`_sex` 套装不再有任何专属槽位/时机规则。尚未实机验证。
+
 
 ## 常见问题
 

@@ -18,10 +18,12 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace SOS::SceneOutfits
 {
@@ -40,6 +42,14 @@ namespace SOS::SceneOutfits
 				return static_cast<char>(std::tolower(c));
 			});
 			return result;
+		}
+
+		// True while the caller is the game thread. Scene events arrive there, and
+		// the outfit switch is only safe to run inline on that thread.
+		bool OnGameThread()
+		{
+			auto* main = RE::Main::GetSingleton();
+			return main && main->threadID != 0 && main->threadID == GetCurrentThreadId();
 		}
 
 		bool EndsWithSexSuffix(std::string_view a_name)
@@ -83,12 +93,30 @@ namespace SOS::SceneOutfits
 				return;
 			}
 
-			const std::string candidate = current + "_sex";
+			// The scene outfit is only a name: "<current>_sex". It is looked up exactly
+			// first and then ignoring case, so a differently cased entry in the outfit
+			// list still resolves instead of silently keeping the current outfit.
+			std::string candidate = current + "_sex";
 			{
 				auto service = outfit_service_get_singleton_ptr();
 				if (!service->inner().has_outfit(candidate.c_str())) {
-					SKSE::log::info("SceneOutfits: no '{}' outfit for the {} scene; create an outfit with exactly that name to use scene switching. The current outfit is kept.", candidate, a_source);
-					return;
+					std::string found;
+					const std::string wanted = ToLower(candidate);
+					std::vector<std::string> names;
+					for (const auto& name : service->inner().get_outfit_names(false)) {
+						names.emplace_back(name);
+					}
+					for (const auto& name : names) {
+						if (ToLower(name) == wanted) {
+							found = name;
+							break;
+						}
+					}
+					if (found.empty()) {
+						SKSE::log::info("SceneOutfits: no '{}' outfit for the {} scene; create an outfit with exactly that name to use scene switching. The current outfit is kept.", candidate, a_source);
+						return;
+					}
+					candidate = found;
 				}
 			}
 
@@ -96,10 +124,10 @@ namespace SOS::SceneOutfits
 			g_sceneOutfit = candidate;
 			g_active = true;
 			g_activeSources.insert(a_source);
-			// Same entry point the outfit list uses: it assigns the outfit, refreshes the
-			// equipment and runs the follow-up passes that bring the clones into the
-			// drawn model. A scene switch therefore behaves exactly like a click in the
-			// list, and there is no second switching path to keep in sync with it.
+			// Nothing but the switch itself: the name above is assigned through the same
+			// entry point the outfit list uses, which assigns the outfit and refreshes
+			// the equipment exactly like the location and combat switching does. There
+			// are no scene specific rules, no extra equip passes and no model rebuild.
 			if (!Features::AssignOutfit(player, candidate.c_str())) {
 				SKSE::log::warn("SceneOutfits: '{}' could not be assigned for the {} scene; the current outfit is kept.", candidate, a_source);
 				g_previousOutfit.clear();
@@ -137,9 +165,8 @@ namespace SOS::SceneOutfits
 				return;
 			}
 
-			// The restore goes through the same entry point as the switch in, so the
-			// previous outfit is materialised by the same equip passes and model
-			// rebuild instead of needing a menu afterwards.
+			// The restore is the same call as the switch in: assign the previous outfit
+			// and let the game refresh the equipment. Nothing else is done here.
 			if (!Features::AssignOutfit(player, previous.c_str())) {
 				SKSE::log::warn("SceneOutfits: '{}' could not be restored after the {} scene.", previous, a_source);
 				return;
@@ -157,7 +184,7 @@ namespace SOS::SceneOutfits
 
 		std::atomic<std::uint64_t> g_generation{ 0 };
 		std::mutex g_queueMutex;
-		std::mutex g_dispatchMutex;
+		std::recursive_mutex g_dispatchMutex;
 		std::deque<SceneEvent> g_pendingEvents;
 		bool g_drainScheduled{ false };
 
@@ -254,14 +281,28 @@ namespace SOS::SceneOutfits
 					return RE::BSEventNotifyControl::kContinue;
 				}
 				const std::string_view name = a_event->eventName.c_str();
+				std::optional<SceneEvent> event;
 				if (name == "ostim_start") {
-					QueueSceneEvent(SceneEvent::kOStimStart);
+					event = SceneEvent::kOStimStart;
 				} else if (name == "ostim_end") {
-					QueueSceneEvent(SceneEvent::kOStimEnd);
+					event = SceneEvent::kOStimEnd;
 				} else if (name == "PlayerAnimationStart") {
-					QueueSceneEvent(SceneEvent::kSexLabStart);
+					event = SceneEvent::kSexLabStart;
 				} else if (name == "PlayerAnimationEnd") {
-					QueueSceneEvent(SceneEvent::kSexLabEnd);
+					event = SceneEvent::kSexLabEnd;
+				}
+				if (!event) {
+					return RE::BSEventNotifyControl::kContinue;
+				}
+				// The switch runs right here, on the game thread, the same way the
+				// location and combat sinks switch an outfit from inside the event they
+				// were handed. Only an event that arrives off the main thread is queued
+				// for the task pool.
+				if (OnGameThread()) {
+					std::lock_guard dispatchLock(g_dispatchMutex);
+					DispatchSceneEvent(*event);
+				} else {
+					QueueSceneEvent(*event);
 				}
 				return RE::BSEventNotifyControl::kContinue;
 			}

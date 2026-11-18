@@ -1,6 +1,16 @@
 # 构建说明（BUILD）
 
-## 1.5.31 构建与交付复核状态
+## 1.5.32 构建与交付复核状态
+
+**验证状态（1.5.32）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log` 149 行，留档 `build/build_1_5_32.log`）。DLL `OutfitSystemNG.dll` 1,937,920 字节，SHA256 `da9ec8995c599f00cb249b611d66a13c2f3f030f845951b3d6b5eacdca05f875`，FileVersion/ProductVersion `1.5.32.0`，`build/Release` 与 `dist` 两份逐字节一致。
+
+- **本版改动面**：`MorphRefresh.cpp` / `include/MorphRefresh.h`（删除补跑随访机件）、`OutfitSystem.cpp` / `include/OutfitSystem.h`（删除 `rebuildActorModel`）、`NGFeatures.cpp`（`RefreshActor` 回到只调 `refreshArmorFor`）、`SceneOutfits.cpp`（场景开始/结束只调 `Features::AssignOutfit`，事件改游戏线程同步执行，名字查找放宽）、`version.h`（PATCH 32）、`CMakeLists.txt`（VERSION 1.5.32）。**钩子层、注入壳、贴件语义、槽清理、`.tri` 推导、模块文件名零改动。**
+- **构建后必查**：DLL 里 `repeating the equip pass` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 必须**一条都搜不到**（1.5.30/1.5.31 的机制已整体删除）；`SceneOutfits: ` 与 `1.5.32` 必须能搜到。
+- **模块文件名仍为 `OutfitSystemNG.dll`**（1.5.30 起），安装包里不得出现旧名 `SkyrimOutfitSystemNG.dll`。
+- **配置注意**：`buildtask_msbuild.bat` 内部的 `ZERO_CHECK` 会重跑 cmake configure（自带完整环境，vcpkg 走缓存），因此 `build/SkyrimOutfitSystemNG.vcxproj` 由 `CMakeLists.txt` 生成 —— 不要手改，也不要裸跑 `cmake -S . -B build`（本机 vswhere 返回空，会失败并改写 `CMakeCache.txt`）。
+- 安装包 `SkyrimOutfitSystemNG-1.5.32.zip`：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；最终 zip 大小与哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256`。
+
+## 1.5.31 构建与交付复核状态（历史，其修法已被用户否决）
 
 **验证状态（1.5.31）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_31.log`）。DLL `OutfitSystemNG.dll` 1,941,504 字节，SHA256 `c8c8ae5db004c0017b029110b23dd707e1e519789c2acf81ba637a5ed63ad6b2`，FileVersion/ProductVersion `1.5.31.0`，`build/Release` 与 `dist` 两份逐字节一致。
 
@@ -64,7 +74,7 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
 cmake --build build --config Release --parallel
 ```
 
-产物：`build/Release/SkyrimOutfitSystemNG.dll`，POST_BUILD 会自动复制到 `dist/SKSE/Plugins/SkyrimOutfitSystemNG.dll`。
+产物：`build/Release/OutfitSystemNG.dll`（1.5.30 起模块名改为 `OutfitSystemNG`，工程名仍是 `SkyrimOutfitSystemNG`），POST_BUILD 会自动复制到 `dist/SKSE/Plugins/OutfitSystemNG.dll`。
 
 若出现编译错误，注意 MSBuild 输出是本地代码页（中文系统会乱码），用 `findstr /C:"error "` 过滤即可。
 

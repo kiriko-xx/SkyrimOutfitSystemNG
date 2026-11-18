@@ -23,7 +23,8 @@
 | 1.5.29 | 2026-11-18 | 1,161,851 | `e581230e2fc8b75e9d1f161d59cf0dfed8852b4ea37db2b1676b934f121f6521` | **已被 1.5.30 取代**；修场景结束后的幻化残留（窄清我们自己的克隆）与主线程幻化几何对账（`IllusionMissingSlots` → `refreshArmorFor`）；基础幻化钩子未动；DLL 1,936,384 B / `4f0bcae1e5926763c3d9592ab01812c8f7b968d6e8c7ef37d0ac002c3cb84c92` / 1.5.29.0 |
 
 | 1.5.30 | 2026-11-18 | 1,170,589 | `8d0db7dc23a6f1609b7206d0ab9ba6194f2a4d2c9d2a7e71f89dede1cda9989b` | **已被 1.5.31 取代**（实机 m07050：补跑 pass 全部执行但模型仍不出，缺的是引擎重建 3D）；场景切换补跑有限次装备 pass（120/400/900 ms，`Features::RefreshActor` 统一入口）修「切 `_sex` 必须弹一次窗」；模块改名为 `OutfitSystemNG.dll`（内部插件名不变，旧名必须删除防双加载）；DLL 1,939,456 B / `2d0d968953abe0c3715cf1e2e8b882b2d410d937fc30e0a8659dda451d79cfda` / 1.5.30.0 |
-| 1.5.31 | 2026-11-18 | 1,178,871 | `3ebd6861a51597076fee666748261c359e7b7f2de763b2674f61c90d42a9920f` | **当前候选，待实机**；场景开始/结束不必再弹窗：新增 `OutfitSystem::rebuildActorModel()`（`Actor::Update3DModel()`，挂在随访链第 2 步），`SceneOutfits` 改调 `Features::AssignOutfit()`（与「点套装列表」同一条函数）；DLL `OutfitSystemNG.dll` 1,941,504 B / `1.5.31.0` / `c8c8ae5d…` |
+| 1.5.31 | 2026-11-18 | 1,178,871 | `3ebd6861a51597076fee666748261c359e7b7f2de763b2674f61c90d42a9920f` | **已被 1.5.32 取代**（实机 m07382：`Model Rebuild for` 照跑、模型仍不出现，用户要求把补跑与重建整套删掉）；场景开始/结束不必再弹窗：新增 `OutfitSystem::rebuildActorModel()`（`Actor::Update3DModel()`，挂在随访链第 2 步），`SceneOutfits` 改调 `Features::AssignOutfit()`（与「点套装列表」同一条函数）；DLL `OutfitSystemNG.dll` 1,941,504 B / `1.5.31.0` / `c8c8ae5d…` |
+| 1.5.32 | 2026-11-18 | 1,185,452 | `065f0ad79fdd31c17116901d3bee74a7cfe15c385d4660d61e3238d29378a8f1` | **当前候选，待实机**；场景套装回到「找对名字 → 切套装」（m07382 / m07424）：删除 1.5.30 的三次补跑装备 pass 与 1.5.31 的 `rebuildActorModel()`，场景开始/结束只调 `Features::AssignOutfit()`，事件改游戏线程同步执行，名字查找支持忽略大小写；DLL 1,937,920 B / `da9ec899…` / 1.5.32.0 |
 
 各包旁的 `.zip.sha256` 内容为「哈希 + 两个空格 + 包名」+ CRLF，可直接 `certutil -hashfile` 复核。
 
@@ -42,13 +43,14 @@
 | 1.5.29 | git tag `v1.5.29` |
 | 1.5.30 | git tag `v1.5.30` |
 | 1.5.31 | git tag `v1.5.31` |
-| 当前 dist | 1.5.31 的候选交付（31 文件 / 2,702,598 B；`SKSE/Plugins/OutfitSystemNG.dll` 1,941,504 B / 1.5.31.0 / `c8c8ae5d…`；旧名 `SkyrimOutfitSystemNG.dll` 不在包内），SHA256SUMS.txt 30 行复核 30/30；游戏内行为尚未验证 |
+| 1.5.32 | git tag `v1.5.32` |
+| 当前 dist | 1.5.32 的候选交付（31 文件 / 2,722,058 B；`SKSE/Plugins/OutfitSystemNG.dll` 1,937,920 B / 1.5.32.0 / `da9ec899…`；旧名 `SkyrimOutfitSystemNG.dll` 不在包内），SHA256SUMS.txt 30 行复核 30/30；zip `SkyrimOutfitSystemNG-1.5.32.zip` 1,185,452 B / `065f0ad7…`（31 条目、0 反斜杠、解包逐文件哈希与 dist 全等）；游戏内行为尚未验证 |
 
 1.5.22 的交付目录存档在 `build/dist_1_5_22/`（build/ 不入库）。
 
 ## 版本管理规则
 
-- **分支布局（2026-11-18 起）**：`main` = 最新发布线（当前 `1.5.31`，提交与 tag `v1.5.31` 相同）；发布一律在 `main` 上按 tag 推进。历史上的实验性提交（2026-11-17 晚 `fix: gate scene and morph tasks…` 那一串）不在发布线上，已封存为分支 `archive/main-experiments-20261117` 与同名 tag，需要时 `git diff main archive/main-experiments-20261117 -- src/` 对照取舍。
+- **分支布局（2026-11-18 起）**：`main` = 最新发布线（当前 `1.5.32`，提交与 tag `v1.5.32` 相同）；发布一律在 `main` 上按 tag 推进。历史上的实验性提交（2026-11-17 晚 `fix: gate scene and morph tasks…` 那一串）不在发布线上，已封存为分支 `archive/main-experiments-20261117` 与同名 tag，需要时 `git diff main archive/main-experiments-20261117 -- src/` 对照取舍。
 - 仓库根的 `.gitignore` 忽略 `dist/`、`build/`、`*.dll`、`*.pex`、`*.log`：git 只跟踪源码与文档，交付目录每次由构建生成。
 - 每次定稿一个交付版本：先把 `dist/` 收尾，再 `git tag vX.Y.Z`（tag 打在当时那份源码上），随后打包 zip 并更新本文件。
 - 回退 = 直接装对应版本的 zip；**不要**在没有源码快照的版本之间做“源码回退”，只能以二进制为准。
@@ -56,7 +58,7 @@
 
 ## 回退与合并（用户 m06712 要求：随时可回退、可合并有用版本）
 
-**回退（推荐、唯一安全途径）**：装对应版本的成品包即可 —— 仓库根有 1.5.17–1.5.30 的 `SkyrimOutfitSystemNG-<版本>.zip`，每个包旁有 `.zip.sha256`（内容为 `hash + 两空格 + 文件名`）。想完全干净地回退：删掉 `Data/SKSE/Plugins/` 下的 `OutfitSystemNG.dll` **和** `SkyrimOutfitSystemNG.dll`，再解压目标包覆盖。
+**回退（推荐、唯一安全途径）**：装对应版本的成品包即可 —— 仓库根有 1.5.17–1.5.32 的 `SkyrimOutfitSystemNG-<版本>.zip`，每个包旁有 `.zip.sha256`（内容为 `hash + 两空格 + 文件名`）。想完全干净地回退：删掉 `Data/SKSE/Plugins/` 下的 `OutfitSystemNG.dll` **和** `SkyrimOutfitSystemNG.dll`，再解压目标包覆盖。
 
 **源码级回退**：`git tag` 逐版对应（见上表）。`git checkout v1.5.29` 可回到那一版源码，`git diff v1.5.29 v1.5.30 -- src/` 可看单版差异。注意 1.5.17–1.5.21 **没有源码快照**，只能以二进制回退。
 

@@ -358,34 +358,6 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		std::chrono::steady_clock::time_point g_lastReattach{};
 		constexpr auto kReattachInterval = std::chrono::milliseconds(300);
 
-		// An outfit change started from code (a scene framework switching to the
-		// _sex outfit) often gets exactly one equip pass, and one pass is not
-		// enough: ApplyArmorAddon fills the slot, but the clone geometry the game
-		// draws is materialised by a pass that follows it, so the rendered model
-		// keeps the old gear until then. A click in the outfit menu never shows
-		// that delay because closing the menu pokes the equip manager several
-		// times, which is why the same outfit appeared as soon as the player
-		// opened a menu. Repeating the equip refresh a few times gives every
-		// switch path the behaviour the menu path has always had.
-		constexpr std::size_t kOutfitPassCount = 3;
-		// Which follow-up asks for the model rebuild. The equip passes alone leave the
-		// clones in the biped while the drawn model keeps the old gear; the rebuild is
-		// the step a menu open or close takes, and one per switch is enough.
-		constexpr std::uint32_t kModelRebuildAttempt = 2;
-		constexpr std::chrono::milliseconds kOutfitPassDelay[kOutfitPassCount] = {
-			std::chrono::milliseconds(120),
-			std::chrono::milliseconds(400),
-			std::chrono::milliseconds(900),
-		};
-
-		struct OutfitPassState
-		{
-			std::size_t step{ 0 };
-			std::uint32_t attempts{ 0 };
-			std::chrono::steady_clock::time_point due{};
-		};
-		std::mutex g_outfitPassMutex;
-		std::unordered_map<RE::FormID, OutfitPassState> g_outfitPasses;
 
 		struct PollTrace
 		{
@@ -1572,81 +1544,10 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 		}
 
-		// Runs kVerifyDelay after a provider pass: if the meshes moved on their
-		// own the clones followed and nothing else is needed; if they stand still
-		// the clone is not tracked by the provider and the cycle (the only path
-		// that reloads a .tri target) takes over.
 		// Rebuilds the actor's equipment when the illusion is gone from the biped. This
 		// is the same equip refresh a menu-triggered outfit change uses, so nothing here
 		// is specific to one framework: any code that empties the biped behind our back
 		// gets the display set back within a tick or two.
-		// Starts the follow-up equip passes of one outfit change. Every switch path
-		// calls this, so a scripted switch (scene start, scene end, automatic
-		// switching, Papyrus) reaches the rendered model the same way a click in
-		// the outfit list does.
-		void RequestOutfitPassesInternal(RE::Actor* a_actor)
-		{
-			if (!a_actor) {
-				return;
-			}
-			const auto now = std::chrono::steady_clock::now();
-			std::lock_guard lock(g_outfitPassMutex);
-			if (g_outfitPasses.size() > 256) {
-				g_outfitPasses.clear();
-			}
-			auto& state = g_outfitPasses[a_actor->GetFormID()];
-			state.step = 0;
-			state.attempts = 0;
-			state.due = now + kOutfitPassDelay[0];
-		}
-
-		void DrainOutfitPasses(std::chrono::steady_clock::time_point a_now)
-		{
-			struct Due
-			{
-				RE::FormID id;
-				std::uint32_t attempt;
-			};
-			std::vector<Due> due;
-			{
-				std::lock_guard lock(g_outfitPassMutex);
-				for (auto it = g_outfitPasses.begin(); it != g_outfitPasses.end();) {
-					if (it->second.due > a_now) {
-						++it;
-						continue;
-					}
-					++it->second.attempts;
-					due.push_back({ it->first, it->second.attempts });
-					++it->second.step;
-					if (it->second.step >= kOutfitPassCount) {
-						it = g_outfitPasses.erase(it);
-						continue;
-					}
-					it->second.due = a_now + kOutfitPassDelay[it->second.step];
-					++it;
-				}
-			}
-			if (!Hooking::IllusionDisplayEnabled()) {
-				return;
-			}
-			for (const auto& entry : due) {
-				auto* actor = RE::TESForm::LookupByID<RE::Actor>(entry.id);
-				if (!actor || !actor->Is3DLoaded()) {
-					continue;
-				}
-				if (entry.attempt == kModelRebuildAttempt) {
-					// The clones are in the biped, but the model the game draws was built
-					// before the switch. Opening or closing a menu makes the game rebuild
-					// it; ask for the same rebuild so a scene outfit or a hotkey switch no
-					// longer needs the player to press anything.
-					SKSE::log::debug("MorphRefresh: asking the game to rebuild the model of {:08X} so the illusion reaches the drawn 3D (follow-up {} of {}).", entry.id, entry.attempt, kOutfitPassCount);
-					::OutfitSystem::rebuildActorModel(actor);
-				}
-				SKSE::log::debug("MorphRefresh: repeating the equip pass for {:08X} (follow-up {} of {}), because one pass alone does not materialise the illusion.", entry.id, entry.attempt, kOutfitPassCount);
-				::OutfitSystem::refreshArmorFor(actor);
-			}
-		}
-
 		void ReattachDroppedIllusion(RE::Actor* a_actor, std::uint32_t a_missing, std::chrono::steady_clock::time_point a_now)
 		{
 			const auto id = a_actor->GetFormID();
@@ -1675,6 +1576,10 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			::OutfitSystem::refreshArmorFor(a_actor);
 		}
 
+		// Runs kVerifyDelay after a provider pass: if the meshes moved on their
+		// own the clones followed and nothing else is needed; if they stand still
+		// the clone is not tracked by the provider and the cycle (the only path
+		// that reloads a .tri target) takes over.
 		void VerifyProviderPass()
 		{
 			const auto now = std::chrono::steady_clock::now();
@@ -1772,7 +1677,6 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 
 			VerifyProviderPass();
-			DrainOutfitPasses(now);
 
 			// No provider gate any more: the geometry probe works without one, so
 			// a RaceMenu that refuses to answer no longer disables the refresh.
@@ -2144,11 +2048,6 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		CycleIllusion(a_actor, "the outfit was re-applied");
 	}
 
-	void RequestOutfitPasses(RE::Actor* a_actor)
-	{
-		RequestOutfitPassesInternal(a_actor);
-	}
-
 	void Install()
 	{
 		if (g_installed) {
@@ -2260,10 +2159,6 @@ void RetryProviders()
 			std::lock_guard lock(g_reattachMutex);
 			g_reattach.clear();
 			g_lastReattach = {};
-		}
-		{
-			std::lock_guard lock(g_outfitPassMutex);
-			g_outfitPasses.clear();
 		}
 	}
 

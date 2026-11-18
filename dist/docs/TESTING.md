@@ -763,6 +763,22 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 - **E1 性能**：`Update3DModel()` 相当于开关一次菜单的开销；场景切换时不得造成可感知卡顿（若明显卡顿，把切换时刻的帧时间与 3 行随访日志一起发回）。
 - **F1 基础幻化回归（1.5.25 验收项）**：普通换装 / 空幻化 / 身体槽（CK 槽 32）均正常，不得出现空模型或残留件；`Custom: detached` 与 `lost the illusion in slot mask` 不应因本版新增。
 
+## 3.44 1.5.32 场景套装只做切换（删除补跑与重建）（m07382 / m07424）
+
+前置：A = `_sex` 场景套装、B = 普通套装；OStim 或 SexLab 至少一个；开 Verbose。本版删除了 1.5.30 的补跑随访与 1.5.31 的模型重建，**判据是「这些行不应再出现」**，加上「切换本身仍然执行」。
+
+- **A1 场景开始不必弹窗**（本版重点）：触发场景 → 自动切到 A → **全程不按 Tab/Z**，看 A 的幻化件是否出现。日志只应有 `SceneOutfits: … scene started; 'B' -> 'B_sex'` 紧跟 `Armor Refresh for …` 与 `Custom: attaching N outfit-only piece(s) …`。
+- **A2 不再有补跑/重建**：A1 之后日志里**不得**出现 `repeating the equip pass for` / `follow-up N of 3` / `Model Rebuild for` / `asking the game to rebuild the model of`（字符串已从 DLL 删除）。出现即说明装的不是 1.5.32。
+- **A3 场景结束自动回滚**：结束场景 → 自动切回 B → 不按键；若模型没变回，把日志发回（本版不再提供任何二次刷新兜底，这是有意的：用户要求只做切换）。
+- **B1 名字查找**：把 `_sex` 套装改成大小写不同的写法（如 `X_SEX`）→ 仍应命中；把 `_sex` 套装删掉 → 日志 `SceneOutfits: no 'X' outfit for the … scene; create an outfit with exactly that name to use it here.`（info），幻化保持原样、不重试。
+- **B2 同步执行**：场景开始/结束的 `SceneOutfits:` 行与随后的 `Armor Refresh` 应在**同一个日志时间戳毫秒**内（同步路径）；若两者相隔 >100 ms，说明走的是任务队列分支（非游戏线程事件），属预期降级。
+- **B3 重入安全**：同帧内先 `ostim_end` 后 `ostim_start`（连续两次场景）→ 不得死锁、不得崩；日志应有两条 `SceneOutfits:` 行且各自带 `Armor Refresh`。
+- **C1 无递归**：一次场景切换只产生**一轮** `attaching`（3P + 1P 各一次），不得出现切换→刷新→再切换的循环。
+- **C2 幻化关闭时不动作**：日志 `Illusion display is off for this session` 时，场景事件仍会调 `AssignOutfit`，但不得贴件、不得崩。
+- **D1 套装名带后缀套后缀**：当前套装本身叫 `X_sex` 时，进入场景**不应**去找 `X_sex_sex`（沿用 `EndsWithSexSuffix` 的早退），幻化保持不变。
+- **E1 基础幻化回归（1.5.25 验收项）**：普通换装 / 空幻化 / 身体槽（CK 槽 32）均正常，无空模型、无残留件；`Custom: detached` 与 `left to the engine` 行为与 1.5.29 一致。
+- **F1 菜单路径不变**：快速选择窗口按 E/Z 切同一套，日志形态应与场景路径完全一致（两者共用 `Features::AssignOutfit`）。
+
 ## 4. 性能协议（1000+ 套装）
 
 用 Papyrus 生成 1000 个套装后测：
@@ -1050,7 +1066,8 @@ B. 回归
 - 存档往返一致。
 
 ## 6. 已知未验证项
-- 1.5.31 的「模型重建让幻化上屏」未实机验证：`Actor::Update3DModel()` 是否真会让引擎重走 biped→3D 并采用刚写入的克隆，依据是「开合菜单时引擎做的正是这件事」这一观察；若某 load order 里重建后仍不显示，说明还有一层缓存，需要按新日志再定位。`Model Rebuild for` 与 `Skipping model rebuild` 两条都只在 debug 级可见。
+- 1.5.32 的「只切套装」未实机验证：本版删掉补跑与重建后，场景切换就是一次 `Features::AssignOutfit()`（一次 `refreshArmorFor`）。1.5.31 的日志证明「切换其实执行了、biped 里也有几何」，所以本版不再假设「模型没上屏」是缺少刷新次数；若实机后场景里身体/手/脚槽仍为空，问题在「引擎 Skin 覆盖槽（3P slot 2/4/7）与幻化克隆争同一槽」，需要按 `HairTintDiagnostics` 的 3P/1P 对比单独定位，**不要**再加回补跑或重建。
+- （历史）1.5.31 的「模型重建让幻化上屏」未实机验证：`Actor::Update3DModel()` 是否真会让引擎重走 biped→3D 并采用刚写入的克隆，依据是「开合菜单时引擎做的正是这件事」这一观察；若某 load order 里重建后仍不显示，说明还有一层缓存，需要按新日志再定位。`Model Rebuild for` 与 `Skipping model rebuild` 两条都只在 debug 级可见。
 
 - 1.5.29 的「残留克隆窄清 + 幻化几何对账」未实机验证：拆克隆依赖 `ownedMask`（只有"贴进去时没有真实穿戴物打底"的槽才计入），若某套幻化件与真实穿戴件同槽，退出时不会拆、表现为残留旧件；对账依赖 `objects[bit].partClone` 非空判断"幻化在不在"，若引擎保留 `partClone` 但几何失效则不触发。两者都只做静态推理。
 - 全部游戏内行为（无游戏环境）；

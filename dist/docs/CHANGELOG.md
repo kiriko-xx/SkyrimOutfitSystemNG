@@ -1,5 +1,18 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.32] - 2026-11-18
+
+### 修复：场景套装只做「找对名字 → 切套装」（m07382 / m07424）
+
+- **用户指令**（m07424 原话）：「你只用找对名字然后切换，切换套装不用管什么之前逻辑里头饰假发显示正常了直接不用那个了删了，不行你就参考按地点/战斗切换幻化套装这里的逻辑。」上一轮（m07382）更直接：「让你把原来的那套专门给 _sex 切换的删了！不是让你继续修补那套逻辑！」
+- **症状**（1.5.31 实机）：OStim 场景开始切 `_sex` 套装，模型不出现，按一次 Tab/Z 打开快速选择窗口才出现；场景结束回普通幻化同样要按键。切到 `_sex` 后**头饰/假发正常、身体/手/脚是空模型**。
+- **证据**（`SkyrimOutfitSystemNG.log`，754,136 字节 / 8,081 行，v1-5-31-0）：19:20:35.403 场景前 3P pass 完整（`attaching 5 outfit-only piece(s) … mask 0x00002096`，五槽全 `part 1`）；19:20:35.421 `SceneOutfits: OStim scene started`；1.5.31 的三次随访全部执行（`follow-up 1 of 3`、`asking the game to rebuild the model of 00000014 … (follow-up 2 of 3)` + `Model Rebuild for JueLunV6`、第三次 `Armor Refresh`）**模型仍不出现**；19:20:44.056 起引擎自己连跑十几轮 pass（几十条 `attaching … (outfit revision false)`，无对应 `Armor Refresh`），模型随后出现；19:20:48.781 `HairTintDiagnostics` dump 显示 3P biped slot 1/2/4/7/13 全部有 addon 与几何。⇒ 数据层正确，问题不在切换、也不在 pass 次数。
+- **修法一（删除补跑机件，`MorphRefresh.cpp` / `MorphRefresh.h`）**：移除 `kOutfitPassCount`、`kOutfitPassDelay`、`struct OutfitPassState`、`g_outfitPassMutex`、`g_outfitPasses`、`RequestOutfitPassesInternal()`、`DrainOutfitPasses()`、公开的 `RequestOutfitPasses()` 以及 `Reset()` 里的清表块。
+- **修法二（删除模型重建，`OutfitSystem.cpp` / `OutfitSystem.h`）**：移除 `rebuildActorModel()`（`Actor::Update3DModel()`）。`NGFeatures::RefreshActor()` 回到只调 `::OutfitSystem::refreshArmorFor(a_actor)`。
+- **修法三（场景切换只做切换，`SceneOutfits.cpp`）**：StartScene / EndScene 一律调 `Features::AssignOutfit(player, name)` —— 与「点套装列表」（`MenuUI::ApplyTo` / `QuickWearFocused`）同一条函数；场景事件在游戏线程上**同步**执行（新增 `OnGameThread()`，与 `AutoSwitch` 的 location / fast-travel sink 同构），非主线程事件才落到任务队列；`g_dispatchMutex` 改 `std::recursive_mutex` 防同步重入。
+- **修法四（名字查找）**：先试 `has_outfit("<当前套装>_sex")`，没有再遍历全部套装名做忽略大小写匹配（命中用真实大小写）；仍找不到打 info `no … outfit for the … scene; create an outfit with exactly that name…`。`_sex` 套装不再有任何专属槽位/时机规则。
+- **未改动**：基础幻化钩子（`Hooks.cpp`）、注入壳、贴件语义、槽位清理、`.tri` 目标推导、DLL 文件名（`OutfitSystemNG.dll`）一律不动。
+- **未验证**：本机没有 Skyrim。判定见 `docs/DELIVERY.md` §4.60、`docs/TESTING.md` §3.44。
 ## [1.5.31] - 2026-11-18
 
 ### 修复：场景开始/结束都必须弹一次窗才显示（m07050）
