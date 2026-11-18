@@ -14,6 +14,18 @@
 4. ApplyBodyMorphs slot13 `0x1800051b0` -> `0x1800086d0` 收集真实装备及 NPC skin 的 ARMO -> ARMA -> `0x1800d2410` 按 addon 名在 Ni 树中找节点 -> `0x180018360` -> `0x180008460` ApplyMorphs。**不是新版 VisitBipedNodes 全槽遍历**；可读 BODYTRI 不保证幻化节点被访问。
 5. ApplyVertexDiff slot12 `0x18004b740` 可对明确传入的节点操作，但仍须通过公开交换取得接口，不能把上述分析地址作为运行时调用入口。
 
+## 通用形变调度：公开源码能证明什么
+
+本地公开源码快照 `D:/Skyrim-dev/tmp/skee64` 的 `479ecab` 不是用户的 v4 DLL。`skee64/BodyMorphInterface.h:368–377` 的 `VisitMorphValues` 经过 `skee64/BodyMorphInterface.cpp:1267–1277` 遍历数据，遍历函数本身未加锁；不能把只读访问等同于可与写入并发。`skee64/BodyMorphInterface.cpp:1086–1101` 的 `ApplyVertexDiff` 同步进入形变缓存；`:690–716` 的锁只证明此段缓存访问串行，`:674–685` 延后的是分区更新任务，并非整个节点遍历和形变。`:1076–1079` 的 `AddMorphShapeCallback` 在该快照是空实现；不能用版本号或虚表槽存在推断注册生效，也不外推其他发行版。
+
+`a708434` 是通用形变的实机行为对照，不是线程安全的依据。`d026448` 的线程门禁回归已定位，普通任务及 UI 任务均不能在已复现的菜单时段稳定到达游戏线程。修复需验证框架无关的执行入口和节点访问时相，两者不可相互代替；不添加针对 SAM 的分支，不搬运 v5 内部实现到 v4。
+
+### 同为 v4，上传调度也不同
+
+- [RaceMenu 0.4.14 / SE 1.5.97（7ffff9a）](https://github.com/expired6978/SKSE64Plugins/blob/7ffff9afb35ce9cae5e26f8bdbf86367b75e29b8/skee/BodyMorphInterface.cpp#L500-L663)：`ApplyVertexDiff` 同步执行 BODYTRI 查找和网格处理；`defer=true` 延后的是分区更新。旧缓存入口没有较新快照的外层缓存锁，`Impl_VisitMorphs` 也没有在遍历时取得形变数据锁。
+- [后期 v4（7694eab）](https://github.com/expired6978/SKSE64Plugins/blob/7694eab/skee64/BodyMorphInterface.cpp#L632-L730)：CPU 处理后按调用线程决定分区更新是就地执行还是入队；全角色路径改为遍历 biped 与 RaceMenu 附件容器。这两份公开源码可证明接口号不能作为线程契约，但都尚未与现场 DLL 逐一匹配。
+- 本地可参考的游戏帧调用点见 `src/jiayev-compendium/src/Features/GrassCollision.h:124` 与 `src/jiayev-compendium/src/Features/GrassCollision.cpp:336–340`。其他功能在那里执行，不等于暂停菜单时仍能到达，也不等于已离开装备/3D 更新或渲染锁。只列为验证候选，不照搬站点或更改现有钩子。
+
 ## SKSE 2.0.20 公开契约
 
 [PluginManager.cpp](https://github.com/ianpatt/skse64/blob/v2.0.20/skse64/PluginManager.cpp) 的 RegisterListener(nullptr) 仅填当时已分配的 sender 桶（含预留容量）；Dispatch 只遍历 sender 自己的桶。晚加载的插件可能不在旧 skee 注册的范围；命名 receiver 不会绕过订阅。重试任务和我方监听 skee 不会补上反向订阅。
