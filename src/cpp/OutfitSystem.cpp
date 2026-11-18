@@ -1034,6 +1034,15 @@ namespace OutfitSystem {
         if (!actor) return static_cast<std::uint32_t>(StateType::World);
         return static_cast<std::uint32_t>(identifyStateType(service->inner(), actor).value_or(StateType::World));
     }
+    bool setOutfitByName(OutfitService& service, RE::Actor* actor, const char* name) {
+        LogExit exitPrint("setOutfitByName"sv);
+        if (!actor || !name || *name == '\0') return false;
+        if (!service.has_outfit(name)) return false;
+        // Note: re-applying the current outfit still bumps the revision in the
+        // service, so the illusion is rebuilt instead of a stale clone surviving.
+        service.set_outfit_c(name, actor->GetFormID());
+        return true;
+    }
     void setOutfitUsingState(OutfitService& service, RE::Actor* actor) {
         LogExit exitPrint("setOutfitUsingState"sv);
         // NOTE: Location can be NULL.

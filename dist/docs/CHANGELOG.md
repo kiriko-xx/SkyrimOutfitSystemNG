@@ -1,5 +1,18 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.33] - 2026-11-18
+
+### 修复：场景套装回退到 1.5.29，只保留「找名字 → 用状态切换那套方法换装」（m07666）
+
+- **用户指令**（m07666 原话）：「依旧和之前一样的问题，我发现你改的地方是不是错了，我说的是 Sexlab 和 OStim 场景的专用换装 `_sex`，你不会改的是按地点/状态自动切换吧？不行直接回退到 1.5.29，从这开始改，把原来的 Sexlab 和 OStim 场景的专用换装 `_sex` 套装逻辑删了，参照按地点/状态自动切换这里的换装方法去换装。」
+- **先核对「有没有改错模块」**：`git diff v1.5.29 HEAD -- src/cpp/AutoSwitch.cpp src/cpp/AutoSwitch.h` 输出为空 ⇒ 按地点/状态自动切换从 1.5.29 到 1.5.32 一行未动；场景 `_sex` 换装一直在 `SceneOutfits.cpp`（`EndsWithSexSuffix()`、`candidate = current + "_sex"`、四个 mod 回调事件）。1.5.32 的问题不是改错文件，而是场景入口走了菜单那条 `Features::AssignOutfit()` 并自带一套 SKSE 任务队列 + `Tick()` 心跳，与状态切换的两步序列不同。
+- **修法一（回退源码基线）**：`git checkout v1.5.29 -- src` —— 1.5.30 的补跑 pass、1.5.31 的 `rebuildActorModel()`、1.5.32 的 `Features::AssignOutfit()` 场景入口全部撤掉；CMake 的模块名 `OutfitSystemNG.dll` 保留。
+- **修法二（新增共用入口，`OutfitSystem.h/.cpp`）**：`bool setOutfitByName(OutfitService&, RE::Actor*, const char*)`，与 `setOutfitUsingState()` 并排：`has_outfit()` → `set_outfit_c()` → `true`；名字不存在返回 `false` 且不改状态。
+- **修法三（`SceneOutfits.cpp` 只剩「找名字 + 换装」，与 `AutoSwitch::Evaluate()` 同构）**：StartScene / EndScene 共用 `SwitchTo()` = `{ 取 service 锁 → setOutfitByName() }` 然后锁外 `OutfitSystem::refreshArmorFor(a_actor)`。事件在 `ModCallbackEvent` sink 里同步执行，`std::recursive_mutex` 串行化，非游戏线程 warn 并跳过。
+- **修法四（删掉场景专用机件）**：移除 `QueueSceneEvent` / `DrainSceneEvents` / `ScheduleDrain` / `g_generation` / `g_queueMutex` / `g_dispatchMutex` / `g_pendingEvents` / `g_drainScheduled` / `std::deque` / `GameState::IsLoading` 分支 / `enum class SceneEvent` / `DispatchSceneEvent()` / `SceneOutfits::Tick()`，以及 `main.cpp:279` 与 `NGHotkeys.cpp:255` 两处调用；`SceneOutfits.h` 只剩 `Install()` / `Reset()`。开始/结束日志升到 info（`SceneOutfits: OStim scene started; 'A' -> 'A_sex'.` / `SceneOutfits: OStim scene ended; 'A' restored.`）。
+- **未改动**：基础幻化钩子（`Hooks.cpp`）、注入壳、贴件语义、槽位清理、`.tri` 目标推导、DLL 文件名（`OutfitSystemNG.dll`）一律不动；1.5.25 实测正常的基础幻化与空幻化不受影响。
+- **未验证**：本机没有 Skyrim。静态侧新增 `tests/scene_outfit_switch.ps1`（断言场景模块无队列/`Tick`/补跑/重建，换装必须是 `setOutfitByName` 紧跟 `refreshArmorFor`），删除过时的 `tests/scene_outfit_queue.ps1`；全量守卫测试除 2 条既有环境失败外全部 PASS。判定见 `docs/DELIVERY.md` §4.61、`docs/TESTING.md` §3.45。
+
 ## [1.5.32] - 2026-11-18
 
 ### 修复：场景套装只做「找对名字 → 切套装」（m07382 / m07424）

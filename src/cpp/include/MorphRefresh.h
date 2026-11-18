@@ -47,8 +47,6 @@ namespace SOS::MorphRefresh
 	// detach or rebuild anything - and it runs with or without the interface.
 	void NotifySlotApplied(RE::Actor* a_actor);
 
-	// Runs after every outfit change (menu, quick picker, hotkey, Papyrus, scene
-
 	// Takes the illusion off, lets the engine run one pass over the real armour
 	// and puts the illusion straight back on - the same sequence a user does by
 	// hand (clear the illusion, then wear the outfit again), but with both

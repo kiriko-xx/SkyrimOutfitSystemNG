@@ -358,7 +358,6 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		std::chrono::steady_clock::time_point g_lastReattach{};
 		constexpr auto kReattachInterval = std::chrono::milliseconds(300);
 
-
 		struct PollTrace
 		{
 			std::atomic<std::uint64_t> posted{}, rejected{}, accepted{}, completed{}, samples{}, changes{}, replays{}, nodes{};
@@ -1544,6 +1543,10 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			}
 		}
 
+		// Runs kVerifyDelay after a provider pass: if the meshes moved on their
+		// own the clones followed and nothing else is needed; if they stand still
+		// the clone is not tracked by the provider and the cycle (the only path
+		// that reloads a .tri target) takes over.
 		// Rebuilds the actor's equipment when the illusion is gone from the biped. This
 		// is the same equip refresh a menu-triggered outfit change uses, so nothing here
 		// is specific to one framework: any code that empties the biped behind our back
@@ -1576,10 +1579,6 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			::OutfitSystem::refreshArmorFor(a_actor);
 		}
 
-		// Runs kVerifyDelay after a provider pass: if the meshes moved on their
-		// own the clones followed and nothing else is needed; if they stand still
-		// the clone is not tracked by the provider and the cycle (the only path
-		// that reloads a .tri target) takes over.
 		void VerifyProviderPass()
 		{
 			const auto now = std::chrono::steady_clock::now();

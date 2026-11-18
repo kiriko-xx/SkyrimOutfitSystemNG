@@ -763,7 +763,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 - **E1 性能**：`Update3DModel()` 相当于开关一次菜单的开销；场景切换时不得造成可感知卡顿（若明显卡顿，把切换时刻的帧时间与 3 行随访日志一起发回）。
 - **F1 基础幻化回归（1.5.25 验收项）**：普通换装 / 空幻化 / 身体槽（CK 槽 32）均正常，不得出现空模型或残留件；`Custom: detached` 与 `lost the illusion in slot mask` 不应因本版新增。
 
-## 3.44 1.5.32 场景套装只做切换（删除补跑与重建）（m07382 / m07424）
+## 3.44 1.5.32 场景套装只做切换（删除补跑与重建）（m07382 / m07424）【历史：1.5.33 已改为 setOutfitByName + refreshArmorFor】
 
 前置：A = `_sex` 场景套装、B = 普通套装；OStim 或 SexLab 至少一个；开 Verbose。本版删除了 1.5.30 的补跑随访与 1.5.31 的模型重建，**判据是「这些行不应再出现」**，加上「切换本身仍然执行」。
 
@@ -778,6 +778,22 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 - **D1 套装名带后缀套后缀**：当前套装本身叫 `X_sex` 时，进入场景**不应**去找 `X_sex_sex`（沿用 `EndsWithSexSuffix` 的早退），幻化保持不变。
 - **E1 基础幻化回归（1.5.25 验收项）**：普通换装 / 空幻化 / 身体槽（CK 槽 32）均正常，无空模型、无残留件；`Custom: detached` 与 `left to the engine` 行为与 1.5.29 一致。
 - **F1 菜单路径不变**：快速选择窗口按 E/Z 切同一套，日志形态应与场景路径完全一致（两者共用 `Features::AssignOutfit`）。
+
+## 3.45 1.5.33 场景套装换成「状态切换那套方法」（m07666）
+
+前置：装 `Data/SKSE/Plugins/OutfitSystemNG.dll`，旧名 `SkyrimOutfitSystemNG.dll` 已删除；准备一套与当前套装同名 + `_sex` 的套装（例如当前 `A` → 存在 `A_sex`）。
+
+- **A1 场景开始不必按键**：进 OStim / SexLab 场景，**不要按 Tab / Z**，看角色是否直接换上 `_sex` 套装（含身体/手/脚槽，不只是头手）。
+- **A2 日志依据（info，无需 Verbose）**：应看到 `SceneOutfits: OStim scene started; 'A' -> 'A_sex'.`，同一瞬紧跟 `Armor Refresh for A_sex` + `Custom: attaching N outfit-only piece(s) …`。
+- **B1 场景结束不必按键**：场景结束，**不要按任何窗口**，看模型是否直接变回普通幻化；日志应有 `SceneOutfits: OStim scene ended; 'A' restored.` + 紧随的 `Armor Refresh for A`。
+- **B2 不再有旧机件**：全程**不得**出现 `repeating the equip pass for` / `follow-up N of 3` / `Model Rebuild for` / `asking the game to rebuild the model of` / `scene event dropped`（这些字符串已从 DLL 删除）。出现即说明装的不是 1.5.33。
+- **B3 线程守卫**：正常不应出现 `arrived off the game thread; the scene switch is skipped.`；若出现，记录发事件的 mod 与事件名。
+- **C1 名字对不上**：删掉 `A_sex` 后进场景，应看到 `SceneOutfits: no 'A_sex' outfit for the … scene; create an outfit with exactly that name to use scene switching. The current outfit is kept.`，且当前幻化保持不变（不残留半套）。
+- **C2 大小写不敏感**：把套装名改成 `a_SEX`（或其它大小写组合），场景仍应切换成功（日志里显示套装真实名）。
+- **D1 基础幻化回归**：不进场景，直接用快速选择窗口（Tab/Z）与菜单点击切套装，外观必须与 1.5.25 实测结果一致（含空幻化套装）；日志正常出现 `Custom: attaching …`。
+- **D2 菜单路径与场景路径一致**：同一套装的菜单切换与场景切换，日志里都只应出现一次 `Armor Refresh` + 一次 `Custom: attaching …`（不应出现重复的补跑链）。
+- **E1 性能**：连续进出场景 10 次，切换后 1 秒内模型必须更新；内存与帧率无异常（场景入口不再有 SKSE 任务队列与 `Tick()`）。
+- **F1 状态切换未受影响**：走「按地点自动切换」换一个地点，幻化应正常切换（该模块本版一行未改；若这里出问题说明不是本版引入）。
 
 ## 4. 性能协议（1000+ 套装）
 
@@ -1067,6 +1083,7 @@ B. 回归
 
 ## 6. 已知未验证项
 - 1.5.32 的「只切套装」未实机验证：本版删掉补跑与重建后，场景切换就是一次 `Features::AssignOutfit()`（一次 `refreshArmorFor`）。1.5.31 的日志证明「切换其实执行了、biped 里也有几何」，所以本版不再假设「模型没上屏」是缺少刷新次数；若实机后场景里身体/手/脚槽仍为空，问题在「引擎 Skin 覆盖槽（3P slot 2/4/7）与幻化克隆争同一槽」，需要按 `HairTintDiagnostics` 的 3P/1P 对比单独定位，**不要**再加回补跑或重建。
+- 1.5.33 的场景套装换装未实机验证：场景开始/结束现在与「按地点/状态切换」完全同两步（`OutfitSystem::setOutfitByName()` + `OutfitSystem::refreshArmorFor()`），事件在 `ModCallbackEvent` sink 里同步执行。1.5.29–1.5.32 的日志已证明装备 pass 在场景开始时确实执行过（`Armor Refresh for …` + `Custom: attaching 5 outfit-only piece(s) …`），因此若本版模型仍不出现，需按新日志另找方向，不得再加「多刷新几次」类补丁。
 - （历史）1.5.31 的「模型重建让幻化上屏」未实机验证：`Actor::Update3DModel()` 是否真会让引擎重走 biped→3D 并采用刚写入的克隆，依据是「开合菜单时引擎做的正是这件事」这一观察；若某 load order 里重建后仍不显示，说明还有一层缓存，需要按新日志再定位。`Model Rebuild for` 与 `Skipping model rebuild` 两条都只在 debug 级可见。
 
 - 1.5.29 的「残留克隆窄清 + 幻化几何对账」未实机验证：拆克隆依赖 `ownedMask`（只有"贴进去时没有真实穿戴物打底"的槽才计入），若某套幻化件与真实穿戴件同槽，退出时不会拆、表现为残留旧件；对账依赖 `objects[bit].partClone` 非空判断"幻化在不在"，若引擎保留 `partClone` 但几何失效则不触发。两者都只做静态推理。

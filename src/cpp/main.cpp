@@ -276,7 +276,6 @@ namespace {
     {
         try {
             if (!SOS::GameState::IsLoading()) {
-                SOS::SceneOutfits::Tick();
                 SOS::MorphRefresh::Tick();
             }
         } catch (...) {

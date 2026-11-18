@@ -1,6 +1,18 @@
 # 构建说明（BUILD）
 
-## 1.5.32 构建与交付复核状态
+## 1.5.33 构建与交付复核状态
+
+**验证状态（1.5.33）**：尚未实机验证。Release **全量重编** `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log` 149 行、36 个 `.cpp` 全部 CC，留档 `build/build_1_5_33.log`）。DLL `OutfitSystemNG.dll` 1,934,848 字节，SHA256 `8c23e5eec3ae0f4561125ab2cabb71e63ef7c21d01e6a8b85755687454716aaf`，FileVersion/ProductVersion `1.5.33.0`，`build/Release` 与 `dist` 两份逐字节一致。
+
+- **本版改动面（源码基线 = `git checkout v1.5.29 -- src`）**：`SceneOutfits.cpp`（整文件重写：只剩名字解析 + `SwitchTo()`，删掉全部队列 / `Tick()` 机件）、`include/SceneOutfits.h`（删 `Tick()` 声明）、`include/OutfitSystem.h` + `OutfitSystem.cpp`（新增 `setOutfitByName()`）、`main.cpp:279` 与 `NGHotkeys.cpp:255`（删 `SceneOutfits::Tick()` 调用）、`version.h`（PATCH 33）、`CMakeLists.txt`（VERSION 1.5.33）。**钩子层、注入壳、贴件语义、槽清理、`.tri` 推导、模块文件名零改动。**
+- **构建后必查**：DLL 里 `setOutfitByName` / `SceneOutfits: ` / `create an outfit with exactly that name` / `the scene switch is skipped` / `1.5.33` 必须能搜到；`repeating the equip pass` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` / `scene event dropped` 必须**一条都搜不到**（1.5.30/1.5.31 与 1.5.32 的队列机件都已删除）。
+- **对比 1.5.32 的差异面**：`git diff v1.5.32 HEAD -- src` 应只含 `SceneOutfits.cpp/.h`、`OutfitSystem.cpp/.h`、`main.cpp`、`NGHotkeys.cpp`、`version.h`，并且 `AutoSwitch.cpp/.h` **必须为空 diff**（用户点名的「按地点/状态自动切换」本版没动）。
+- **模块文件名仍为 `OutfitSystemNG.dll`**（1.5.30 起），安装包里不得出现旧名 `SkyrimOutfitSystemNG.dll`。
+- **配置注意**：`buildtask_msbuild.bat` 内部的 `ZERO_CHECK` 会重跑 cmake configure（自带完整环境，vcpkg 走缓存），因此 `build/SkyrimOutfitSystemNG.vcxproj` 由 `CMakeLists.txt` 生成 —— 不要手改，也不要裸跑 `cmake -S . -B build`（本机 vswhere 返回空，会失败并改写 `CMakeCache.txt`）。
+- **守卫测试**：`tests/*.ps1` 必须用 PowerShell 7（`C:/Program Files/PowerShell/7/pwsh.exe`）；用 Node `spawnSync` 跑时 env 里必须带 `PATHEXT`（如 `.COM;.EXE;.BAT;.CMD`），否则依赖 `cmd` 的 mock 用例会假失败。本版新增 `tests/scene_outfit_switch.ps1`，删除 `tests/scene_outfit_queue.ps1`（后者断言的机件已不存在）。
+- 安装包 `SkyrimOutfitSystemNG-1.5.33.zip`：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；最终 zip 大小与哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256`。
+
+## 1.5.32 构建与交付复核状态（历史，其场景入口写法已被 1.5.33 取代）
 
 **验证状态（1.5.32）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log` 149 行，留档 `build/build_1_5_32.log`）。DLL `OutfitSystemNG.dll` 1,937,920 字节，SHA256 `da9ec8995c599f00cb249b611d66a13c2f3f030f845951b3d6b5eacdca05f875`，FileVersion/ProductVersion `1.5.32.0`，`build/Release` 与 `dist` 两份逐字节一致。
 

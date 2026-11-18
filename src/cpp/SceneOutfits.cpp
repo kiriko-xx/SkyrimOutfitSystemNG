@@ -1,24 +1,17 @@
 #include "SceneOutfits.h"
-#include "GameState.h"
 
-#include "NGFeatures.h"
 #include "OutfitSystem.h"
 #include "core/OutfitService.h"
 #include "core/Settings.h"
 
 #include <RE/Skyrim.h>
-#include <SKSE/API.h>
 #include <SKSE/Events.h>
 #include <SKSE/SKSE.h>
 #include <Windows.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cctype>
-#include <cstdint>
-#include <deque>
 #include <mutex>
-#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -29,11 +22,24 @@ namespace SOS::SceneOutfits
 {
 	namespace
 	{
-		bool                    g_installed{ false };
-		bool                    g_active{ false };
-		std::set<std::string>   g_activeSources;
-		std::string             g_previousOutfit;
-		std::string             g_sceneOutfit;
+		bool                  g_installed{ false };
+		bool                  g_active{ false };
+		std::set<std::string> g_activeSources;
+		std::string           g_previousOutfit;
+		std::string           g_sceneOutfit;
+
+		// SexLab and OStim can report in the same frame and the switch itself can
+		// re-enter this file (the outfit refresh is a game call), so the switch runs
+		// under a recursive lock.
+		std::recursive_mutex g_switchMutex;
+
+		// Script events arrive on the game thread, the same thread the location
+		// change the state switching reacts to is delivered on.
+		bool OnGameThread()
+		{
+			auto* main = RE::Main::GetSingleton();
+			return main && main->threadID != 0 && main->threadID == GetCurrentThreadId();
+		}
 
 		std::string ToLower(std::string_view a_text)
 		{
@@ -42,14 +48,6 @@ namespace SOS::SceneOutfits
 				return static_cast<char>(std::tolower(c));
 			});
 			return result;
-		}
-
-		// True while the caller is the game thread. Scene events arrive there, and
-		// the outfit switch is only safe to run inline on that thread.
-		bool OnGameThread()
-		{
-			auto* main = RE::Main::GetSingleton();
-			return main && main->threadID != 0 && main->threadID == GetCurrentThreadId();
 		}
 
 		bool EndsWithSexSuffix(std::string_view a_name)
@@ -62,6 +60,22 @@ namespace SOS::SceneOutfits
 			auto service = outfit_service_get_singleton_ptr();
 			const auto* outfit = service->inner().current_outfit_ptr(a_actor->GetFormID());
 			return outfit ? outfit->name_c() : std::string();
+		}
+
+		// The whole switch, done the way the location and combat switching does it:
+		// take the store, assign the name, release the store, then refresh the biped.
+		// There are no scene specific rules and no extra passes.
+		bool SwitchTo(RE::Actor* a_actor, const std::string& a_name)
+		{
+			{
+				auto service = outfit_service_get_mut_singleton_ptr();
+				if (!OutfitSystem::setOutfitByName(service->inner(), a_actor, a_name.c_str())) {
+					return false;
+				}
+			}
+			// The refresh needs the outfit lock released.
+			OutfitSystem::refreshArmorFor(a_actor);
+			return true;
 		}
 
 		void StartScene(const char* a_source)
@@ -93,9 +107,8 @@ namespace SOS::SceneOutfits
 				return;
 			}
 
-			// The scene outfit is only a name: "<current>_sex". It is looked up exactly
-			// first and then ignoring case, so a differently cased entry in the outfit
-			// list still resolves instead of silently keeping the current outfit.
+			// The scene outfit is only a name: "<current>_sex". Look it up exactly
+			// first, then ignoring case, so a differently cased entry still resolves.
 			std::string candidate = current + "_sex";
 			{
 				auto service = outfit_service_get_singleton_ptr();
@@ -124,11 +137,7 @@ namespace SOS::SceneOutfits
 			g_sceneOutfit = candidate;
 			g_active = true;
 			g_activeSources.insert(a_source);
-			// Nothing but the switch itself: the name above is assigned through the same
-			// entry point the outfit list uses, which assigns the outfit and refreshes
-			// the equipment exactly like the location and combat switching does. There
-			// are no scene specific rules, no extra equip passes and no model rebuild.
-			if (!Features::AssignOutfit(player, candidate.c_str())) {
+			if (!SwitchTo(player, candidate)) {
 				SKSE::log::warn("SceneOutfits: '{}' could not be assigned for the {} scene; the current outfit is kept.", candidate, a_source);
 				g_previousOutfit.clear();
 				g_sceneOutfit.clear();
@@ -136,7 +145,7 @@ namespace SOS::SceneOutfits
 				g_activeSources.erase(a_source);
 				return;
 			}
-			SKSE::log::debug("SceneOutfits: {} scene started; '{}' -> '{}'.", a_source, current, candidate);
+			SKSE::log::info("SceneOutfits: {} scene started; '{}' -> '{}'.", a_source, current, candidate);
 		}
 
 		void EndScene(const char* a_source)
@@ -165,111 +174,11 @@ namespace SOS::SceneOutfits
 				return;
 			}
 
-			// The restore is the same call as the switch in: assign the previous outfit
-			// and let the game refresh the equipment. Nothing else is done here.
-			if (!Features::AssignOutfit(player, previous.c_str())) {
+			if (!SwitchTo(player, previous)) {
 				SKSE::log::warn("SceneOutfits: '{}' could not be restored after the {} scene.", previous, a_source);
 				return;
 			}
-			SKSE::log::debug("SceneOutfits: {} scene ended; '{}' restored.", a_source, previous);
-		}
-
-		enum class SceneEvent
-		{
-			kOStimStart,
-			kOStimEnd,
-			kSexLabStart,
-			kSexLabEnd
-		};
-
-		std::atomic<std::uint64_t> g_generation{ 0 };
-		std::mutex g_queueMutex;
-		std::recursive_mutex g_dispatchMutex;
-		std::deque<SceneEvent> g_pendingEvents;
-		bool g_drainScheduled{ false };
-
-		void DispatchSceneEvent(SceneEvent a_event)
-		{
-			switch (a_event) {
-			case SceneEvent::kOStimStart:
-				StartScene("OStim");
-				break;
-			case SceneEvent::kOStimEnd:
-				EndScene("OStim");
-				break;
-			case SceneEvent::kSexLabStart:
-				StartScene("SexLab");
-				break;
-			case SceneEvent::kSexLabEnd:
-				EndScene("SexLab");
-				break;
-			}
-		}
-
-		void DrainSceneEvents(std::uint64_t a_generation)
-		{
-			for (;;) {
-				// SKSE AddTask defers to its task pool; it does not guarantee a
-				// main thread or serial Run calls. Serialize scene state ourselves.
-				std::lock_guard dispatchLock(g_dispatchMutex);
-				SceneEvent event;
-				{
-					std::lock_guard queueLock(g_queueMutex);
-					if (a_generation != g_generation.load(std::memory_order_acquire)) {
-						return;  // Never alter a newer generation's scheduled flag.
-					}
-					if (g_pendingEvents.empty()) {
-						g_drainScheduled = false;
-						return;
-					}
-					auto* main = RE::Main::GetSingleton();
-					if (GameState::IsLoading() || !main || main->threadID == 0 || main->threadID != GetCurrentThreadId()) {
-						g_drainScheduled = false;
-						return;  // Keep FIFO for the next wakeup; never spin-resubmit.
-					}
-					event = g_pendingEvents.front();
-					g_pendingEvents.pop_front();
-				}
-				// Release queue lock before game calls: a callback may enqueue again.
-				DispatchSceneEvent(event);
-			}
-		}
-
-		void ScheduleDrain(SKSE::TaskInterface const* a_tasks, std::uint64_t a_generation)
-		{
-			try {
-				a_tasks->AddTask([a_generation]() { DrainSceneEvents(a_generation); });
-			} catch (...) {
-				std::lock_guard lock(g_queueMutex);
-				if (a_generation == g_generation.load(std::memory_order_acquire)) {
-					g_drainScheduled = false;
-				}
-			}
-		}
-
-		void QueueSceneEvent(SceneEvent a_event)
-		{
-			const auto generation = g_generation.load(std::memory_order_acquire);
-			auto* tasks = SKSE::GetTaskInterface();
-			if (!tasks) {
-				SKSE::log::warn("SceneOutfits: the task interface is not available; scene event dropped (no synchronous fallback).");
-				return;
-			}
-			{
-				std::lock_guard queueLock(g_queueMutex);
-				if (GameState::IsLoading() || generation != g_generation.load(std::memory_order_acquire)) {
-					return;
-				}
-				// FIFO is our queue-lock acquisition order, not SKSE Run order.
-				// Keep every start/end value; never coalesce overlapping source ends.
-				g_pendingEvents.push_back(a_event);
-				if (g_drainScheduled) {
-					return;
-				}
-				g_drainScheduled = true;
-			}
-			// Capture only the owned token, never callback strings/events/actors.
-			ScheduleDrain(tasks, generation);
+			SKSE::log::info("SceneOutfits: {} scene ended; '{}' restored.", a_source, previous);
 		}
 
 		class ModEventSink final : public RE::BSTEventSink<SKSE::ModCallbackEvent>
@@ -281,52 +190,32 @@ namespace SOS::SceneOutfits
 					return RE::BSEventNotifyControl::kContinue;
 				}
 				const std::string_view name = a_event->eventName.c_str();
-				std::optional<SceneEvent> event;
-				if (name == "ostim_start") {
-					event = SceneEvent::kOStimStart;
-				} else if (name == "ostim_end") {
-					event = SceneEvent::kOStimEnd;
-				} else if (name == "PlayerAnimationStart") {
-					event = SceneEvent::kSexLabStart;
-				} else if (name == "PlayerAnimationEnd") {
-					event = SceneEvent::kSexLabEnd;
-				}
-				if (!event) {
+				if (name != "ostim_start" && name != "ostim_end" && name != "PlayerAnimationStart" && name != "PlayerAnimationEnd") {
 					return RE::BSEventNotifyControl::kContinue;
 				}
-				// The switch runs right here, on the game thread, the same way the
-				// location and combat sinks switch an outfit from inside the event they
-				// were handed. Only an event that arrives off the main thread is queued
-				// for the task pool.
-				if (OnGameThread()) {
-					std::lock_guard dispatchLock(g_dispatchMutex);
-					DispatchSceneEvent(*event);
-				} else {
-					QueueSceneEvent(*event);
+				if (!OnGameThread()) {
+					SKSE::log::warn("SceneOutfits: '{}' arrived off the game thread; the scene switch is skipped.", a_event->eventName.c_str());
+					return RE::BSEventNotifyControl::kContinue;
+				}
+				// The switch runs right here, the way the location sink switches an
+				// outfit from inside the event it was handed.
+				{
+					std::lock_guard switchLock(g_switchMutex);
+					if (name == "ostim_start") {
+						StartScene("OStim");
+					} else if (name == "ostim_end") {
+						EndScene("OStim");
+					} else if (name == "PlayerAnimationStart") {
+						StartScene("SexLab");
+					} else if (name == "PlayerAnimationEnd") {
+						EndScene("SexLab");
+					}
 				}
 				return RE::BSEventNotifyControl::kContinue;
 			}
 		};
 
 		ModEventSink g_sink;
-	}
-
-	void Tick()
-	{
-		auto* tasks = SKSE::GetTaskInterface();
-		if (!tasks) {
-			return;  // Event submission already warns when the interface is absent.
-		}
-		const auto generation = g_generation.load(std::memory_order_acquire);
-		{
-			std::lock_guard queueLock(g_queueMutex);
-			if (GameState::IsLoading() || generation != g_generation.load(std::memory_order_acquire) ||
-				g_pendingEvents.empty() || g_drainScheduled) {
-				return;
-			}
-			g_drainScheduled = true;
-		}
-		ScheduleDrain(tasks, generation);
 	}
 
 	bool Install()
@@ -347,13 +236,7 @@ namespace SOS::SceneOutfits
 
 	void Reset()
 	{
-		// Invalidate queued drains first; wait for an in-flight dispatch before
-		// clearing scene state. Keep the existing Reset caller/lifecycle contract.
-		g_generation.fetch_add(1, std::memory_order_acq_rel);
-		std::lock_guard dispatchLock(g_dispatchMutex);
-		std::lock_guard queueLock(g_queueMutex);
-		g_pendingEvents.clear();
-		g_drainScheduled = false;
+		std::lock_guard switchLock(g_switchMutex);
 		g_active = false;
 		g_activeSources.clear();
 		g_previousOutfit.clear();
