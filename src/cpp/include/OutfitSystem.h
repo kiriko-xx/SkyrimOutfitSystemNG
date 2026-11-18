@@ -31,6 +31,12 @@ namespace OutfitSystem {
     // Rebuilds the actor's biped. Must be called without the outfit lock held.
     void refreshArmorFor(RE::Actor* a_actor);
 
+    // Rebuilds the actor's 3D model from its biped. This is the step a menu
+    // open or close makes the game take on its own, and the only one that moves
+    // armour clones - built during a scripted outfit change - into the model
+    // that is actually drawn. Returns false when there is no 3D to rebuild yet.
+    bool rebuildActorModel(RE::Actor* a_actor);
+
     // Rebuilds every actor that is currently wearing \a a_outfit. An edit or a
     // slot policy change only shows up once that actor walks through a skinning
     // pass, and a slot that leaves the display set has to be cleared, otherwise

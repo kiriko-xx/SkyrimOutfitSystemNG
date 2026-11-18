@@ -1,6 +1,18 @@
 # 交付说明（DELIVERY）
 
-## 1.5.29 最新交付准备（2026-11-18）
+## 1.5.31 最新交付准备（2026-11-18）
+
+**验证状态（1.5.31）**：**尚未实机验证**，不能声称已修好。静态侧：Release @B@BUILD_EXIT=0@B@（0 error / 0 warning，日志 @B@build/build_task.log@B@，留档 @B@build/build_1_5_31.log@B@）；@B@OutfitSystemNG.dll@B@ 1,941,504 字节 / @B@c8c8ae5d…@B@ / @B@1.5.31.0@B@（build/Release 与 dist 一致）。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 1,941,504 字节；@B@c8c8ae5db004c0017b029110b23dd707e1e519789c2acf81ba637a5ed63ad6b2@B@；@B@1.5.31.0@B@（build/Release 与 dist 一致） |
+| 安装包与复核记录 | SkyrimOutfitSystemNG-1.5.31.zip：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；最终 zip 大小/哈希只写包外 VERSIONS.md 与同名 .zip.sha256，包内不自引用 |
+
+- **用户指令照做**：删掉 @B@SceneOutfits@B@ 里自己拼的 @B@set_outfit_c@B@ + @B@refreshArmorFor@B@，场景开始/结束一律改调 @B@Features::AssignOutfit()@B@ —— 正是「点套装列表」走的那条函数（@B@MenuUI::ApplyTo@B@ 用的同一个）。
+- **补上真正缺的一步**：1.5.30 证明「多跑几次装备 pass」不能让模型出现；让模型出现的是引擎重建 3D。新增 @B@OutfitSystem::rebuildActorModel()@B@（@B@Actor::Update3DModel()@B@），在 3 次随访中的第 2 次之前调用一次。
+- **未动的东西**：基础幻化钩子（@B@Hooks.cpp@B@）、注入壳、贴件语义、槽位清理策略、@B@.tri@B@ 目标推导、DLL 文件名一律未改；1.5.25 实测正常的基础幻化不受影响。
+## 1.5.29 交付准备（历史，已被 1.5.31 取代）
 
 **验证状态（1.5.29）**：**尚未实机验证**，不能声称已修好。静态侧：Release `BUILD_EXIT=0`（0 error / 0 warning）；`tests/*.ps1` 共 14 条源码守卫 12 条通过，2 条失效断言是既有问题（`hair_tint_read_only.ps1` 的锚点 `tasks->AddTask([retryProviders]()` 在 HEAD 已被重构掉、`skse_listener_replay.ps1` 硬绑旧插件索引 139/132），与本次改动无关；新增 `tests/skinning_stale_slots.ps1` 通过。
 
@@ -1140,6 +1152,45 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 
 本机没有 Skyrim。判定方式：复现 m05502 的 B 组 —— OStim 场景中用 Tab 切到 `_sex`，结束场景看是否**不需要再按键**就换回普通幻化；日志里应看到 `detached …` 或 `lost the illusion in slot mask … rebuilding` 之一，**不应**再需要第二次 Tab。A 组的崩溃（`EXCEPTION_ACCESS_VIOLATION` 于渲染阶段读空指针）与本版的关系仍未实证；若重装后仍崩，请连同 `crash-*.log` 与同一次会话的 `SkyrimOutfitSystemNG.log` 一起发回，本版新增的 `detached` / `rebuilding` 行可以判断是否是本插件在错误时机改了 biped。
 
+## 4.59 1.5.31：场景开始/结束都必须弹一次窗才显示（m07050）
+
+### 症状（1.5.30 实机）
+- OStim 场景开始切 `_sex` 套装：模型不出现；按一次 Tab / Z 打开快速选择窗口才出现。
+- 场景结束回普通幻化：同样要按一次窗口才变回来（1.5.30 之前只有前者有这个问题）。
+- 用户给的方向：「直接把原来 `_sex` 套装切换部分删了，直接按『点套装列表』原来走的那条函数走」。
+
+### 日志证据（584,253 字节 / 6,129 行，v1-5-30-0，runtime 1-5-97-0，18:38:27 加载）
+- 18:38:28.728 DLL 改名生效：`interface probe sender 101 receiver skee64 payload 8 delivered false map returned false.` 与 `receiver skee payload 8 delivered true map returned true.` → `RaceMenu BodyMorph v4 acquired through skee`。
+- 18:40:22.114 `SceneOutfits: OStim scene started; '…简化' -> '…_sex'.`；1.5.30 的三次随访 22.250 / 22.672 / 23.588 全部按时执行，每次都 `Armor Refresh for JueLunV6` + `Custom: attaching 5 outfit-only piece(s) of 5 displayed (mask 0x00002096, outfit revision true…)`。**模型仍不可见。**
+- 22.381 `HairTintDiagnostics` 全量 dump：3P biped 的 slot 1/2/4/7/13 **全都有真实几何**（`TFPZ`、`mesh_65shangyi1..5`、`(FE2D6D6E)[1]`、`Feet/mesh_65xiezi`、`mesh_69`）。⇒ 「biped 已贴好」≠「画面上可见」。
+- 18:40:42.955 引擎自己又跑了 2+2 轮 pass（线程 29720 / 14624，`outfit revision false`），模型依旧不出来 ⇒ 纯装备 pass 不是解法。
+- 18:40:47.193 打开快速选择窗口 → 47.228 `re-morphed … 7 node(s), 7 .tri target(s) of 7 slot(s)` → 47.236 `scene ended; '…简化' restored.` 恢复普通套装 0x00002186（随后 3 次随访也全部执行）。**模型这时才变回普通幻化。**
+- 线程：所有 `Custom:` 行与 skinning pass 都在 29720，`MorphRefresh UI probe … game-thread= expected=29720` ⇒ 菜单路径与脚本路径同线程，差别不在线程。
+
+### 真因
+装备 pass 只把克隆写进 `BipedAnim::objects[slot]`，被绘制的那份 3D 模型仍是切换前建的；**开/关一次菜单会让引擎重建该模型**，这才是「一按就出来」的真正机制。1.5.30 的「补跑 3 次 `refreshArmorFor`」只是重复写 biped，从来没有触发模型重建。
+
+### 修法（三条）
+1. `OutfitSystem` 新增 `bool rebuildActorModel(RE::Actor*)`：`Is3DLoaded()` 守卫 + `LOG(debug, "Model Rebuild for {}")` + `actor->Update3DModel()`，失败返回 false（无 3D 时打 `Skipping model rebuild for {}: no 3D yet.`）。
+2. `MorphRefresh` 的随访序列里，`kModelRebuildAttempt = 2`（第 2 次随访）之前调一次 `rebuildActorModel`，日志 `MorphRefresh: asking the game to rebuild the model of {:08X} so the illusion reaches the drawn 3D (follow-up {} of {}).`；其余两次仍是 `refreshArmorFor`。
+3. `SceneOutfits` 的场景开始 / 场景结束**删掉**自己拼的 `set_outfit_c` + `Features::RefreshActor`，改调 `Features::AssignOutfit(player, name)`（= 点套装列表那条函数）；失败时 `warn` 并保持/回滚，不再静默。
+
+### 新日志一览
+| 日志（debug/warn） | 含义 |
+| --- | --- |
+| `Model Rebuild for <name>` | 已向引擎请求重建该角色的 3D 模型 |
+| `Skipping model rebuild for <name>: no 3D yet.` | 3D 未加载，本轮跳过重建（下次随访会再试） |
+| `MorphRefresh: asking the game to rebuild the model of <FormID> so the illusion reaches the drawn 3D (follow-up 2 of 3).` | 随访链第 2 步就是重建，模型应在这一步之后出现 |
+| `SceneOutfits: '<outfit>' could not be assigned for the <source> scene; the current outfit is kept.` | 场景套装赋值失败（套装已删除等），幻化保持原样 |
+| `SceneOutfits: '<outfit>' could not be restored after the <source> scene.` | 场景结束恢复失败，需要手动切回 |
+
+### 兼容性
+- 只增加一次 `Update3DModel()` 调用，并把场景入口换成已存在的公共函数；不动钩子、注入壳、贴件语义、槽清理（1.5.25 / 1.5.29 的行为保持不变）。
+- 框架无关：`SceneOutfits` 的改动只是换成通用入口，函数体里没有 OStim / SexLab / SAM 之类名字。
+- 重建模型会让该角色当帧重走一次 biped→3D，开销与打开一次菜单相当；只对发生切换的角色、每次切换最多一次。
+
+### 未验证
+本机没有 Skyrim。判定：复现 OStim 场景开始，**不要按 Tab**，看 `_sex` 是否直接出现；日志应有 `Model Rebuild for …` 与 `asking the game to rebuild the model of …(follow-up 2 of 3)`。场景结束同理。若重建之后仍不显示，把这几行连同前后 20 行发回。
 ## 4.58 1.5.30：场景里切 `_sex` 不显示、必须弹一次窗（m06712）+ DLL 改名（m06781）
 
 ### 症状
@@ -1180,8 +1231,8 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 
 | 项 | 结果 |
 | --- | --- |
-| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.30 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_29.log`） |
-| 版本资源 | `FileVersion = 1.5.30.0` / `ProductVersion = 1.5.30.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
+| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.31 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_31.log`） |
+| 版本资源 | `FileVersion = 1.5.31.0` / `ProductVersion = 1.5.31.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
 | 导入表 | 仅 KERNEL32 / USER32 / ole32 / VERSION / SHELL32 |
 | 延迟导入 | 目录 RVA = 0、size = 0（无延迟导入项） |
 | 导出 | SKSEPlugin_Load / SKSEPlugin_Query / SKSEPlugin_Version 均存在 |
@@ -1195,6 +1246,7 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 | 1.5.24 关键字符串 | `outfit-only piece(s) of` / `slot {:02} clone ` / `left the display set (mask ` / `ApplyArmorAddon refused` / `does not point at a biped model of` / `1.5.24` 均可检索；`FileVersion = 1.5.24.0`、`ProductVersion = 1.5.24.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,866,752 字节，sha256 `2530C1E5FDE6CF22E87C011BAC0D078F22EF7C53407771DCD6CCC47F71A0204B`；导入依赖未新增 |
 | 1.5.26 关键字符串 | `carries a .tri morph target on` / `no interface needed` / `stay armed` / `.tri morph targets are attached to every illusion clone` / `only adds the immediate re-morph` / `has no BodyMorph interface;` / `1.5.26` 均可检索；1.5.20 的 `.tri morph target support` 已从 DLL 中消失；`MorphShapeCallback` / `Obody_ApplyMorph` / `BODYTRI` 仍在；`FileVersion = 1.5.26.0`、`ProductVersion = 1.5.26.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,868,288 字节，sha256 `7ca36b0d…e54fecf`；导入依赖未新增 |
 | 1.5.30 关键字符串 | `repeating the equip pass for` / `because one pass alone does not materialise the illusion` / `follow-up` 可检索；模块文件名 `OutfitSystemNG.dll`（旧名 `SkyrimOutfitSystemNG.dll` 已不在 dist 与 build/Release）；FileVersion 1.5.30.0、DLL 1,939,456 字节 / `2d0d9689…`、导入依赖未新增 |
+| 1.5.31 关键字符串 | `Model Rebuild for` / `Skipping model rebuild for` / `asking the game to rebuild the model of` / `so the illusion reaches the drawn 3D` / `could not be assigned for the` / `could not be restored after the` / `rebuildActorModel` 可检索；`FileVersion = 1.5.31.0`、`ProductVersion = 1.5.31.0`；DLL 1,941,504 字节，SHA256 `c8c8ae5db004c0017b029110b23dd707e1e519789c2acf81ba637a5ed63ad6b2`；模块文件名仍 `OutfitSystemNG.dll` |
 | 1.5.29 关键字符串 | `detached ` / `illusion clone(s) whose slot left the display set` / `lost the illusion in slot mask` / `after 3 rebuilds` / `rebuilding the actor` / `left to the engine` 可检索；`ClearBipedPart` 与 `IllusionMissingSlots` 作为内部符号不出现在字符串表（前者只剩一处调用）；FileVersion 1.5.29.0、DLL 1,936,384 B / `4f0bcae1…`、导入依赖未新增 |
 | 1.5.27 关键字符串 | `uses .tri ` / `has no .tri beside it` / `Probed: ` / `the armour addon the engine attached` / `has no armour addon yet` / `leaving the clones to the next morph pass instead of cycling` / `but the illusion carries .tri targets` / `every illusion clone whose armour model ships a .tri` / `1.5.27` 均可检索；1.5.26 的 `.tri morph targets are attached to every illusion clone` 已从 DLL 中消失；`carries a .tri morph target on` / `stay armed` / `BODYTRI` / `MorphShapeCallback` 仍在；`FileVersion = 1.5.27.0`、`ProductVersion = 1.5.27.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,875,456 字节，sha256 `22eb7794…a91af178f`；导入依赖未新增 |
 | 1.5.25 关键字符串 | `left to the engine` / `slot {:02} item {:08X} addon {:08X} part {} clone {}` / `1.5.25` 均可检索；1.5.24 的 `cleared for` 与 `ClearBipedPart` / `ClearSlots` 已从 DLL 中消失；`FileVersion = 1.5.25.0`、`ProductVersion = 1.5.25.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,866,240 字节，sha256 `ae797d9d…efc3936b5`；导入依赖未新增 |
@@ -1275,6 +1327,7 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 50. **1.5.29 场景结束后的残留幻化与「再按一次键」（对应 m05502）**：复现 B 组 —— OStim 场景中用 Tab/Z 打开快速换装窗切到 `_sex` 套装，结束场景回普通幻化后**不要**再按键，看模型是否已经变回普通套装。日志判定：应出现 `Custom: detached N illusion clone(s) whose slot left the display set (mask 0x…)`（1.5.29 新增）或 `MorphRefresh: … lost the illusion in slot mask 0x…; rebuilding the actor's equipment.`（debug），随后是普通套装的 `attaching N outfit-only piece(s)`；**不应**再需要第二次 Tab。若三次重建后仍看到 `still holds no illusion geometry … after 3 rebuilds`，把该行连同前 40 行发回（多半是件数/ARMA 问题，不是残留）。A 组的崩溃（`EXCEPTION_ACCESS_VIOLATION` 在渲染/剔除阶段读 `[rax+0xF4]`）仍与本插件关系未证，若重装后仍崩，请把 `crash-*.log` 与同一次会话的 `SkyrimOutfitSystemNG.log` 一起发回。见 §4.57 与 TESTING §3.41。
 
 51. **1.5.30 场景切换不用再按一次键（对应 m06712）+ DLL 改名（对应 m06781）**：①先确认装的是 `Data/SKSE/Plugins/OutfitSystemNG.dll`，并且旧名 `SkyrimOutfitSystemNG.dll` 已删除（两个都在会双加载）；②复现 OStim 场景开始 → 看 `_sex` 套装是否**直接**显示（不要按 Tab）；③场景结束回普通幻化，看模型是否**直接**变回（不要按 Tab）。日志判定（需开 Verbose）：每次切换后应出现最多 3 条 `MorphRefresh: repeating the equip pass for <FormID> (follow-up N of 3), because one pass alone does not materialise the illusion.`，紧邻前后能看到 `Armor Refresh for …` 与 `Custom: attaching N outfit-only piece(s) …`。若 3 条之后模型仍不更新，把这行连同前后 20 行发回。见 §4.58 与 TESTING §3.42。
+52. **1.5.31 场景切换不再需要弹窗（对应 m07050）**：①装 `Data/SKSE/Plugins/OutfitSystemNG.dll`，确认旧名 `SkyrimOutfitSystemNG.dll` 已删（两个都在会双加载）；②进 OStim 场景，**不要按 Tab / Z**，看 `_sex` 套装是否直接出现；③场景结束回普通幻化，同样不要按任何窗口，看模型是否直接变回。日志判定（需开 Verbose）：每次切换后应依次看到 `Armor Refresh for …` → `Custom: attaching N outfit-only piece(s) …` → `MorphRefresh: asking the game to rebuild the model of <FormID> so the illusion reaches the drawn 3D (follow-up 2 of 3).` → `Model Rebuild for …`。若重建之后仍不出现，把这几行连同前后 20 行发回。见 §4.59 与 TESTING §3.43。
 
 ## 7. 已知限制
 - SMP 重置依赖 Faster HDT-SMP 的 Papyrus 静态函数 `DynamicHDT.ResetPhysics`；没装 FSMP 时开关无效但不报错。
@@ -1314,6 +1367,7 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 
 - 1.5.29 的「残留克隆窄清 + 幻化几何对账」未实机验证，两条判据都基于源码推理：①拆克隆的前提是 `ownedMask` 只记录「贴进去时没有真实穿戴物打底」的槽，若某套幻化的件恰好与真实穿戴件同槽（引擎通道先贴真甲、我们再覆盖），该槽不会被计入 `ownedMask`，退出时不会拆 —— 表现是仍残留旧件（下一轮的 `attaching` 会覆盖回来，但若两套件数不同就会看到旧的那件）；②对账依赖 `BipedAnim::objects[bit].partClone` 非空来判断「幻化在不在」，若引擎在某些情况下保留 `partClone` 但几何已失效（顶点缓冲被清），对账不会触发。两种情况的日志分别是「有 `left to the engine` 但没有 `detached`」与「完全没有对账行」，可据此区分。
 - 1.5.30 的「场景切换补跑 pass」未实机验证：前提是「所有切换入口都经过 `Features::RefreshActor()`」；若某条路径（例如第三方 mod 自己改装备、或 OStim 内部直接换装）没有经过它，表现仍是「要按一次键」。随访次数与延迟（120 / 400 / 900 ms）按菜单路径的观察估定，不保证每个 load order 都够；不够时表现为「慢一瞬才更新」，而不是不更新。
+- 1.5.31 的「重建模型让幻化上屏」未实机验证：前提是 `Actor::Update3DModel()` 真的会让引擎重走 biped→3D 并采用脚本刚写进去的克隆（依据是菜单开合时引擎自己做的正是这件事）。若某个 load order 里重建之后仍不显示，说明还有一层缓存（例如 ENB / 框架缓存了节点），需要按新日志再定位；重建每次切换只发生一次，不会循环。
 
 ## 8. 排查速查
 
@@ -1389,6 +1443,11 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 | `SceneOutfits: SexLab / OStim scene detection installed.` | 场景套装监听已注册（1.5.0）；没有这行说明 `ModCallbackEvent` 源取不到。 |
 | `SceneOutfits: ... scene started; 'A' -> 'A_sex'.` | 场景开始并已换上 `_sex` 套装（debug，需 Verbose logging）。 |
 | `SceneOutfits: no 'A_sex' outfit for the ... scene; the current outfit is kept.` | 没有同名 `_sex` 套装，按设计保持当前幻化。 |
+| `Model Rebuild for <name>`（debug） | 1.5.31：已请求引擎重建该角色的 3D 模型（`Actor::Update3DModel()`）。这是让脚本换装产生的克隆真正上屏的那一步。 |
+| `Skipping model rebuild for <name>: no 3D yet.`（debug） | 1.5.31：3D 还没加载，本轮跳过；下一次随访会再试。 |
+| `MorphRefresh: asking the game to rebuild the model of <FormID> so the illusion reaches the drawn 3D (follow-up N of 3).`（debug） | 1.5.31：随访链第 2 步就是重建模型；这条之后模型应出现/变回。没有这条说明随访没跑到第 2 步。 |
+| `SceneOutfits: '<outfit>' could not be assigned for the <source> scene; the current outfit is kept.`（warn） | 1.5.31：场景套装赋值失败（套装已删除等），幻化保持原样。 |
+| `SceneOutfits: '<outfit>' could not be restored after the <source> scene.`（warn） | 1.5.31：场景结束恢复失败，需要手动切回。 |
 | `SMP: Faster HDT-SMP (DynamicHDT) is not installed; the physics reset is skipped.` | 开关打开但没装 FSMP；只提示一次，不影响换装（debug）。 |
 | `SMP: DynamicHDT.ResetPhysics could not be dispatched for ...` | FSMP 存在但静态调用失败，检查 FSMP 版本/ Papyrus 注册（debug）。 |
 | `Custom: rebuilding <n> display pieces (mask 0x…, outfit revision …, body morph …) for <FormID>.`（debug） | 1.5.14 起每次全量重建都打印；`outfit revision true` 表示这次由「套装被重新指派/编辑」触发（Z 键、快选窗 E、Papyrus SetOutfit），`body morph true` 表示由身形变化触发。 |
@@ -1427,6 +1486,7 @@ Custom: FE28F807 slot 16 item 3400504A addon FE28F806 part 1 clone 0
 ## 9. 维护提示
 - 模块文件名（1.5.30 起 `OutfitSystemNG.dll`）**只影响** SKSE 的加载与消息路由顺序；插件身份不许跟着改：`SOS_PCH.h` 的 `Plugin::NAME`、日志文件名 `SkyrimOutfitSystemNG.log`、Papyrus 翻译前缀 `SkyrimOutfitSystemNG_<lang>.txt`、存档标识一律保持原值。改名时必须确认 `Data/SKSE/Plugins` 最终 VFS 里只有一份，绝不能双加载。
 - 「切换了套装」不等于「模型已更新」：任何新增的切换入口都必须走 `Features::RefreshActor()`（一次即时 pass + 3 次随访），不要直接调 `OutfitSystem::refreshArmorFor()` 就以为完事 —— 1.5.29 的场景套装就栽在这里。
+- 「模型没更新」与「幻化没切换」是两件事（1.5.31 的教训）：`BipedAnim` 里已经有克隆、`HairTintDiagnostics` dump 里也有几何，画面仍可能停在旧模型 —— 被绘制的那份 3D 需要引擎重建。今后任何「切换后必须立刻可见」的路径，都要在装备 pass 之外追加一次 `OutfitSystem::rebuildActorModel()`。
 
 - 游戏版本升级：只改 `src/cpp/hooking/Hooks.cpp` 里各 `REL::RelocationID(seID, aeID)` 的两个 ID（宿主与目标函数），站点由 `FindCallInFunction` 自动重扫，**不要再加任何字节偏移**。唯一例外是 `CustomSkinPlayer`：它走 `FindCallInFunctionOrOffset`，扫不到时才回退到 1.0.0 起的历史站点（SE `+0x81` / AE `+0x1EF`，1.5.17 在 1.5.97 上实测可用）；换运行时如果这行 warn 变成 error，说明连历史站点也不是 `E8`，此时才需要按真实反汇编重新定位。
 - `.tri` 跟随**不得**以「拿到 skee 接口」为前提：`BakeIllusion()` 只在重放那一小段用 `g_api`，贴 `BODYTRI` 必须无条件执行（1.5.26 的教训；1.5.20–1.5.25 就是因为门禁把整个机制关掉了）。

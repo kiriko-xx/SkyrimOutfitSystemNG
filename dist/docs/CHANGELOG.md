@@ -1,5 +1,17 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.31] - 2026-11-18
+
+### 修复：场景开始/结束都必须弹一次窗才显示（m07050）
+
+- **症状**：1.5.30 实机 —— OStim 场景开始切 `_sex` 套装模型不出现，按一次 Tab/Z 打开快速选择窗口才出现；**场景结束回普通幻化也要按一次窗口**才变回来。用户要求「直接把原来 `_sex` 套装切换部分删了，直接按『点套装列表』原来走的那条函数走」。
+- **证据**（`SkyrimOutfitSystemNG.log`，584,253 字节 / 6,129 行，v1-5-30-0）：18:40:22.114 场景开始，1.5.30 的三次随访 22.250 / 22.672 / 23.588 全部按时执行且每次都有 `Custom: attaching 5 outfit-only piece(s) of 5 displayed (mask 0x00002096 …)`，**模型仍不可见**；22.381 的 `HairTintDiagnostics` 全量 dump 显示 3P biped 五个槽**全都有真实几何**；18:40:42.955 引擎自己又跑 2+2 轮 pass，模型依旧不出来；18:40:47.193 打开快速选择窗口后才恢复正常。所有 `Custom:` 行与 pass 都在同一线程（29720），差别不在线程。
+- **真因**：装备 pass 只把克隆写进 `BipedAnim::objects[slot]`，被绘制的那份 3D 模型仍是切换前建的；**开/关一次菜单会让引擎重建该模型**，这才是「一按就出来」的真正机制。1.5.30 的补跑只是重复写 biped，从未触发模型重建。
+- **修法一（重建模型，`OutfitSystem.h/.cpp`）**：新增 `bool rebuildActorModel(RE::Actor*)` —— `Is3DLoaded()` 守卫、日志 `Model Rebuild for {}` / `Skipping model rebuild for {}: no 3D yet.`、`actor->Update3DModel()`。
+- **修法二（随访链加一步，`MorphRefresh.cpp`）**：`kModelRebuildAttempt = 2`，第 2 次随访之前调用一次 `rebuildActorModel()`，日志 `asking the game to rebuild the model of {:08X} so the illusion reaches the drawn 3D (follow-up {} of {})`；其余两次仍是 `refreshArmorFor`。
+- **修法三（场景入口照用户要求改写，`SceneOutfits.cpp`）**：场景开始 / 结束**删掉**自己拼的 `set_outfit_c` + `Features::RefreshActor()`，改调 `Features::AssignOutfit(player, name)` —— 与「点套装列表」完全同一条函数；失败时 `warn`（`could not be assigned for the … scene; the current outfit is kept.` / `could not be restored after the … scene.`）并保持原状。
+- **未改动**：基础幻化钩子（`Hooks.cpp`）、注入壳、贴件语义、槽位清理、`.tri` 目标推导、DLL 文件名（`OutfitSystemNG.dll`）一律不动；1.5.25 实测正常的基础幻化不受影响。
+- **未验证**：本机没有 Skyrim。判定见 `docs/DELIVERY.md` §4.59、`docs/TESTING.md` §3.43。
 ## [1.5.30] - 2026-11-18
 
 ### 修复：场景里切 `_sex` 套装不显示、必须弹一次窗（m06712）；模块改名 `OutfitSystemNG.dll`（m06781）

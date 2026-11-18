@@ -368,6 +368,10 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		// opened a menu. Repeating the equip refresh a few times gives every
 		// switch path the behaviour the menu path has always had.
 		constexpr std::size_t kOutfitPassCount = 3;
+		// Which follow-up asks for the model rebuild. The equip passes alone leave the
+		// clones in the biped while the drawn model keeps the old gear; the rebuild is
+		// the step a menu open or close takes, and one per switch is enough.
+		constexpr std::uint32_t kModelRebuildAttempt = 2;
 		constexpr std::chrono::milliseconds kOutfitPassDelay[kOutfitPassCount] = {
 			std::chrono::milliseconds(120),
 			std::chrono::milliseconds(400),
@@ -1629,6 +1633,14 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				auto* actor = RE::TESForm::LookupByID<RE::Actor>(entry.id);
 				if (!actor || !actor->Is3DLoaded()) {
 					continue;
+				}
+				if (entry.attempt == kModelRebuildAttempt) {
+					// The clones are in the biped, but the model the game draws was built
+					// before the switch. Opening or closing a menu makes the game rebuild
+					// it; ask for the same rebuild so a scene outfit or a hotkey switch no
+					// longer needs the player to press anything.
+					SKSE::log::debug("MorphRefresh: asking the game to rebuild the model of {:08X} so the illusion reaches the drawn 3D (follow-up {} of {}).", entry.id, entry.attempt, kOutfitPassCount);
+					::OutfitSystem::rebuildActorModel(actor);
 				}
 				SKSE::log::debug("MorphRefresh: repeating the equip pass for {:08X} (follow-up {} of {}), because one pass alone does not materialise the illusion.", entry.id, entry.attempt, kOutfitPassCount);
 				::OutfitSystem::refreshArmorFor(actor);

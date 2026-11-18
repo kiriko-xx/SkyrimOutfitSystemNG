@@ -161,6 +161,25 @@ namespace OutfitSystem {
         // actor so the new meshes do not inherit the old outfit physics.
         SOS::SMP::ResetActor(actor);
     }
+    bool rebuildActorModel(RE::Actor* actor) {
+        if (!actor) return false;
+        // Same gate as the equip refresh: asking the process manager for a new
+        // model while the actor has no 3D is what used to hang the load screen.
+        if (!actor->Is3DLoaded()) {
+            LOG(debug, "Skipping model rebuild for {}: no 3D yet.", actor->GetDisplayFullName());
+            return false;
+        }
+        // Why this exists: the equip passes put the illusion clones into the
+        // actor's biped, but the nodes the game draws come from the model that
+        // was built when the 3D was last created. Opening or closing a menu
+        // makes the game rebuild that model, which is exactly why a scripted
+        // outfit switch (a scene starting or ending, a hotkey) showed nothing
+        // until the player pressed the outfit key. Asking for the same rebuild
+        // removes that requirement without depending on any framework.
+        LOG(debug, "Model Rebuild for {}", actor->GetDisplayFullName());
+        actor->Update3DModel();
+        return true;
+    }
     std::size_t refreshArmorForOutfitUsers(const char* a_outfit) {
         if (!a_outfit || !*a_outfit) return 0;
         std::vector<RE::FormID> wearers;

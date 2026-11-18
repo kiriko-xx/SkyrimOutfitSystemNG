@@ -747,6 +747,22 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 - **E1 性能**：1000+ 套装列表下按 C1 反复切 20 次，帧率与 1.5.29 相比无可感知下降；三次 follow-up 不得在菜单打开时造成输入卡顿。
 - **F1 基础幻化回归（1.5.25 验收项）**：普通换装 / 空幻化 C / 身体槽（CK 槽 32）均正常，不得出现空模型或残留件；`Custom: detached` 与 `lost the illusion in slot mask` 不应因本版而新增。
 
+## 3.43 1.5.31 场景切换不再需要弹窗（模型重建 + 场景入口改写）（m07050）
+
+前置：A = `_sex` 场景套装、B = 普通套装；OStim 或 SexLab 至少一个；开 Verbose（`Model Rebuild for` 与 `asking the game to rebuild` 是 debug）。1.5.30 的随访判据（`repeating the equip pass … follow-up N of 3`）仍然适用，但**只有它不够** —— 本版新增的判据是「随访链第 2 步会请求重建 3D」。
+
+- **A1 场景开始不必弹窗**（本版重点）：触发场景 → 自动切到 A → **全程不按 Tab/Z**，角色应在 1 秒内出现 A 的幻化件。日志顺序：`Armor Refresh for …` → `Custom: attaching N outfit-only piece(s) …` → `MorphRefresh: asking the game to rebuild the model of <FormID> … (follow-up 2 of 3).` → `Model Rebuild for …`。
+- **A2 重建之后不再需要第二次**：A1 之后按 Tab/Z 开窗再关，外观**不应**变化。若仍要按键才出来，说明重建时机不够（把该段 40 行日志发回，重点看 `Model Rebuild for` 是否真的出现在 `attaching` 之后）。
+- **B1 场景结束自动回滚**：结束场景 → 自动切回 B → 不按键，模型一次刷新内变成 B；A 独有槽（如 CK 槽 34）不得残留（与 1.5.29 的 `detached` / `left to the engine` 判据叠加看）。
+- **B2 场景入口走的是通用函数**：开 Verbose 后，每次场景开始/结束都应看到一次 `Armor Refresh` 与三次随访 —— 与「点快速选择窗口切同一套」的日志形态一致（本版把 `SceneOutfits` 改成调用 `Features::AssignOutfit()`）。
+- **B3 套装不存在时不静默**：把 `_sex` 套装删掉再触发场景 → 日志 `SceneOutfits: '<outfit>' could not be assigned for the OStim scene; the current outfit is kept.`（warn），幻化保持原样、不反复重试。
+- **C1 重建是有限次**：同一角色连续切换 20 次，每次切换最多一次 `Model Rebuild for`；不得出现 `Model Rebuild` 与 `Armor Refresh` 相互触发的无限链。
+- **C2 幻化关闭时不重建**：幻化总开关关闭（日志 `Illusion display is off for this session`）时，不应出现 `Model Rebuild for`（随访在 `!IllusionDisplayEnabled()` 时就返回）。
+- **D1 无 3D 时不报错**：切换发生在角色 3D 尚未加载时（例如快速读档瞬间）→ 日志 `Skipping model rebuild for <name>: no 3D yet.`（debug），不崩、不重试成风暴。
+- **D2 第一人称**：切到第一人称再切套装，模型重建不得把 1P 手/身体弄成空模型（重建只动 3D 模型，不动 biped 槽）。
+- **E1 性能**：`Update3DModel()` 相当于开关一次菜单的开销；场景切换时不得造成可感知卡顿（若明显卡顿，把切换时刻的帧时间与 3 行随访日志一起发回）。
+- **F1 基础幻化回归（1.5.25 验收项）**：普通换装 / 空幻化 / 身体槽（CK 槽 32）均正常，不得出现空模型或残留件；`Custom: detached` 与 `lost the illusion in slot mask` 不应因本版新增。
+
 ## 4. 性能协议（1000+ 套装）
 
 用 Papyrus 生成 1000 个套装后测：
@@ -1034,6 +1050,7 @@ B. 回归
 - 存档往返一致。
 
 ## 6. 已知未验证项
+- 1.5.31 的「模型重建让幻化上屏」未实机验证：`Actor::Update3DModel()` 是否真会让引擎重走 biped→3D 并采用刚写入的克隆，依据是「开合菜单时引擎做的正是这件事」这一观察；若某 load order 里重建后仍不显示，说明还有一层缓存，需要按新日志再定位。`Model Rebuild for` 与 `Skipping model rebuild` 两条都只在 debug 级可见。
 
 - 1.5.29 的「残留克隆窄清 + 幻化几何对账」未实机验证：拆克隆依赖 `ownedMask`（只有"贴进去时没有真实穿戴物打底"的槽才计入），若某套幻化件与真实穿戴件同槽，退出时不会拆、表现为残留旧件；对账依赖 `objects[bit].partClone` 非空判断"幻化在不在"，若引擎保留 `partClone` 但几何失效则不触发。两者都只做静态推理。
 - 全部游戏内行为（无游戏环境）；

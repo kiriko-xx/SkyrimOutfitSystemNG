@@ -96,11 +96,18 @@ namespace SOS::SceneOutfits
 			g_sceneOutfit = candidate;
 			g_active = true;
 			g_activeSources.insert(a_source);
-			{
-				auto service = outfit_service_get_mut_singleton_ptr();
-				service->inner().set_outfit_c(candidate.c_str(), player->GetFormID());
+			// Same entry point the outfit list uses: it assigns the outfit, refreshes the
+			// equipment and runs the follow-up passes that bring the clones into the
+			// drawn model. A scene switch therefore behaves exactly like a click in the
+			// list, and there is no second switching path to keep in sync with it.
+			if (!Features::AssignOutfit(player, candidate.c_str())) {
+				SKSE::log::warn("SceneOutfits: '{}' could not be assigned for the {} scene; the current outfit is kept.", candidate, a_source);
+				g_previousOutfit.clear();
+				g_sceneOutfit.clear();
+				g_active = false;
+				g_activeSources.erase(a_source);
+				return;
 			}
-			Features::RefreshActor(player);
 			SKSE::log::debug("SceneOutfits: {} scene started; '{}' -> '{}'.", a_source, current, candidate);
 		}
 
@@ -130,11 +137,13 @@ namespace SOS::SceneOutfits
 				return;
 			}
 
-			{
-				auto service = outfit_service_get_mut_singleton_ptr();
-				service->inner().set_outfit_c(previous.c_str(), player->GetFormID());
+			// The restore goes through the same entry point as the switch in, so the
+			// previous outfit is materialised by the same equip passes and model
+			// rebuild instead of needing a menu afterwards.
+			if (!Features::AssignOutfit(player, previous.c_str())) {
+				SKSE::log::warn("SceneOutfits: '{}' could not be restored after the {} scene.", previous, a_source);
+				return;
 			}
-			Features::RefreshActor(player);
 			SKSE::log::debug("SceneOutfits: {} scene ended; '{}' restored.", a_source, previous);
 		}
 

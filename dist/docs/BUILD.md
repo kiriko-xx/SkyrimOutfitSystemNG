@@ -1,6 +1,15 @@
 # 构建说明（BUILD）
 
-## 1.5.30 构建与交付复核状态
+## 1.5.31 构建与交付复核状态
+
+**验证状态（1.5.31）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_31.log`）。DLL `OutfitSystemNG.dll` 1,941,504 字节，SHA256 `c8c8ae5db004c0017b029110b23dd707e1e519789c2acf81ba637a5ed63ad6b2`，FileVersion/ProductVersion `1.5.31.0`，`build/Release` 与 `dist` 两份逐字节一致。
+
+- **本版改动面**：`OutfitSystem.h/.cpp`（新增 `rebuildActorModel`）、`MorphRefresh.cpp`（随访链第 2 步前重建模型）、`SceneOutfits.cpp`（场景开始/结束改调 `Features::AssignOutfit`）、`version.h`（PATCH 31）、`CMakeLists.txt`（VERSION 1.5.31）。**钩子层、注入壳、贴件语义、槽清理、`.tri` 推导、模块文件名零改动。**
+- **模块文件名仍为 `OutfitSystemNG.dll`**（1.5.30 起），安装包里不得出现旧名 `SkyrimOutfitSystemNG.dll`。
+- **配置注意**：`buildtask_msbuild.bat` 内部的 `ZERO_CHECK` 会重跑 cmake configure（自带完整环境，vcpkg 走缓存），因此 `build/SkyrimOutfitSystemNG.vcxproj` 由 `CMakeLists.txt` 生成 —— 不要手改，也不要裸跑 `cmake -S . -B build`（本机 vswhere 返回空，会失败并改写 `CMakeCache.txt`）。
+- 安装包 `SkyrimOutfitSystemNG-1.5.31.zip`：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；最终 zip 大小与哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256`。
+
+## 1.5.30 构建与交付复核状态（历史）
 
 **验证状态（1.5.30）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`）。最终 DLL `dist/SKSE/Plugins/OutfitSystemNG.dll` = `build/Release/OutfitSystemNG.dll` = `1,939,456` 字节，FileVersion/ProductVersion `1.5.30.0`，SHA256 `2d0d968953abe0c3715cf1e2e8b882b2d410d937fc30e0a8659dda451d79cfda`。
 

@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.30**（修 m06712：OStim 场景里切 `_sex` 套装不显示、必须按一次 Tab/Z 才更新 —— 原因是「套装已切换」不等于「渲染模型已更新」，一次装备 pass 只填 biped 条目，几何要由后续 pass 物化；现在 `MorphRefresh::RequestOutfitPasses()` 在每次切换后补跑 120/400/900 ms 三次 pass，并由 `Features::RefreshActor()` 统一调用，`SceneOutfits` 也改走它。同时按 m06781 把模块文件名改为 **`OutfitSystemNG.dll`**（内部插件名、日志文件名、翻译前缀不变；**旧名 `SkyrimOutfitSystemNG.dll` 必须删除**，否则双加载）。未实机验证。版本、哈希与回退见 [VERSIONS.md](VERSIONS.md)）
+- 当前版本：**1.5.31**（修 m07050：OStim 场景开始/结束时都必须按一次 Tab/Z 才显示幻化 —— 1.5.30 的三次补跑确实全部执行、biped 槽里已有几何，缺的是「让引擎重建被绘制的 3D 模型」这一步；1.5.31 新增 `OutfitSystem::rebuildActorModel()`（`Actor::Update3DModel()`）挂在随访链第 2 步，并按用户要求把 `SceneOutfits` 的场景开始/结束改成调用 `Features::AssignOutfit()`（与「点套装列表」同一条函数）。未实机验证。版本与回退见 `VERSIONS.md`）
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 

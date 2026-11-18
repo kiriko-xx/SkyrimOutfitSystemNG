@@ -22,7 +22,8 @@
 | 1.5.28 | 2026-11-17 | 1,126,775 | `4894dcbc71c6a1cf445c87c301d13804aeb47791ed32d0ffc3ee0a1a41613b35` | **已被 1.5.29 取代**；实机反馈 m05502（场景结束残留 + 一次渲染期崩溃）后不再作为候选；修双 meshes 前缀、校验 BODYTRI 可读资源、ARMA/sex/1P/3P 缓存、回调过滤与 provider 基线；自动刷新不摘幻化；DLL 1,878,016 B / `fe5c79b5b1f1e1fc3153870dd6b61cf293081805cab407ad3ea41ed1621bb553` / 1.5.28.0；31 条目解包哈希31/31、清单30/30 |
 | 1.5.29 | 2026-11-18 | 1,161,851 | `e581230e2fc8b75e9d1f161d59cf0dfed8852b4ea37db2b1676b934f121f6521` | **已被 1.5.30 取代**；修场景结束后的幻化残留（窄清我们自己的克隆）与主线程幻化几何对账（`IllusionMissingSlots` → `refreshArmorFor`）；基础幻化钩子未动；DLL 1,936,384 B / `4f0bcae1e5926763c3d9592ab01812c8f7b968d6e8c7ef37d0ac002c3cb84c92` / 1.5.29.0 |
 
-| 1.5.30 | 2026-11-18 | 1,170,589 | `8d0db7dc23a6f1609b7206d0ab9ba6194f2a4d2c9d2a7e71f89dede1cda9989b` | **当前候选，待实机**；场景切换补跑有限次装备 pass（120/400/900 ms，`Features::RefreshActor` 统一入口）修「切 `_sex` 必须弹一次窗」；模块改名为 `OutfitSystemNG.dll`（内部插件名不变，旧名必须删除防双加载）；DLL 1,939,456 B / `2d0d968953abe0c3715cf1e2e8b882b2d410d937fc30e0a8659dda451d79cfda` / 1.5.30.0 |
+| 1.5.30 | 2026-11-18 | 1,170,589 | `8d0db7dc23a6f1609b7206d0ab9ba6194f2a4d2c9d2a7e71f89dede1cda9989b` | **已被 1.5.31 取代**（实机 m07050：补跑 pass 全部执行但模型仍不出，缺的是引擎重建 3D）；场景切换补跑有限次装备 pass（120/400/900 ms，`Features::RefreshActor` 统一入口）修「切 `_sex` 必须弹一次窗」；模块改名为 `OutfitSystemNG.dll`（内部插件名不变，旧名必须删除防双加载）；DLL 1,939,456 B / `2d0d968953abe0c3715cf1e2e8b882b2d410d937fc30e0a8659dda451d79cfda` / 1.5.30.0 |
+| 1.5.31 | 2026-11-18 | 1,178,871 | `3ebd6861a51597076fee666748261c359e7b7f2de763b2674f61c90d42a9920f` | **当前候选，待实机**；场景开始/结束不必再弹窗：新增 `OutfitSystem::rebuildActorModel()`（`Actor::Update3DModel()`，挂在随访链第 2 步），`SceneOutfits` 改调 `Features::AssignOutfit()`（与「点套装列表」同一条函数）；DLL `OutfitSystemNG.dll` 1,941,504 B / `1.5.31.0` / `c8c8ae5d…` |
 
 各包旁的 `.zip.sha256` 内容为「哈希 + 两个空格 + 包名」+ CRLF，可直接 `certutil -hashfile` 复核。
 
@@ -40,7 +41,8 @@
 | 1.5.28 | git tag `v1.5.28` |
 | 1.5.29 | git tag `v1.5.29` |
 | 1.5.30 | git tag `v1.5.30` |
-| 当前 dist | 1.5.30 的候选交付（31 文件；`SKSE/Plugins/OutfitSystemNG.dll` 1,939,456 B / 1.5.30.0 / `2d0d9689…`；旧名 `SkyrimOutfitSystemNG.dll` 已删除），SHA256SUMS.txt 30 行复核 30/30；游戏内行为尚未验证 |
+| 1.5.31 | git tag `v1.5.31` |
+| 当前 dist | 1.5.31 的候选交付（31 文件 / 2,702,598 B；`SKSE/Plugins/OutfitSystemNG.dll` 1,941,504 B / 1.5.31.0 / `c8c8ae5d…`；旧名 `SkyrimOutfitSystemNG.dll` 不在包内），SHA256SUMS.txt 30 行复核 30/30；游戏内行为尚未验证 |
 
 1.5.22 的交付目录存档在 `build/dist_1_5_22/`（build/ 不入库）。
 
