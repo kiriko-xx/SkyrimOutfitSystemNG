@@ -48,6 +48,7 @@
 
 ## 版本管理规则
 
+- **分支布局（2026-11-18 起）**：`main` = 最新发布线（当前 `1.5.31`，提交与 tag `v1.5.31` 相同）；发布一律在 `main` 上按 tag 推进。历史上的实验性提交（2026-11-17 晚 `fix: gate scene and morph tasks…` 那一串）不在发布线上，已封存为分支 `archive/main-experiments-20261117` 与同名 tag，需要时 `git diff main archive/main-experiments-20261117 -- src/` 对照取舍。
 - 仓库根的 `.gitignore` 忽略 `dist/`、`build/`、`*.dll`、`*.pex`、`*.log`：git 只跟踪源码与文档，交付目录每次由构建生成。
 - 每次定稿一个交付版本：先把 `dist/` 收尾，再 `git tag vX.Y.Z`（tag 打在当时那份源码上），随后打包 zip 并更新本文件。
 - 回退 = 直接装对应版本的 zip；**不要**在没有源码快照的版本之间做“源码回退”，只能以二进制为准。
