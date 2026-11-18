@@ -1,0 +1,14 @@
+1.5.37 test build: re-morph the cached clones from the poll instead of waiting for a pass
+
+1.5.36 polled fine and detected every slider change (5451 samples, 49 changes in one
+drag) but only three bakes ever landed, and none of them inside the drag: the queued
+bake needs a thread that services the SKSE task queue or the engine worn pass, and on
+the reporting machine neither ran while the slider was held. The one-shot task latch in
+RequestBake then kept every later request out for the rest of the drag.
+
+- BakeIllusion now holds each part clone by reference and publishes the list per actor.
+- ReplayCachedMorphs re-morphs that list from the poll, on whatever thread asks: no
+  biped walk, no extra-data writes, ApplyVertexDiff under the self-write flag, and the
+  same lock a full bake takes.
+- RequestBake posts at most every 250 ms by stamp instead of latching forever.
+- Pipeline totals gain cache-replays= so the log shows whether the cache carried a drag.

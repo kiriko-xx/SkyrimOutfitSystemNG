@@ -345,6 +345,11 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		// wherever it happens to run: one bake at a time, or two passes would
 		// rewrite the same clone nodes at once.
 		std::mutex g_drainMutex;
+		// 1.5.37: the clone nodes the last full bake resolved, held by reference so
+		// any thread can re-morph them without walking the biped (see
+		// ReplayCachedMorphs). Replaced wholesale by every bake, cleared on reset.
+		std::mutex g_cacheMutex;
+		std::unordered_map<RE::FormID, std::vector<RE::NiPointer<RE::NiAVObject>>> g_cloneNodes;
 		skee::IBodyMorphInterface* g_api{ nullptr };
 		// Version the BodyMorph interface reported; gates the v5 callback.
 		std::uint32_t g_apiVersion{ 0 };
@@ -375,7 +380,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 
 		struct PollTrace
 		{
-			std::atomic<std::uint64_t> polls{}, onThread{}, offThread{}, completed{}, samples{}, changes{}, replays{}, nodes{};
+			std::atomic<std::uint64_t> polls{}, onThread{}, offThread{}, completed{}, samples{}, changes{}, replays{}, cacheReplays{}, nodes{};
 			std::atomic<std::int64_t> nextReport{};
 
 			void Report()
@@ -389,8 +394,8 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				if (now < next || !nextReport.compare_exchange_strong(next, now + 1000, std::memory_order_relaxed)) {
 					return;
 				}
-				SKSE::log::debug("MorphRefresh pipeline (session totals): polls={} on-thread={} off-thread={} poll-done={} player-samples={} player-changes={} player-replays={} node-calls={}",
-					polls.load(), onThread.load(), offThread.load(), completed.load(), samples.load(), changes.load(), replays.load(), nodes.load());
+				SKSE::log::debug("MorphRefresh pipeline (session totals): polls={} on-thread={} off-thread={} poll-done={} player-samples={} player-changes={} player-replays={} cache-replays={} node-calls={}",
+					polls.load(), onThread.load(), offThread.load(), completed.load(), samples.load(), changes.load(), replays.load(), cacheReplays.load(), nodes.load());
 			}
 		} g_pollTrace;
 
@@ -1006,7 +1011,11 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			std::mutex g_queueMutex;
 			std::unordered_set<RE::FormID> g_pending;
 			BakeReason g_reason{ BakeReason::kProvider };
-			std::atomic<bool> g_taskQueued{ false };
+			// 1.5.37: stamp of the last task post, not a latch - the latch stuck
+			// forever when the task queue was not serviced.
+			std::chrono::steady_clock::time_point g_lastTaskPost{};
+			// Throttle for the "re-morphed from the cache" line while a slider moves.
+			std::atomic<std::int64_t> g_lastCachedLog{ 0 };
 			// Set while this module is the one writing vertices, so the skee callback
 			// that fires for our own pass does not come back as "the illusion still
 			// needs a pass" - that would ping-pong for as long as the game runs.
@@ -1339,6 +1348,7 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 			std::size_t nodes{ 0 };
 			const auto providerBeforeReplay = g_api ? ComputeProviderSignature(a_actor) : 0;
 			std::unordered_set<RE::NiAVObject*> replayed;
+			std::vector<RE::NiPointer<RE::NiAVObject>> holders;
 			for (const bool firstPerson : { false, true }) {
 				auto* biped = a_actor->GetBiped(firstPerson).get();
 				if (!biped) {
@@ -1348,10 +1358,14 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 					if (!(mask & (1u << i))) {
 						continue;
 					}
-					auto* node = biped->objects[i].partClone.get();
+					// Hold a reference: the node stays alive even if the engine replaces
+					// the slot while another thread re-morphs from the cache (1.5.37).
+					RE::NiPointer<RE::NiAVObject> holder = biped->objects[i].partClone;
+					auto* node = holder.get();
 					if (!node) {
 						continue;
 					}
+					holders.push_back(holder);
 					++slots;
 					if (const auto it = bySlot.find(i); it != bySlot.end()) {
 						// 1.5.27: the addon the engine attached this slot with is the
@@ -1379,6 +1393,16 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				}
 			}
 
+			// Publish the node list the bake just walked. A detached node is
+			// harmless: the reference keeps it alive and the write lands nowhere.
+			{
+				std::lock_guard cacheLock(g_cacheMutex);
+				if (holders.empty()) {
+					g_cloneNodes.erase(id);
+				} else {
+					g_cloneNodes[id] = std::move(holders);
+				}
+			}
 			if (morphPush::g_targetLogged.insert(id).second) {
 				SKSE::log::info("MorphRefresh: {:08X} has readable BODYTRI resources on {} of {} cloned slot(s) ({}); paths only, not proof of TRI shape matching or morph movement.",
 					id, targets, slots, BakeReasonText(a_reason));
@@ -1456,16 +1480,23 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 		void RequestBake(RE::FormID a_id, BakeReason a_reason)
 		{
 			EnqueueBake(a_id, a_reason);
-			if (morphPush::g_taskQueued.exchange(true)) {
-				return;
+			// 1.5.37: this latch used to stay set when the task never ran, and every
+			// later request then returned early - one stuck task blocked a whole drag
+			// (1.5.36: 49 detected changes, 3 bakes). It is a short-lived stamp now,
+			// so a starved queue delays the next post by 250 ms at most.
+			const auto postedAt = std::chrono::steady_clock::now();
+			{
+				std::lock_guard lock(morphPush::g_queueMutex);
+				if (postedAt - morphPush::g_lastTaskPost < std::chrono::milliseconds(250)) {
+					return;
+				}
+				morphPush::g_lastTaskPost = postedAt;
 			}
 			auto* tasks = SKSE::GetTaskInterface();
 			if (!tasks) {
-				morphPush::g_taskQueued.store(false);
 				return;
 			}
 			tasks->AddTask([]() {
-				morphPush::g_taskQueued.store(false);
 				if (GameState::IsLoading()) {
 					return;
 				}
@@ -1475,6 +1506,51 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 				// here was the second half of why nothing reached the clones.
 				DrainPending();
 			});
+		}
+
+		// 1.5.37: re-morph the clones the last full bake found. Everything read here
+		// comes from a list of reference-held nodes, so it is safe on any thread: no
+		// biped slot is dereferenced and no extra data is written. A clone the engine
+		// has replaced in the meantime is simply detached - the write goes nowhere and
+		// the next full bake refreshes the list. This is what lets a slider drag
+		// follow: the timer keeps polling off the game thread, and a bake that is only
+		// queued waits for a pass the engine does not run while the slider is held.
+		std::size_t ReplayCachedMorphs(RE::Actor* a_actor)
+		{
+			if (!a_actor || !g_api) {
+				return 0;
+			}
+			const auto id = a_actor->GetFormID();
+			std::vector<RE::NiPointer<RE::NiAVObject>> nodes;
+			{
+				std::lock_guard cacheLock(g_cacheMutex);
+				if (const auto it = g_cloneNodes.find(id); it != g_cloneNodes.end()) {
+					nodes = it->second;
+				}
+			}
+			if (nodes.empty()) {
+				return 0;
+			}
+			// Same lock as a full bake: the two must not rewrite one clone at once.
+			std::lock_guard drainLock(g_drainMutex);
+			std::size_t done{ 0 };
+			for (auto& holder : nodes) {
+				auto* node = holder.get();
+				if (!node || !NodeHasBodyTri(node)) {
+					// Attaching the target needs the addon path and writes extra data;
+					// that stays the full bake's job, on a thread the engine expects.
+					continue;
+				}
+				morphPush::g_selfWrite.store(true, std::memory_order_release);
+				g_api->ApplyVertexDiff(a_actor, node, false);
+				morphPush::g_selfWrite.store(false, std::memory_order_release);
+				++done;
+			}
+			if (done > 0 && id == 0x14) {
+				g_pollTrace.cacheReplays.fetch_add(1, std::memory_order_relaxed);
+				g_pollTrace.nodes.fetch_add(done, std::memory_order_relaxed);
+			}
+			return done;
 		}
 
 		// skee v5, called once per morphed shape, on the thread RaceMenu morphs from.
@@ -1838,6 +1914,22 @@ constexpr auto kVerifyDelay = std::chrono::milliseconds(350);
 						g_pollTrace.changes.fetch_add(1, std::memory_order_relaxed);
 					}
 					EnqueueBake(id, BakeReason::kProvider);
+					// 1.5.37: do not wait for a pass. The queued bake needs a thread
+					// that services the SKSE task queue or the engine worn pass, and on
+					// the reporting machine neither happened while a morph slider was
+					// held (1.5.36: 49 detected changes, 3 bakes). The clones the last
+					// full bake found are held by reference here, so they can be
+					// re-morphed on this thread right now.
+					const auto replayedHere = ReplayCachedMorphs(actor);
+					if (replayedHere > 0) {
+						const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+							std::chrono::steady_clock::now().time_since_epoch()).count();
+						if (stamp - morphPush::g_lastCachedLog.load(std::memory_order_relaxed) >= 1000 &&
+							morphPush::g_lastCachedLog.exchange(stamp, std::memory_order_relaxed) != stamp) {
+							SKSE::log::debug("MorphRefresh: re-morphed {:08X} on {} cached clone node(s) on thread {}; no pass was needed.",
+								id, replayedHere, GetCurrentThreadId());
+						}
+					}
 					continue;
 				}
 				if (Settings::Get().morphProviderFirst && ProviderCanMorph()) {
@@ -2178,6 +2270,10 @@ void RetryProviders()
 		morphPush::g_targetLogged.clear();
 		morphPush::g_armed.clear();
 		g_triProbeLogged.clear();
+		{
+			std::lock_guard cacheLock(g_cacheMutex);
+			g_cloneNodes.clear();
+		}
 		g_triPathCache.clear();
 		g_raceMenuSliderPending.store(false, std::memory_order_release);
 		g_lastPoll = {};
