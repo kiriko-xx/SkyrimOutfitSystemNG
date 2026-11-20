@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "I18n.h"
@@ -153,7 +154,13 @@ namespace SOS::Menu::Editor
 		bool                      g_playableOnly{ true };
 		std::string               g_searchSignature;
 		std::vector<const RE::TESObjectARMO*> g_results;
-		bool                      g_showSlotPolicies{ false };
+		// Which outfits have the per-slot policy editor expanded. This used to
+		// be one bool for the whole panel, so ticking the box on one outfit
+		// left it open on every other outfit as well. The state is keyed by
+		// outfit name; the menu holds it for the session only (it is a view
+		// preference, not part of the outfit data), so the exported JSON is
+		// untouched.
+		std::unordered_set<std::string> g_slotPolicyOpen;
 		char                      g_formId[32]{};
 		std::string               g_status;
 		const RE::TESObjectARMO*  g_pending{ nullptr };
@@ -597,10 +604,17 @@ namespace SOS::Menu::Editor
 		}
 		IG::TextDisabled("Policies decide what is drawn when the outfit and the real equipment disagree.");
 
-		if (IG::Checkbox("Per-slot policy editor", &g_showSlotPolicies)) {
-			// nothing else to do, the block below follows the flag
+		bool showSlotPolicies = g_slotPolicyOpen.find(a_outfit) != g_slotPolicyOpen.end();
+		if (IG::Checkbox("Per-slot policy editor", &showSlotPolicies)) {
+			// Remember the choice per outfit: the menu shows one outfit at a
+			// time, and switching to another outfit must not inherit it.
+			if (showSlotPolicies) {
+				g_slotPolicyOpen.insert(a_outfit);
+			} else {
+				g_slotPolicyOpen.erase(a_outfit);
+			}
 		}
-		if (g_showSlotPolicies) {
+		if (showSlotPolicies) {
 			if (IG::BeginChild("##slotpolicies", ImVec2(0.0f, 240.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
 				for (std::uint32_t slot = 0; slot < 32; ++slot) {
 					IG::PushID(static_cast<int>(slot));

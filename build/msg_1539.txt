@@ -1,0 +1,19 @@
+1.5.39: slot policies per outfit, generate outfits from a plugin, golden items page
+
+- MenuOutfitEditor: the slot policy editor now expands per outfit (g_slotPolicyOpen
+  keyed by outfit name) instead of one global flag that opened every outfit at once.
+  JSON keeps slotPolicy / slotPolicies per outfit, so old files still load.
+- New src/core/PluginScan: load order view (GetLoadedMods + GetLoadedLightMods) with
+  armours grouped by OwningPlugin, plus IsOutfitArmor() = has an editor id, covers at
+  least one non-FX slot, and at least one armour addon ships a model.
+- New src/core/EspOutfits: GenerateFromPlugin() filters through IsOutfitArmor(), buckets
+  by 32 slots with mask & ~kFxBit, writes <name> / <name>_1 ..., overwrites by name.
+- New src/core/GoldenItems: golden items live in their own JSON file and are NOT
+  filtered (FX and unnamed records are allowed, m09426).
+- Settings: EspOutfitAutoFavorite (default on) and GoldenItemsMigrated (one-time copy of
+  the old ini list).
+- MenuUI: plugin picker on the outfits page, golden items page, outfit generation block
+  on the settings page; every new string goes through I18n::T.
+
+The skinning hooks, the attach semantics, slot clearing, the .tri derivation and
+SceneOutfits are untouched, so 1.5.25 and 1.5.34 stay as accepted.

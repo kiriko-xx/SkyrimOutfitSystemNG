@@ -1,6 +1,22 @@
 # 交付说明（DELIVERY）
 
-## 1.5.34 最新交付准备（2026-11-18）
+## 1.5.39 最新交付准备（2026-11-20）
+
+**验证状态（1.5.39）**：**尚未实机验证**，不能声称菜单新功能可用。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log`，留档 `build/build_1_5_39.log`）；新增守卫测试 `tests/esp_outfits_filter.ps1` 通过，`scene_outfit_switch` / `skinning_stale_slots` / `morph_paths` / `morph_read_only` / `morph_slider_queue` / `morph_thread_gate` 六项既有守卫仍全部 PASS。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 2,030,592 字节；`c72a60a6f4a400bbb4cf06a9b2e1c81a86baca487fbf901119e264421aee83da`；`1.5.39.0`（build/Release 与 dist 逐字节一致） |
+| 安装包与复核记录 | SkyrimOutfitSystemNG-1.5.39.zip：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；最终 zip 大小/哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256`，包内不自引用 |
+
+- **本版只动菜单与扫描层，不动引擎侧**：贴件语义、槽位清理、`.tri` 推导、钩子安装、`SceneOutfits` 一行未改（`git diff v1.5.34 HEAD -- src/cpp/hooking src/cpp/MorphRefresh.cpp src/cpp/MorphRefresh.h src/cpp/SceneOutfits.cpp` 为空），1.5.25 实测正常的基础幻化与 1.5.34 已验收的场景套装切换都不受影响。
+- **逐槽策略编辑器只对被选中的套装展开**（m09191②）：旧实现是一个全局布尔，勾一次就让所有套装的策略编辑器一起展开；现在展开状态按套装名保存在 `std::unordered_set<std::string> g_slotPolicyOpen` 里（`src/cpp/MenuOutfitEditor.cpp`），导出/导入 JSON 的键仍是每套自己的 `slotPolicy` / `slotPolicies`，文件格式未变。
+- **新增「从 ESP 生成套装」**（m09191③）：幻化页底部选择 ESP → 扫描该 ESP 的护甲 → 同名槽位拆成 `<名称>_1`、`<名称>_2` …，槽位策略统一「需要已装备」，生成后列表焦点跳到第一套生成的套装；变体超过 32 种时只取前 32 并在提示里说明。
+- **新增「金件」页**（m09191④）：独立数据文件 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`（与幻化 JSON 分开），左侧按 ESP 分组、右侧增删单件，支持「添加某个 ESP 的全部装备」与「按 FormID 添加单件」（输入的件必须真实存在）；旧 `SkyrimOutfitSystemSE.ini` 里的金件列表在首次加载时迁移一次。
+- **扫描只收正常服装**（m09426）：`PluginScan::IsOutfitArmor()` 要求记录有 EditorID、覆盖至少一个非 FX 槽位（FX = 显示掩码第 31 位 / CK 槽 61）、且至少一个 armor addon 有模型；同时把 FX 位从分桶里剔除，避免 FX 特效被当成服装槽。**金件不受这三条限制**：FX 件、没有 EditorID 的件都能加进金件列表。
+- **设置页新增「套装生成」段**：`[Customization] EspOutfitAutoFavorite`（默认打开）＝从 ESP 生成的套装自动收藏。
+
+## 1.5.34 交付准备（历史，已被 1.5.39 取代）
 
 **验证状态（1.5.34）**：**尚未实机验证**，不能声称已修好。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log`，留档 `build/build_1_5_34.log`）；`OutfitSystemNG.dll` 1,937,408 字节 / `e1cdb951…` / `1.5.34.0`（build/Release 与 dist 逐字节一致）。
 
@@ -199,6 +215,8 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | 「依旧和之前一样的问题……我说的是 Sexlab 和 OStim 场景的专用换装 `_sex`，你不会改的是按地点/状态自动切换吧？不行直接回退到 1.5.29，从这开始改……参照按地点/状态自动切换这里的换装方法去换装」（m07666） | 先核对了改动面：`AutoSwitch.cpp` / `AutoSwitch.h` 自 1.5.29 起**一行未改**（`git diff v1.5.29 HEAD` 为空），改的确实是 SexLab/OStim 那个模块 `SceneOutfits.cpp`。但场景入口在 1.5.32 走的是菜单那条 `Features::AssignOutfit()`，且仍带着自有的 SKSE 任务队列 + `Tick()` 心跳，与状态切换的两步序列不同。见 §4.61 | 1.5.33 回退源码到 v1.5.29，删掉场景专用的队列与 `Tick()`，新增 `OutfitSystem::setOutfitByName()`，让场景入口与状态切换共用「锁内指派 + 锁外 `refreshArmorFor`」这两步 |
 | 「这次 OStim 场景开始后幻化压根没切换」（m07842，1.5.33 实机） | 日志 `v1-5-33-0` 里 `SceneOutfits` 只有 4 行，三条是 `'ostim_start' / 'ostim_end' arrived off the game thread; the scene switch is skipped.`：1.5.33 在 `ModEventSink` 里用 `OnGameThread()` 门禁把工作线程送来的事件整条丢弃，装换装逻辑根本没执行（线程 39516 / 10604 / 27040，主线程是 34628）。见 §4.62 | 1.5.34 离线程事件改用一个 `SKSE::GetTaskInterface()->AddTask(...)` 交接到游戏线程执行 `Dispatch()`，游戏线程上仍走内联快路径；不建队列、不加 `Tick()`，换装调用序列保持 `setOutfitByName()` + `refreshArmorFor()` |
 
+| 「幻化栏选中一套装时勾选逐槽策略编辑器，会把所有套装的该选项一起打开」（m09191②） | 编辑器展开状态原先是一个全局布尔，任何一次勾选都会让全部套装的策略面板一起展开。见 §4.63 | 1.5.39 把展开状态改成按套装名保存的 `g_slotPolicyOpen`（`std::unordered_set<std::string>`，key = 套装名），只展开被选中的那套；JSON 仍是每套自己的 `slotPolicy` / `slotPolicies`，导入导出格式不变 |
+| 「按 ESP 自动生成套装……扫描服装时必须是正常服装，FX 特效，没有 EditorID，各种不算在内。不过金件就不一样了，可以放开按金件的规则来」（m09191③④、m09426） | 生成套装与金件都要按加载顺序列出 ESP 并扫描护甲，但两者对「能不能收」的要求相反：套装只该收能穿的东西，金件是用户自愿指定的任何件。见 §4.63 | 1.5.39 新增 `PluginScan::IsOutfitArmor()`（有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型）用于套装生成，并把 FX 位从分桶剔除；金件路径不调用它，保持全量扫描 |
 ## 4. 本版变更
 
 ### 4.1 移除感知层（Perception）
@@ -1425,13 +1443,51 @@ if (!OnGameThread()) {
 - 「场景开始/结束不按键就切」未实机验证：本版只保证事件不再被丢弃、开关会在游戏线程上执行。若日志出现 `scene started; 'A' -> 'A_sex'.` 而模型仍不出现，那说明问题回到「切了但 3D 不更新」那一层（1.5.30 / 1.5.31 试过的方向），需要按新日志再定位，不是本版能声称修好的。
 - `AddTask` 交接会晚一个任务周期（下一次主线程任务）才换装，正常感知不到；若某些机型上看到明显延迟，可以再讨论是否在主线程上直接 `Dispatch()`。
 
+## 4.63 1.5.39：逐槽策略按套装独立 + 从 ESP 生成套装 + 金件页（含服装过滤）
+
+### 症状与诉求
+
+- 幻化栏选中一套装时勾选右侧「逐槽策略编辑器」，会把**所有套装**的该选项一起打开（m09191②）。
+- 需要「按 ESP 自动生成套装」：点按钮弹 ESP 列表（按加载顺序，最后加载的在最上面），选中后扫描该 ESP 的装备生成新套装，默认名 = ESP 名称，生成后左侧列表焦点跳到新套装；同槽位多件拆成 `ESP名称_1`、`ESP名称_2` …；槽位策略统一「需要已装备（槽位有装备时才显示幻化）」；设置里有「ESP 自动生成套装自动收藏」开关，默认打开（m09191③）。
+- 需要「金件」独立栏：左侧按 ESP 自动分组、右侧显示该组具体金件，可增可删，支持「从 ESP 自动生成」与「按 FormID 选单件」（`plugin.esp:LOCALFORMID`，十六进制，必须先验证存在）；给选中组加单件时 ESP 固定；金件数据与幻化数据分开存（m09191④）。
+- 生成套装扫描时**只收正常服装**：FX 特效槽、没有 EditorID、以及各种不该算作服装的记录全部排除；**金件不适用这条**，按金件自己的规则放开（m09426）。
+
+### 实现要点
+
+1. **逐槽策略展开状态按套装名保存**：`src/cpp/MenuOutfitEditor.cpp` 里 `std::unordered_set<std::string> g_slotPolicyOpen;`，`showSlotPolicies = g_slotPolicyOpen.find(a_outfit) != end()`，勾选时对该套装 `insert` / `erase`。JSON 侧未改：每套仍是 `slotPolicy`（基础策略）与 `slotPolicies`（逐槽覆盖），旧文件与 `OutfitSystemData.json` 互通。
+2. **`src/core/PluginScan.h/.cpp`（新）**：只读的加载顺序视图。`LoadedPlugins()` 先列普通插件（`GetLoadedMods()` + `GetLoadedModCount()`）再列 light 插件（`GetLoadedLightMods()` + `GetLoadedLightModCount()`），`order` 递增；护甲用 `GetFormArray(RE::FormType::Armor)` 按 `OwningPlugin()`（`TESForm::GetFile(0)->GetFilename()`）归组。只有 `Invalidate()` 会丢缓存。
+3. **`PluginScan::IsOutfitArmor()`（本版新增，m09426 的落地点）**：三条同时满足才算服装 —— ①`GetFormEditorID()` 非空（无名记录是补丁占位，列出来也没法认）；②`GetSlotMask().underlying() & ~(1u << 31)` 非零（只覆盖 FX 槽的记录是特效，不是衣服）；③`armorAddons` 里至少一个 addon 的 `bipedModels[SEXES::kMale].GetModel()` 或 `bipedModel1stPersons[SEXES::kMale].GetModel()` 非空（没有模型就没有东西可画）。`PluginsWithArmor()` 同时给出 `armors`（全量槽位记录）与 `outfitArmors`（通过上面三条的数量），幻化页用后者、金件页用前者。
+4. **`src/core/EspOutfits.h/.cpp`（新）**：`GenerateFromPlugin()` 先用 `IsOutfitArmor()` 过滤，被排除的记录计入 `notClothing` 并在结果行里说明；分桶时 `mask & ~kFxBit`，FX 位不进任何槽；按 32 槽分桶、每桶第 i 件进第 i 套（不足时复用第 0 件），变体上限 32；同名套装原地覆盖（`erase_all_armors()` + `insert_armor()` + 清逐槽策略 + `set_blanket_slot_policy_c("XXXO")`），不存在则 `create_outfit_preset()`。生成后 `FocusOutfitInList()` + 刷新全部外观。
+5. **`src/core/GoldenItems.h/.cpp`（新）**：金件独立存储 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`（`{"version":1,"groups":[{"plugin":…,"items":["000800",…]}]}`），读写走不可变快照，皮肤钩子随时可查；`Settings::IsGoldenItem()` 委托 `Golden::IsGolden()`，`Outfit.cpp` 的贴件判断逻辑未改。`AddLocal()` 先用 `PluginScan::ResolveArmor()` 验证记录真实存在（要求槽位掩码非零）；`AddAllFromPlugin()` **不做服装过滤**（m09426 的「金件放开」）。旧 `SkyrimOutfitSystemSE.ini` 的 `goldenItems` 在 kDataLoaded 时一次性 `ApplyLegacyEntries()` 后清空，并写 `[Compatibility] GoldenItemsMigrated`。
+6. **菜单**：幻化页底部新增「从 ESP 生成套装」块（ESP 列表倒序、搜索框、`Mark generated outfits as favourites` 勾选、生成结果行）；新增「金件」页（`RenderGolden()`，左列表右编辑、导出/导入按钮、按 FormID 添加）；设置页新增「套装生成」段放同一个自动收藏开关。全部文案走 `I18n::T()`，中文侧同步。
+
+### 新日志（排查用）
+
+| 日志 | 含义 |
+| --- | --- |
+| `PluginScan: {} plugins loaded, {} slot armour record(s) indexed.`（debug） | 加载顺序视图建好 |
+| `ESP outfits: … FX effects and other non clothing records were left out (…; {} wearable of {} slot record(s)).` | 生成结果的权威行，含过滤统计 |
+| `ESP outfits: That plugin holds no wearable clothing: every slot record is an FX effect, has no editor id or has no model.` | 整个 ESP 没有可生成的服装 |
+| `Golden items: {} piece(s) of {} added.` | 金件「添加整个 ESP」的结果（不过滤） |
+| `Golden items: {} was added as a golden item.` | 金件单件添加成功 |
+
+### 兼容性
+
+- 幻化 JSON（`OutfitSystemData.json`）结构未变，`slotPolicy` / `slotPolicies` 仍是每套自己的值；金件是**另一个文件**，旧 ini 列表自动迁移一次，不会与幻化数据混写。
+- 引擎侧（钩子、贴件、槽位清理、`.tri`、场景套装）零改动，1.5.25 / 1.5.34 的实机结论不受影响。
+
+### 未验证
+
+- 本机没有游戏，菜单交互、ESP 扫描结果、生成出的套装外观全部**未实机验证**；静态侧只有编译与守卫测试。
+- 生成规则是「每槽第 i 件配成第 i 套、不足复用第 0 件」，若某个 ESP 的槽位组合本身互斥（例如 4 个上衣 + 1 条裤子 → 4 套），需要用户手动调整；变体上限 32 是硬编码。
+
 ## 5. 静态验证
 
 
 | 项 | 结果 |
 | --- | --- |
-| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.34 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_34.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
-| 版本资源 | `FileVersion = 1.5.34.0` / `ProductVersion = 1.5.34.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
+| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.39 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_39.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
+| 版本资源 | `FileVersion = 1.5.39.0` / `ProductVersion = 1.5.39.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
 | 导入表 | 仅 KERNEL32 / USER32 / ole32 / VERSION / SHELL32 |
 | 延迟导入 | 目录 RVA = 0、size = 0（无延迟导入项） |
 | 导出 | SKSEPlugin_Load / SKSEPlugin_Query / SKSEPlugin_Version 均存在 |
@@ -1448,7 +1504,7 @@ if (!OnGameThread()) {
 | 1.5.31 关键字符串 | `Model Rebuild for` / `Skipping model rebuild for` / `asking the game to rebuild the model of` / `so the illusion reaches the drawn 3D` / `could not be assigned for the` / `could not be restored after the` / `rebuildActorModel` 可检索；`FileVersion = 1.5.31.0`、`ProductVersion = 1.5.31.0`；DLL 1,941,504 字节，SHA256 `c8c8ae5db004c0017b029110b23dd707e1e519789c2acf81ba637a5ed63ad6b2`；模块文件名仍 `OutfitSystemNG.dll` |
 | 1.5.32 关键字符串（历史） | `no '{}' outfit for the {} scene` / `could not be assigned for the` / `could not be restored after the` / `SceneOutfits: ` / `1.5.32` 可检索；1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` **已全部从 DLL 中消失**；`FileVersion = 1.5.32.0`、`ProductVersion = 1.5.32.0`（PowerShell `VersionInfo` 实测）；DLL 1,937,920 字节，sha256 `da9ec8995c599f00cb249b611d66a13c2f3f030f845951b3d6b5eacdca05f875`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.33 关键字符串 | `setOutfitByName` / `SceneOutfits: ` / `scene started;` / `scene ended;` / `create an outfit with exactly that name` / `the scene switch is skipped` / `1.5.33` 可检索；1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 以及 1.5.32 队列相关的 `scene event dropped` **已全部从 DLL 中消失**；`FileVersion = 1.5.33.0`、`ProductVersion = 1.5.33.0`（PowerShell `VersionInfo` 实测）；DLL 1,934,848 字节，sha256 `8c23e5eec3ae0f4561125ab2cabb71e63ef7c21d01e6a8b85755687454716aaf`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist |
-| 1.5.34 关键字符串 | `handed to the game thread` / `came from thread` / `there is no task interface` / `scene started;` / `scene ended;` / `setOutfitByName` / `1.5.34` 可检索；1.5.33 的丢弃行 `arrived off the game thread` **已从 DLL 中消失**，1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 仍全部不存在；`FileVersion = 1.5.34.0`、`ProductVersion = 1.5.34.0`（PowerShell `VersionInfo` 实测）；DLL 1,937,408 字节，sha256 `e1cdb9518149d0e1f7a23d1835317620b8258c1e030d6d987b658e4718283782`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist |
+| 1.5.34 关键字符串 | `handed to the game thread` / `came from thread` / `there is no task interface` / `scene started;` / `scene ended;` / `setOutfitByName` / `1.5.34` 可检索；1.5.33 的丢弃行 `arrived off the game thread` **已从 DLL 中消失**，1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 仍全部不存在；`FileVersion = 1.5.34.0`、`ProductVersion = 1.5.34.0`（PowerShell `VersionInfo` 实测）；DLL 1,937,408 字节，sha256 `e1cdb9518149d0e1f7a23d1835317620b8258c1e030d6d987b658e4718283782`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist || 1.5.39 关键字符串 | `OutfitSystemGoldenItems.json` / `ESP outfits: ` / `wearable clothing` / `FX effects and other non clothing records were left out` / `skipped as not clothing` / `Golden items: ` / `PluginScan: ` / `1.5.39` 可检索；`FileVersion = 1.5.39.0`、`ProductVersion = 1.5.39.0`（PowerShell `VersionInfo` 实测）；DLL 2,030,592 字节，sha256 `c72a60a6f4a400bbb4cf06a9b2e1c81a86baca487fbf901119e264421aee83da`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增（只多用 `GetFormArray` / `GetLoadedLightMods` 等 SKSE+引擎既有接口）；1.5.34 的 `handed to the game thread` / `scene started;` 与 1.5.30/31 已删机件仍保持原状态 |
 | 1.5.29 关键字符串 | `detached ` / `illusion clone(s) whose slot left the display set` / `lost the illusion in slot mask` / `after 3 rebuilds` / `rebuilding the actor` / `left to the engine` 可检索；`ClearBipedPart` 与 `IllusionMissingSlots` 作为内部符号不出现在字符串表（前者只剩一处调用）；FileVersion 1.5.29.0、DLL 1,936,384 B / `4f0bcae1…`、导入依赖未新增 |
 | 1.5.27 关键字符串 | `uses .tri ` / `has no .tri beside it` / `Probed: ` / `the armour addon the engine attached` / `has no armour addon yet` / `leaving the clones to the next morph pass instead of cycling` / `but the illusion carries .tri targets` / `every illusion clone whose armour model ships a .tri` / `1.5.27` 均可检索；1.5.26 的 `.tri morph targets are attached to every illusion clone` 已从 DLL 中消失；`carries a .tri morph target on` / `stay armed` / `BODYTRI` / `MorphShapeCallback` 仍在；`FileVersion = 1.5.27.0`、`ProductVersion = 1.5.27.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,875,456 字节，sha256 `22eb7794…a91af178f`；导入依赖未新增 |
 | 1.5.25 关键字符串 | `left to the engine` / `slot {:02} item {:08X} addon {:08X} part {} clone {}` / `1.5.25` 均可检索；1.5.24 的 `cleared for` 与 `ClearBipedPart` / `ClearSlots` 已从 DLL 中消失；`FileVersion = 1.5.25.0`、`ProductVersion = 1.5.25.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,866,240 字节，sha256 `ae797d9d…efc3936b5`；导入依赖未新增 |
@@ -1534,9 +1590,13 @@ if (!OnGameThread()) {
 53. **1.5.32 场景套装只做切换（对应 m07382 / m07424）**：①装 `Data/SKSE/Plugins/OutfitSystemNG.dll`，确认旧名 `SkyrimOutfitSystemNG.dll` 已删；②进 OStim 场景，**不要按 Tab / Z**，看 `_sex` 套装是否直接出现；③场景结束，同样不要按任何窗口，看是否直接变回普通幻化。日志判定（需开 Verbose）：只应有 `SceneOutfits: OStim scene started; '…' -> '…_sex'` 与其后的 `Armor Refresh for …` + `Custom: attaching N outfit-only piece(s) …`，**不应再有** `repeating the equip pass for` / `follow-up N of 3` / `Model Rebuild for`。若套装名对不上，会看到 `no '…' outfit for the … scene`（`_sex` 套装名必须与当前套装名严格对应，大小写不敏感）。见 §4.60 与 TESTING §3.44。
 54. **1.5.33 场景套装换装改为「状态切换那套方法」（对应 m07666）**：①确认装的是 `Data/SKSE/Plugins/OutfitSystemNG.dll`，旧名 `SkyrimOutfitSystemNG.dll` 已删；②进 OStim / SexLab 场景，**不要按 Tab / Z**，看 `<当前套装>_sex` 是否直接出现；③场景结束，同样不要按任何窗口，看是否直接变回普通幻化。日志判定：应看到 `SceneOutfits: OStim scene started; 'A' -> 'A_sex'.`（info，无需 Verbose）紧跟同一瞬的 `Armor Refresh for …` + `Custom: attaching N outfit-only piece(s) …`；`SceneOutfits: OStim scene ended; 'A' restored.` 同理。**不应再出现** 1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up N of 3` / `Model Rebuild for`。若模型仍不出现，把这 20 行一起发回。见 §4.61 与 TESTING §3.45。
 
-55. **1.5.34 场景事件不再被线程门禁丢掉（对应 m07842）**：①确认装的是 `Data/SKSE/Plugins/OutfitSystemNG.dll`（1.5.34.0），旧名 `SkyrimOutfitSystemNG.dll` 已删；②进 OStim / SexLab 场景，**不要按 Tab / Z**，看 `<当前套装>_sex` 是否切过去；③场景结束，同样不按键，看是否切回普通幻化。日志判定（要开 Verbose 才看得到交接行）：应先见 `SceneOutfits: 'ostim_start' came from thread <工作线程> (game thread <主线程>); the switch is handed to the game thread.`，紧跟（下一任务周期）`SceneOutfits: OStim scene started; 'A' -> 'A_sex'.` → `Armor Refresh for …` → `Custom: attaching N outfit-only piece(s) …`。**不应再出现** 1.5.33 的 `arrived off the game thread; the scene switch is skipped.`（出现即说明装的不是 1.5.34）。若 `scene started` 有了但模型还不出现，把那 20 行发回 —— 那是「切了但 3D 不刷新」另一层问题，不在本版范围内。见 §4.62 与 TESTING §3.46。
+55. **1.5.34 场景事件不再被线程门禁丢掉（对应 m07842）**：①确认装的是 `Data/SKSE/Plugins/OutfitSystemNG.dll`（1.5.34.0），旧名 `SkyrimOutfitSystemNG.dll` 已删；②进 OStim / SexLab 场景，**不要按 Tab / Z**，看 `<当前套装>_sex` 是否切过去；③场景结束，同样不按键，看是否切回普通幻化。日志判定（要开 Verbose 才看得到交接行）：应先见 `SceneOutfits: 'ostim_start' came from thread <工作线程> (game thread <主线程>); the switch is handed to the game thread.`，紧跟（下一任务周期）`SceneOutfits: OStim scene started; 'A' -> 'A_sex'.` → `Armor Refresh for …` → `Custom: attaching N outfit-only piece(s) …`。**不应再出现** 1.5.33 的 `arrived off the game thread; the scene switch is skipped.`（出现即说明装的不是 1.5.34）。若 `scene started` 有了但模型还不出现，把那 20 行发回 —— 那是「切了但 3D 不刷新」另一层问题，不在本版范围内。见 §4.62 与 TESTING §3.46。56. **1.5.39 菜单三件（逐槽策略按套装独立 / 从 ESP 生成套装 / 金件页，对应 m09191、m09426）**：①幻化栏放几套不同套装，选中 A 勾「逐槽策略编辑器」，再选中 B —— **B 的策略编辑器应是收起的**（旧版会一起展开）；把 A 勾上后打 JSON，`slotPolicy` 只应出现在 A 的记录里。②幻化页底部「Choose a plugin...」→ 列表应按加载顺序倒序排列（最后加载的在最上面）、右侧显示 `%s  (%zu piece(s), %zu skipped as not clothing)`；选一个含 3 件上衣 + 2 条裤子 + 1 个 FX 特效的 ESP，应生成 `<ESP名称>` 与 `<ESP名称>_1` 两套，**FX 那条不进任何一套**，日志 `ESP outfits: …; N wearable of M slot record(s)` 里 M > N。③金件页：同一 ESP 里那条 FX 记录**可以**被「Add every piece of a plugin」加进来（金件不做服装过滤），但「Add piece」手输不存在的 FormID 应提示 `That is not a hexadecimal form id.` 或找不到记录。④设置页「套装生成」段的「生成的套装自动收藏」勾上后生成的套装应带收藏星标。若 ESP 列表为空，说明该 ESP 没有通过 `IsOutfitArmor()` 三条判据的记录（没有 EditorID / 只有 FX 槽 / armor addon 没模型），把 `PluginScan:` 那行发回。见 §4.63 与 TESTING §3.47。
 
 ## 7. 已知限制
+- **1.5.39 的三项新功能（逐槽策略按套装独立 / 从 ESP 生成套装 / 金件页）全部未实机验证**：本机没有游戏，静态侧只有 `BUILD_EXIT=0`（0 error / 0 warning）与守卫测试 `tests/esp_outfits_filter.ps1` 等 7 项通过。菜单交互、ESP 扫描结果、生成出的套装外观都还没人看过。
+- **从 ESP 生成的套装只按「每槽第 i 件配成第 i 套」拼装**：同一个 ESP 里某槽有 4 件、另一槽只有 1 件时，会生成 4 套且后 3 套复用那 1 件；变体上限 32 是硬编码。想要精确搭配需要手动改套装。
+- **服装过滤是三条硬判据**（有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型），仍可能漏掉特例：只挂了 `bipedModels[kFemale]` 而男性槽为空的 addon（判据里同时看 `bipedModels[kMale]` 与 `bipedModel1stPersons[kMale]`，通常能覆盖）；用脚本在运行时动态生成、没有 EditorID 的护甲会被当成「非服装」跳过。**金件不受此限**。
+- **金件数据换了存储位置**（`Data\SKSE\Plugins\OutfitSystemGoldenItems.json`）：旧 `SkyrimOutfitSystemSE.ini` 的 `goldenItems` 只在首次加载时迁移一次并写 `[Compatibility] GoldenItemsMigrated`；若之后又手工往 ini 里加金件，不会再被读。
 - SMP 重置依赖 Faster HDT-SMP 的 Papyrus 静态函数 `DynamicHDT.ResetPhysics`；没装 FSMP 时开关无效但不报错。
 - SexLab / OStim 场景套装只对玩家生效（事件不带参与者列表；OStim 的 NPC 子线程不处理）。
 
@@ -1584,6 +1644,11 @@ if (!OnGameThread()) {
 
 | 日志 | 含义 / 处置 |
 | --- | --- |
+| `PluginScan: N plugins loaded, M slot armour record(s) indexed.`（debug） | 加载顺序视图建好。N 应≈你启用的插件数；插件列表为空或数量异常说明 esm/esp/esl 都没读到。 |
+| `ESP outfits: … ; N wearable of M slot record(s)).` | 生成套装的权威行：M 是该 ESP 的槽位护甲总数、N 是通过服装过滤的数量。N=0 时会改打 `ESP outfits: That plugin holds no wearable clothing: …`。 |
+| `ESP outfits: That plugin holds no wearable clothing: every slot record is an FX effect, has no editor id or has no model.` | 这个 ESP 一件正常服装都没有：没有 EditorID、只覆盖 FX 槽（CK 槽 61 / 掩码第 31 位）、或 armor addon 没模型。换一个 ESP，或直接做成金件。 |
+| `Golden items: N piece(s) of <plugin> added.` | 金件「添加某个 ESP 的全部装备」的结果 —— 这条**不过滤**，FX 件与无 EditorID 的件都会进来。 |
+| `Golden items: <plugin>:<id> was added as a golden item.` / `Golden items: … could not be resolved` | 金件单件添加：前者成功，后者说明 `plugin:localid` 解析不到（FormID 写错、插件名不对、或该记录没有槽位掩码）。 |
 | `Language: Chinese was requested but` | 想用中文但菜单框架没有 CJK 字形：在 `Data/SKSE/Plugins/SKSEMenuFramework.ini` 开 `[Fonts] EnableChinese = true` 并放入 `Fonts/CN.ttf`（或把 `PrimaryFont` 指向已有的中文字体）。插件不会注入字体。 |
 | `PAD slot report: slot` | Log slot report 的输出。`real '<none>'` = 该槽没有真实护甲，PAD 无处记损伤。 |
 | `Compatibility: Advanced Nudity Detection ... detected; nudity, topless and bottomless ranks now follow the displayed outfit.` | AND 兼容已生效 |
@@ -1705,6 +1770,8 @@ if (!OnGameThread()) {
 | （不再出现）`MorphRefresh: repeating the equip pass for … (follow-up N of 3)` / `Model Rebuild for …` | 1.5.32 已删除补跑与重建机件；若日志里还有这两行，说明装的不是 1.5.32。 |
 
 ## 9. 维护提示
+- **「能不能收」的规则分两条路，不许合并**（m09426）：幻化用的套装生成只收正常服装 —— 走 `PluginScan::IsOutfitArmor()`（有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型），并且分桶时用 `mask & ~kFxBit`；金件是用户自愿指定的任何记录，`Golden::AddAllFromPlugin()` / `AddLocal()` **不调用** `IsOutfitArmor()`。以后新增任何「按 ESP 批量收件」的入口，先想清楚它属于哪条路，不要图省事复用同一个过滤函数。
+- 逐槽策略编辑器的展开状态是 **UI 状态、按套装名分开存**（`MenuOutfitEditor.cpp` 的 `g_slotPolicyOpen`），不是套装数据；它不进 JSON、不能影响别的套装，也不能拿它当「这套装了逐槽策略」的判据（判据是 `slotPolicies` 非空）。
 - 模块文件名（1.5.30 起 `OutfitSystemNG.dll`）**只影响** SKSE 的加载与消息路由顺序；插件身份不许跟着改：`SOS_PCH.h` 的 `Plugin::NAME`、日志文件名 `SkyrimOutfitSystemNG.log`、Papyrus 翻译前缀 `SkyrimOutfitSystemNG_<lang>.txt`、存档标识一律保持原值。改名时必须确认 `Data/SKSE/Plugins` 最终 VFS 里只有一份，绝不能双加载。
 - 「切换了套装」不等于「模型已更新」：切换入口必须走 `Features::AssignOutfit()`（点套装列表那条路）。**不要**再往切换路径里塞「补跑几次装备 pass」（1.5.30，实测无效）或「重建 3D」（1.5.31，实测无效，且被用户明确否掉）。
 - 「模型没更新」与「幻化没切换」是两件事：`BipedAnim` 里已经有克隆、`HairTintDiagnostics` dump 里也有几何，画面仍可能停在旧模型（1.5.31 日志即如此）。判定问题必须先看 dump 里那几个槽（3P slot 1/2/4/7/13）是否都有 addon 与几何 —— 有，就说明「切换」没问题，不要再改切换代码。1.5.30 的补跑与 1.5.31 的 `Update3DModel()` 两个方向已被实机否掉，不要换名字复活。

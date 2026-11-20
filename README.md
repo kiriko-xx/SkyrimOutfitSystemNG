@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.34**（修 m07842：1.5.33 把「按地点/状态切换」的线程门禁 `OnGameThread()` 一起抄进了场景模块，而 OStim / SexLab 的事件来自它们自己的工作线程 → 事件在查名字之前就被丢弃，日志里是三条 `arrived off the game thread; the scene switch is skipped.`。本版改为「离线程事件用一个 `SKSE::GetTaskInterface()->AddTask` 交接到游戏线程 → 统一 `Dispatch()` 入口」，游戏线程上仍内联执行；不建队列、不加 `Tick()`。换装调用序列仍是 `setOutfitByName()` + `refreshArmorFor()`，钩子层 / 贴件语义 / 槽清理 / `.tri` 推导 / DLL 文件名零改动。未实机验证，详见 `dist/docs/DELIVERY.md` §4.62 与 `VERSIONS.md`）
+- 当前版本：**1.5.39**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只动菜单与扫描层：①逐槽策略编辑器的展开状态改按套装名保存（旧全局布尔会让所有套装的策略面板一起展开，m09191②）；②新增「从 ESP 生成套装」——按加载顺序倒序列出 ESP，扫描该 ESP 的护甲生成 `<ESP名称>` / `<ESP名称>_1`…，槽位策略统一「需要已装备」，可选自动收藏（m09191③）；③新增「金件」页——独立 `OutfitSystemGoldenItems.json`、左组右件、可从 ESP 全量添加或按 FormID 添加单件（m09191④）。**套装生成只收正常服装**（`PluginScan::IsOutfitArmor()`：有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型，分桶剔除 FX 位），**金件不做这个过滤**（m09426）。钩子层 / 贴件语义 / 槽清理 / `.tri` 推导 / `SceneOutfits` 一行未改。详见 `dist/docs/DELIVERY.md` §4.63 与 `VERSIONS.md`）
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 

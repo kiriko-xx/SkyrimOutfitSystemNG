@@ -1,6 +1,15 @@
 # 构建说明（BUILD）
 
-## 1.5.34 构建与交付复核状态
+## 1.5.39 构建与交付复核状态
+
+**验证状态（1.5.39）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_39.log`，末尾 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。DLL `OutfitSystemNG.dll` 2,030,592 字节，SHA256 `c72a60a6f4a400bbb4cf06a9b2e1c81a86baca487fbf901119e264421aee83da`，FileVersion/ProductVersion `1.5.39.0`，`build/Release` 与 `dist` 两份逐字节一致。
+
+- **本版改动面**：新增 `src/core/PluginScan.h/.cpp`（加载顺序视图 + `IsOutfitArmor()`）、`src/core/EspOutfits.h/.cpp`（按 ESP 生成套装）、`src/core/GoldenItems.h/.cpp`（金件，独立 JSON）；改 `src/cpp/MenuUI.cpp`（幻化页「从 ESP 生成套装」块、金件页 `RenderGolden()`、设置页「套装生成」段、全部文案走 `I18n::T()`）、`src/cpp/MenuOutfitEditor.cpp`（逐槽策略展开状态改 `g_slotPolicyOpen`）、`src/cpp/I18n.cpp`（新增约 26 条中英对照）、`src/core/Settings.h/.cpp`（`espOutfitAutoFavorite` / `goldenIniMigrated`）、`src/cpp/main.cpp`（旧 ini 金件一次性迁移）、`src/cpp/include/version.h`（PATCH 39）、`CMakeLists.txt`（VERSION 1.5.39），新增守卫测试 `tests/esp_outfits_filter.ps1`。**钩子层、注入壳、贴件语义、槽清理、`.tri` 推导、`SceneOutfits`、模块文件名零改动**。
+- **构建后必查**：DLL 里 `OutfitSystemGoldenItems.json` / `ESP outfits: ` / `wearable clothing` / `FX effects and other non clothing records were left out` / `skipped as not clothing` / `Golden items: ` / `PluginScan: ` / `1.5.39` 必须能搜到；`1.5.34` 的 `handed to the game thread` / `scene started;` 与 1.5.30/31 已删机件仍保持原状态。`src/core/*.cpp` 是新文件，注意 `CMakeLists` 的 `file(GLOB_RECURSE … CONFIGURE_DEPENDS)` 会自动收进编译 —— 若编译日志里看不到 `PluginScan.cpp` / `EspOutfits.cpp` / `GoldenItems.cpp` 的 `CC` 行，说明 glob 没刷新，删掉 `build/` 里的缓存重 configure。
+- **静态守卫**：`tests/esp_outfits_filter.ps1` 必须通过（套装生成走 `PluginScan::IsOutfitArmor()`、分桶剔除 `kFxBit`、`GoldenItems.cpp` **不得**出现 `IsOutfitArmor`）；其余 6 项既有守卫（`scene_outfit_switch` / `skinning_stale_slots` / `morph_paths` / `morph_read_only` / `morph_slider_queue` / `morph_thread_gate`）应全部 PASS。跑法：`C:/Program Files/PowerShell/7/pwsh.exe`（**不要**用 PowerShell 5.1），env 带 `PATHEXT=.COM;.EXE;.BAT;.CMD`。`morph_cache_replay.ps1` 属 1.5.38 候选，不在本分支。
+- **打包**：`build/pack_1_5_39.ps1`（由 `pack_1_5_34.ps1` 改版本号）—— `[IO.Compression.ZipFile]` Open Create + 正斜杠 `CreateEntry` + 逐条回读校验，**禁用 `Compress-Archive`**；包名 `SkyrimOutfitSystemNG-1.5.39.zip`，31 条目、0 个反斜杠条目名。
+
+## 1.5.34 构建与交付复核状态（历史）
 
 **验证状态（1.5.34）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_34.log`，末尾 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。DLL `OutfitSystemNG.dll` 1,937,408 字节，SHA256 `e1cdb9518149d0e1f7a23d1835317620b8258c1e030d6d987b658e4718283782`，FileVersion/ProductVersion `1.5.34.0`，`build/Release` 与 `dist` 两份逐字节一致。
 
@@ -146,6 +155,8 @@ schtasks /run /tn SOSNG
 ```
 
 ## 8. 打包
+
+> **当前版本（1.5.39）用封装好的脚本**：`build/pack_1_5_39.ps1`（由上一版脚本改版本号），直接 `C:/Program Files/PowerShell/7/pwsh.exe -NoProfile -File build/pack_1_5_39.ps1` 即可 —— 它会重算 `dist/SHA256SUMS.txt`、用 `[IO.Compression.ZipFile]` 逐条正斜杠 `CreateEntry` 压包、回读校验条目数与逐文件哈希、最后打印 `ZipBytes` / `ZipSHA256` / `EntriesVerified` / `ManifestVerified` / `DistBytes`。下面这段是 1.5.27 的原始记录，步骤等价，仅作参考（包名按当前版本替换）。
 
 ```powershell
 Remove-Item SkyrimOutfitSystemNG-1.5.27.zip -ErrorAction SilentlyContinue

@@ -811,6 +811,24 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 - **E1 基础幻化回归**：菜单里切普通套装、空套装仍照 1.5.25 的表现（`Armor Refresh` + `attaching N outfit-only piece(s)`，身体槽不再空）。
 - **F1 静态守卫**：`tests/scene_outfit_switch.ps1` 必须通过 —— 场景模块只做「名字查找 → `setOutfitByName()` → `refreshArmorFor()`」，`tasks->AddTask(` 恰好一处且内容是 `[eventName]() { Dispatch(eventName); }`，无队列 / 无 `Tick()` / 无补跑 / 无重建。
 
+## 3.47 1.5.39 逐槽策略按套装独立 / 从 ESP 生成套装 / 金件页
+
+对应 m09191、m09426。判定前提：装 `Data/SKSE/Plugins/OutfitSystemNG.dll`（1.5.39.0），旧名 `SkyrimOutfitSystemNG.dll` 已删；金件数据文件在 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`。本机未实机验证，下列用例待用户执行。
+
+- **A1 逐槽策略只展开被选中的套装**：建 A、B 两套，选中 A 勾「逐槽策略编辑器」→ 编辑器展开；切到 B → **B 的编辑器应是收起的**（1.5.38 及以前会一起展开）；切回 A → 仍展开。
+- **A2 逐槽策略不串数据**：A 里给某个槽设一条覆盖策略，切到 B 看同一槽的复选框 —— 应保持 B 自己的值；导出 JSON，`slotPolicies` 只出现在 A 的记录里。
+- **A3 旧 JSON 兼容**：导入 1.5.34 时代导出的 JSON（含 `slotPolicy` / `slotPolicies`），套装列表与逐槽策略应与导出时一致。
+- **B1 ESP 列表按加载顺序倒序**：幻化页点「从 ESP 生成套装」→ 列表里最后加载的 ESP 在最上面；搜索框输入插件名片段能过滤（大小写不敏感）。
+- **B2 生成结果与文件名**：选一个含 3 件上衣（槽 32）+ 2 条裤子（槽 49）+ 1 个 FX 特效的 ESP → 生成 `<ESP名称>` 与 `<ESP名称>_1` 两套；第一套 3 件上衣配 2 条裤子（第 2 条裤子复用第 0 件），**FX 那条不进任何一套**。
+- **B3 生成后焦点与策略**：生成完左侧列表焦点自动跳到第一套生成的套装；每套的槽位策略是「需要已装备（槽位有装备时才显示幻化）」；勾了「生成的套装自动收藏」时新套装带收藏星标。
+- **B4 重复生成的覆盖行为**：同一个 ESP 再生成一次 → 同名套装原地覆盖（不产生 `_2` 之外的新重复），已手动改过的件被覆盖（这是设计行为，需在复测记录里注明）。
+- **C1 服装过滤三条判据**：找一个含「只覆盖 FX 槽（CK 槽 61）」「没有 EditorID」「armor addon 没模型」记录的 ESP → 这些记录都不出现在生成的套装里；日志 `ESP outfits: …; N wearable of M slot record(s)).` 中 M > N。
+- **C2 金件不过滤**：同一个 ESP 用金件页「添加某个 ESP 的全部装备」→ **FX 件与无 EditorID 的件都能加进来**；右侧每条显示 `plugin:localid` 与 `[槽位 …]`（FX 件显示槽位 61）。
+- **D1 金件按 FormID 添加**：在选中组的输入框填 `000800`（或 `Plugin.esp:000800`）→ 添加成功并落盘；填不存在的 ID → 提示找不到记录；填非十六进制 → 提示 `That is not a hexadecimal form id.`。
+- **E1 数据分离与迁移**：改金件后 `OutfitSystemGoldenItems.json` 变化，但 `OutfitSystemData.json`（幻化）不应因金件改动被迫重写；旧 `SkyrimOutfitSystemSE.ini` 里若有 `goldenItems`，首次加载后应迁移进 JSON 且 ini 写 `GoldenItemsMigrated`。
+- **F1 基础幻化与场景套装回归**：菜单切普通套装 / 空套装仍按 1.5.25 表现（`Armor Refresh` + `attaching N outfit-only piece(s)`，身体槽不空）；进 OStim 场景仍按 1.5.34 表现（`came from thread … handed to the game thread` + `scene started`）。
+- **G1 静态守卫**：`tests/esp_outfits_filter.ps1` 必须通过 —— 套装生成走 `PluginScan::IsOutfitArmor()` 且分桶剔除 `kFxBit`，金件路径不调用 `IsOutfitArmor()`。
+
 ## 4. 性能协议（1000+ 套装）
 
 用 Papyrus 生成 1000 个套装后测：
@@ -1098,6 +1116,9 @@ B. 回归
 - 存档往返一致。
 
 ## 6. 已知未验证项
+- 1.5.39 的三项菜单功能全部未实机验证：逐槽策略按套装独立（`g_slotPolicyOpen`）、「从 ESP 生成套装」（`PluginScan` + `EspOutfits`）、「金件」页（`GoldenItems` + `OutfitSystemGoldenItems.json`）。静态侧只有 `BUILD_EXIT=0`（0 error / 0 warning）与 `tests/esp_outfits_filter.ps1` 等 7 项守卫测试通过；菜单交互、ESP 扫描结果、生成出的套装外观都没人看过。
+- 1.5.39 的服装过滤（`IsOutfitArmor()` 三条判据）是从引擎数据结构推出来的：至少一个 armor addon 在 `bipedModels[SEXES::kMale]` 或 `bipedModel1stPersons[SEXES::kMale]` 上给了模型才收。只挂女性模型的 addon 通常在男性槽也会给模型（否则男性穿模），但没有实机样本证明「所有正常服装都能过」；若用户发现某件正常衣服被跳过，把那件记录的 EditorID / 槽位掩码 / addon 模型发回，按样本放宽判据，**不要**直接把 `IsOutfitArmor()` 改成恒真（那样 FX 特效会重新混进套装）。
+- 1.5.39 的金件不过滤是刻意行为（m09426）：FX 件、无 EditorID 件都能加进金件列表。风险是用户可能加进「其实没有任何模型」的记录，那些件在贴件时不会产生可见几何 —— 属于用户输入错误，不做额外拦截（`AddLocal()` 仍要求记录存在且有槽位掩码）。
 - 1.5.32 的「只切套装」未实机验证：本版删掉补跑与重建后，场景切换就是一次 `Features::AssignOutfit()`（一次 `refreshArmorFor`）。1.5.31 的日志证明「切换其实执行了、biped 里也有几何」，所以本版不再假设「模型没上屏」是缺少刷新次数；若实机后场景里身体/手/脚槽仍为空，问题在「引擎 Skin 覆盖槽（3P slot 2/4/7）与幻化克隆争同一槽」，需要按 `HairTintDiagnostics` 的 3P/1P 对比单独定位，**不要**再加回补跑或重建。
 - 1.5.33 的场景套装换装未实机验证：场景开始/结束现在与「按地点/状态切换」完全同两步（`OutfitSystem::setOutfitByName()` + `OutfitSystem::refreshArmorFor()`），事件在 `ModCallbackEvent` sink 里同步执行。1.5.29–1.5.32 的日志已证明装备 pass 在场景开始时确实执行过（`Armor Refresh for …` + `Custom: attaching 5 outfit-only piece(s) …`），因此若本版模型仍不出现，需按新日志另找方向，不得再加「多刷新几次」类补丁。
 - 1.5.34 的「离线程场景事件用一次 `AddTask` 交接」未实机验证：本版只保证事件不再被 `OnGameThread()` 丢掉、开关会在游戏线程执行；`AddTask` 交接会晚一个任务周期（感知不到）。若日志出现 `scene started; 'A' -> 'A_sex'.` 与随后的 `attaching …` 而模型仍不出现，那属于「切了但被绘制的 3D 不更新」的另一层（1.5.30/1.5.31 的方向已被实机否掉），需按新日志再定位。

@@ -1,0 +1,44 @@
+$ErrorActionPreference = 'Stop'
+# Static guard only: proves which records each generator is allowed to take.
+# "Generate outfits from a plugin" must skip anything that is not ordinary
+# clothing (FX effects, unnamed records, records with no model); golden items
+# deliberately take any record. Nothing here is compiled or executed.
+$root = Join-Path $PSScriptRoot '..'
+$esp = Get-Content -Raw -LiteralPath (Join-Path $root 'src/core/EspOutfits.cpp')
+$espHeader = Get-Content -Raw -LiteralPath (Join-Path $root 'src/core/EspOutfits.h')
+$scan = Get-Content -Raw -LiteralPath (Join-Path $root 'src/core/PluginScan.cpp')
+$scanHeader = Get-Content -Raw -LiteralPath (Join-Path $root 'src/core/PluginScan.h')
+$golden = Get-Content -Raw -LiteralPath (Join-Path $root 'src/core/GoldenItems.cpp')
+$fail = @()
+function Assert-Absent([string] $haystack, [string] $needle, [string] $label) {
+    if ($haystack.Contains($needle)) { $script:fail += "still present: $label ($needle)" }
+}
+function Assert-Present([string] $haystack, [string] $needle, [string] $label) {
+    if (-not $haystack.Contains($needle)) { $script:fail += "missing: $label ($needle)" }
+}
+
+# 1. The outfit generator goes through the clothing test.
+Assert-Present $esp 'PluginScan::IsOutfitArmor(armor)' 'clothing test on the outfit path'
+Assert-Present $esp 'kFxBit' 'FX channel constant'
+Assert-Present $esp '& ~kFxBit' 'FX channel removed from the slot buckets'
+Assert-Present $esp 'not clothing' 'skipped-record report'
+Assert-Present $espHeader 'outfitArmors' 'clothing count in the plugin row'
+
+# 2. The clothing test itself looks at all three things the user named.
+Assert-Present $scan 'bool IsOutfitArmor(const RE::TESObjectARMO* a_armor)' 'clothing test definition'
+Assert-Present $scan 'GetFormEditorID()' 'editor id test'
+Assert-Present $scan 'constexpr std::uint32_t kFxBit = 1u << 31;' 'FX slot mask'
+Assert-Present $scan 'armorAddons.size() == 0' 'armour addon test'
+Assert-Present $scan 'GetModel()' 'model test'
+Assert-Present $scanHeader 'bool IsOutfitArmor' 'clothing test declaration'
+
+# 3. Golden items are exempt: no clothing test anywhere on their path.
+Assert-Absent $golden 'IsOutfitArmor' 'clothing test on the golden path'
+Assert-Present $golden 'PluginScan::ArmorsOf(a_plugin)' 'golden items take the whole plugin'
+Assert-Present $golden 'PluginScan::ResolveArmor(a_plugin, a_localId)' 'single piece lookup stays'
+
+if ($fail.Count -gt 0) {
+    $fail | ForEach-Object { Write-Host "FAIL: $_" }
+    throw "esp_outfits_filter: $($fail.Count) assertion(s) failed"
+}
+Write-Host 'ESP_OUTFITS_FILTER_OK: outfits take ordinary clothing only (FX, unnamed and model-less records skipped); golden items stay unfiltered.'

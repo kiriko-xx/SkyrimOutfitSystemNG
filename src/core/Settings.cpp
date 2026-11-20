@@ -1,5 +1,7 @@
 #include "core/Settings.h"
 
+#include "core/GoldenItems.h"
+
 #include <algorithm>
 
 #include <SimpleIni.h>
@@ -45,7 +47,6 @@ namespace SOS
 		// runs with that lock held, so a reload must never reallocate the vector
 		// the render thread is walking.
 		std::vector<std::pair<std::string, RE::FormID>> golden;
-		golden.emplace_back("Dragonborn.esm", 0x00021739);  // Dragon Aspect Armor
 		const auto publishGolden = [this, &golden]() {
 			std::lock_guard lock(_goldenMutex);
 			goldenItems = golden;
@@ -125,12 +126,20 @@ namespace SOS
 		quickPickerWidth = std::clamp(quickPickerWidth, 320, 4096);
 		quickPickerHeight = std::clamp(quickPickerHeight, 240, 4096);
 
+		espOutfitAutoFavorite = ini.GetBoolValue("Customization", "EspOutfitAutoFavorite", espOutfitAutoFavorite);
 		setDefaultSlotPolicies = ini.GetBoolValue("Customization", "NewOutfitSetDefaultSlotPolicies", setDefaultSlotPolicies);
 		if (const char* base = ini.GetValue("Customization", "NewOutfitDefaultBasePolicy", defaultBasePolicy.c_str())) {
 			defaultBasePolicy = base;
 		}
 
-		if (const char* goldenValue = ini.GetValue("Compatibility", "GoldenItems", nullptr)) {
+		// The golden item store owns the list now; the ini key is only the legacy
+		// source and is read exactly once, then written back as migrated.
+		goldenIniMigrated = ini.GetBoolValue("Compatibility", "GoldenItemsMigrated", false);
+		if (!goldenIniMigrated) {
+			golden.emplace_back("Dragonborn.esm", 0x00021739);  // Dragon Aspect Armor
+		}
+
+		if (!goldenIniMigrated) if (const char* goldenValue = ini.GetValue("Compatibility", "GoldenItems", nullptr)) {
 			std::string list(goldenValue);
 			std::size_t start = 0;
 			while (start <= list.size()) {
@@ -202,6 +211,8 @@ namespace SOS
 		ini.SetLongValue("UI", "QuickPickerY", quickPickerY);
 		ini.SetLongValue("UI", "QuickPickerWidth", quickPickerWidth);
 		ini.SetLongValue("UI", "QuickPickerHeight", quickPickerHeight);
+		ini.SetBoolValue("Customization", "EspOutfitAutoFavorite", espOutfitAutoFavorite);
+		ini.SetBoolValue("Compatibility", "GoldenItemsMigrated", goldenIniMigrated);
 		ini.SetBoolValue("Customization", "NewOutfitSetDefaultSlotPolicies", setDefaultSlotPolicies);
 		ini.SetValue("Customization", "NewOutfitDefaultBasePolicy", defaultBasePolicy.c_str());
 		if (ini.SaveFile(target.string().c_str()) < 0) {
@@ -249,11 +260,9 @@ namespace SOS
 
 	bool Settings::IsGoldenItem(const RE::TESObjectARMO* a_armor) const
 	{
-		if (!a_armor) {
-			return false;
-		}
-		WarmUp();
-		const auto resolved = std::atomic_load(&_resolvedGolden);
-		return resolved && resolved->contains(a_armor->GetFormID());
+		// The set is owned by SOS::Golden (it is grouped by plugin and the menu
+		// edits it). This entry point stays because the skinning hooks already ask
+		// here.
+		return Golden::IsGolden(a_armor);
 	}
 }// namespace SOS

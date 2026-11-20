@@ -278,6 +278,8 @@ for slot in 0..31:
 
 另外 `Patches.cpp` 新增 `RevisionRebuildPending(FormID, revision)`：`OutfitService` 的 revision 一旦变化（套装新建/编辑/改派，包括快选窗按 E 与 Z 键重穿），该 actor 在 2 秒内走全量重建，而不是只重贴 applySet。全量重建时逐件打印 `Custom: <ArmorFormID> slot <nn> clone <ptr>`（debug），可直接看出槽位几何是否真的换了。
 
+23. **1.5.39（m09191 / m09426）：菜单层三项新功能，引擎侧零改动。** ①逐槽策略编辑器展开状态改按套装名保存（`MenuOutfitEditor.cpp` 的 `std::unordered_set<std::string> g_slotPolicyOpen`，key = 套装名），旧全局布尔删除；它只是 UI 状态，不进 JSON，判据永远是 `slotPolicies` 非空。②新增三个模块：`src/core/PluginScan.*`（加载顺序视图 `GetLoadedMods()` + `GetLoadedLightMods()`、护甲按 `OwningPlugin()` 归组、`IsOutfitArmor()` 三条判据 = 有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型）、`src/core/EspOutfits.*`（`GenerateFromPlugin()` 先过滤再按 32 槽「每槽第 i 件配第 i 套、不足复用第 0 件」生成、分桶用 `mask & ~kFxBit`、同名原地覆盖）、`src/core/GoldenItems.*`（金件存 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`，**不做服装过滤**）。③`Settings` 新增 `espOutfitAutoFavorite`（默认 true）与 `goldenIniMigrated`（旧 ini 金件一次性迁移）；`Settings::IsGoldenItem()` 委托 `Golden::IsGolden()`，`Outfit.cpp` 的贴件判断逻辑未变。④钩子安装、贴件语义、槽位清理、`.tri` 推导、`SceneOutfits` 一行未改（`git diff v1.5.34 HEAD -- src/cpp/hooking src/cpp/MorphRefresh.cpp src/cpp/SceneOutfits.cpp` 为空）。教训：**「能不能收」的规则分两条路** —— 幻化套装只收正常服装、金件放开，绝不能合并成一个过滤函数（m09426）。
+
 ## 9. 存档
 
 co-save 记录：签名 `'AAOS'`（0x41414F53），版本 **7**，内容为 UTF-8 JSON：

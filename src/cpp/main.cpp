@@ -12,6 +12,7 @@
 #include "NGFeatures.h"
 #include "compat/ModCompat.h"
 #include "hooking/Hooks.hpp"
+#include "core/GoldenItems.h"
 
 #include <string>
 #include <cstring>
@@ -319,6 +320,18 @@ namespace {
             // Everything else is loaded now, so trampolines and hooks are safe to set up.
             SOS::GameState::SetLoading(false);
             SOS::Settings::Get().WarmUp();
+            // Golden items: the list has a file of its own now. The legacy ini
+            // list is lifted into it once (the ini key is marked as migrated and
+            // is ignored from then on) so an existing setup keeps its pieces.
+            SOS::Golden::LoadFromDisk();
+            if (!SOS::Settings::Get().goldenIniMigrated) {
+                SOS::Golden::ApplyLegacyEntries(SOS::Settings::Get().goldenItems);
+                SOS::Golden::SaveToDisk();
+                SOS::Settings::Get().goldenItems.clear();
+                SOS::Settings::Get().goldenIniMigrated = true;
+                SOS::Settings::Get().Save();
+            }
+            SOS::Golden::WarmUp();
             ApplySkinningHooks();
             SetupEvents();
             SOS::AutoSwitch::Install();

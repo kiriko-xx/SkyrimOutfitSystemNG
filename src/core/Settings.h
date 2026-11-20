@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/GoldenItems.h"
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -44,6 +46,10 @@ namespace SOS
 					ResolveGoldenItems();
 				}
 			}
+			// The golden item set itself lives in its own store (SOS::Golden) so the
+			// menu can add and remove pieces; resolving it here keeps the render
+			// thread away from the first, slow lookup.
+			Golden::WarmUp();
 		}
 
 		bool enabled{ true };
@@ -116,8 +122,15 @@ namespace SOS
 		bool setDefaultSlotPolicies{ true };
 		std::string defaultBasePolicy{ "XXOO" };
 
-		// plugin name -> local form id
+		// [Customization] - outfits generated from a plugin are marked as
+		// favourites so they are easy to find in the list afterwards.
+		bool espOutfitAutoFavorite{ true };
+
+		// plugin name -> local form id. This is the legacy list of the ini: it is
+		// moved into the golden item store once (see goldenIniMigrated) and is empty
+		// afterwards. Kept so an existing ini keeps working.
 		std::vector<std::pair<std::string, RE::FormID>> goldenItems;
+		bool goldenIniMigrated{ false };
 
 	private:
 		void ResolveGoldenItems() const;

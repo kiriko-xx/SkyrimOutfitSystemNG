@@ -4,7 +4,17 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-## 1.5.34 最新说明（2026-11-18）
+## 1.5.39 最新说明（2026-11-20）
+
+菜单层三项新功能，**引擎侧一行未改**（钩子安装、贴件语义、槽位清理、`.tri` 推导、`SceneOutfits` 全部零改动，`git diff v1.5.34 HEAD -- src/cpp/hooking src/cpp/MorphRefresh.cpp src/cpp/SceneOutfits.cpp` 为空）。
+
+- **逐槽策略编辑器只对被选中的套装展开**（m09191②）：旧实现是一个全局布尔，勾一次就让所有套装的策略面板一起展开；现在展开状态按套装名保存在 `MenuOutfitEditor.cpp` 的 `std::unordered_set<std::string> g_slotPolicyOpen` 里。JSON 仍是每套自己的 `slotPolicy` / `slotPolicies`，导入导出格式不变。
+- **新增「从 ESP 生成套装」**（m09191③）：幻化页底部「Choose a plugin...」列出按加载顺序倒序排列的 ESP，选中后扫描该 ESP 的护甲生成套装，默认名 = ESP 名称；同槽位多件拆成 `ESP名称_1`、`ESP名称_2` …；槽位策略统一「需要已装备（槽位有装备时才显示幻化）」；生成后左侧列表焦点跳到第一套生成的套装；变体上限 32。设置页与生成块里都有「生成的套装自动收藏」开关（`[Customization] EspOutfitAutoFavorite`，默认打开）。
+- **扫描只收正常服装**（m09426）：`PluginScan::IsOutfitArmor()` 要求 ①有 EditorID、②至少覆盖一个非 FX 槽位（FX = 掩码第 31 位 / CK 槽 61）、③至少一个 armor addon 有模型；分桶时 `mask & ~kFxBit`，FX 位不进任何槽。被排除的记录数量会显示在 ESP 列表与生成结果里。
+- **新增「金件」页**（m09191④）：数据存 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`（与幻化 JSON 分开），左侧按 ESP 分组、右侧增删单件，支持「添加某个 ESP 的全部装备」与「按 FormID 添加单件」（`000800` 或 `Plugin.esp:000800`，必须真实存在）。**金件不筛选**：FX 特效、没有 EditorID 的件都能加（m09426）。旧 `SkyrimOutfitSystemSE.ini` 的 `goldenItems` 首次加载时迁移一次。
+- **未验证**：本机没有游戏。静态侧 `BUILD_EXIT=0`（0 error / 0 warning，DLL `OutfitSystemNG.dll` 2,030,592 B / `1.5.39.0`）+ 守卫测试 `tests/esp_outfits_filter.ps1` 等 7 项通过；菜单交互与生成结果**全部未实机验证**。详见 `docs/DELIVERY.md` §4.63 与 `docs/TESTING.md` §3.47。
+
+## 1.5.34 最新说明（2026-11-18，历史）
 
 修「OStim 场景开始后幻化压根没切换」（m07842）。1.5.33 把「按地点/状态切换」的线程门禁 `OnGameThread()` 一起抄进了场景模块，而 OStim / SexLab 的事件来自它们自己的工作线程 → 事件在查名字之前就被丢掉。
 
@@ -206,6 +216,8 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 47. **1.5.33**：场景套装回退到 1.5.29 的写法，并改成「按地点/状态切换」那套换装（m07666）。**回退** `src` 到 `v1.5.29`，撤掉 1.5.30 的补跑 pass、1.5.31 的 `rebuildActorModel()`、1.5.32 的 `Features::AssignOutfit()` 场景入口；**新增** `OutfitSystem::setOutfitByName()`，场景开始/结束都走「锁内指派 → 锁外 `refreshArmorFor()`」，与 `AutoSwitch::Evaluate()` 同构；**删除**场景专用的 SKSE 任务队列、`Tick()` 心跳与 `gc` 状态，事件改为 `ModCallbackEvent` sink 里同步执行。`AutoSwitch`（按地点/状态切换）本版一行未改。详见顶部最新说明与 `docs/DELIVERY.md` §4.61。
 
 48. **1.5.34**：修「OStim 场景开始后幻化压根没切换」（m07842）。1.5.33 的 `OnGameThread()` 门禁把工作线程送来的场景事件整条丢弃（日志：三条 `arrived off the game thread; the scene switch is skipped.`）→ 本版改为「一次 `AddTask` 交接到游戏线程 → 统一 `Dispatch()` 入口」。换装序列、钩子层、贴件语义、槽清理、`.tri` 推导、DLL 文件名一律未改。
+
+49. **1.5.39**：菜单三件（m09191 / m09426）—— ①逐槽策略编辑器展开状态改按套装名保存（旧全局布尔删掉），只展开被选中的那套；②新增「从 ESP 生成套装」（`src/core/PluginScan.*` 建加载顺序视图 + `src/core/EspOutfits.*` 按 32 槽分桶生成 `<名称>` / `<名称>_1`…，槽位策略统一「需要已装备」，可选自动收藏）；③新增「金件」页（`src/core/GoldenItems.*`，独立 JSON、左组右件、可增删、支持从 ESP 全量添加与按 FormID 添加单件）。**服装过滤只用于套装生成**：`PluginScan::IsOutfitArmor()` = 有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型，分桶剔除 `kFxBit`；**金件不做这个过滤**（FX、无 EditorID 的件都能加）。引擎侧零改动。详见顶部最新说明与 `docs/DELIVERY.md` §4.63。
 
 
 ## 常见问题

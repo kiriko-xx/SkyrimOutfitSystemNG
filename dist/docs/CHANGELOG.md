@@ -1,5 +1,25 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.39] - 2026-11-20
+
+### 新增：逐槽策略按套装独立 + 从 ESP 生成套装 + 金件页（m09191 / m09426）
+
+**用户诉求**（m09191）：①幻化栏选中一套装时勾选右侧「逐槽策略编辑器」，会把**所有套装**的该选项一起打开 —— 应只对勾选的套装生效，且导入导出 JSON 保持兼容；②新增「按 ESP 自动生成套装」（点按钮弹列表、按加载顺序倒序、选中后扫描装备生成新套装、默认名 = ESP 名称、焦点跳到新套装、同槽位多件拆成 `ESP名称_1`…、槽位策略统一「需要已装备」、设置里加「生成套装自动收藏」开关默认打开）；③新增「金件」栏（左列表按 ESP 分组、右侧显示该组金件、增删齐备、支持从 ESP 自动生成与按 FormID 选单件、金件 JSON 与幻化 JSON 分开）。m09426 追加：生成套装扫描时**只收正常服装**（FX 特效、没有 EditorID、各种不算），**金件放开**按自己的规则来。
+
+**实现**：
+
+1. `MenuOutfitEditor.cpp`：逐槽策略展开状态从全局布尔改为按套装名保存的 `std::unordered_set<std::string> g_slotPolicyOpen`，旧全局变量删除；JSON 仍是每套自己的 `slotPolicy` / `slotPolicies`，格式未变。
+2. 新增 `src/core/PluginScan.h/.cpp`：按 `GetLoadedMods()` + `GetLoadedLightMods()` 建加载顺序视图，护甲用 `GetFormArray(RE::FormType::Armor)` 按 `OwningPlugin()` 归组；新增 `IsOutfitArmor()`（EditorID 非空 + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型），并给 `PluginSummary` 加 `outfitArmors` 计数。
+3. 新增 `src/core/EspOutfits.h/.cpp`：`GenerateFromPlugin()` 先用 `IsOutfitArmor()` 过滤（被排除的计入 `notClothing`），分桶用 `mask & ~kFxBit`，按 32 槽「每槽第 i 件配第 i 套、不足复用第 0 件」生成，同名原地覆盖，生成后 `FocusOutfitInList()` + 刷新。
+4. 新增 `src/core/GoldenItems.h/.cpp`：金件独立存 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`，`AddAllFromPlugin()` / `AddLocal()` **不做服装过滤**（m09426 的金件放开）；`Settings::IsGoldenItem()` 委托 `Golden::IsGolden()`；旧 ini `goldenItems` 在 kDataLoaded 一次性迁移并写 `[Compatibility] GoldenItemsMigrated`。
+5. `MenuUI.cpp`：幻化页底部新增「从 ESP 生成套装」块，新增「金件」页（`RenderGolden()`，左列表右编辑 + 导出/导入 + 按 FormID 添加），设置页新增「套装生成」段放 `EspOutfitAutoFavorite`；全部文案走 `I18n::T()`，中文侧同步。
+6. `Settings.h/.cpp` 新增 `espOutfitAutoFavorite{true}`（`[Customization] EspOutfitAutoFavorite`，默认打开）与 `goldenIniMigrated{false}`（`[Compatibility] GoldenItemsMigrated`）。
+7. 新增守卫测试 `tests/esp_outfits_filter.ps1`：断言套装生成走 `IsOutfitArmor()` 且金件路径**不**调用它。
+
+**未改动**：钩子安装、贴件语义、槽位清理、`.tri` 推导、`SceneOutfits` 一行未动（`git diff v1.5.34 HEAD -- src/cpp/hooking src/cpp/MorphRefresh.cpp src/cpp/SceneOutfits.cpp` 为空），1.5.25 / 1.5.34 的实机结论不受影响。
+
+**未验证**：本机没有游戏；菜单交互、ESP 扫描结果、生成套装外观全部未实机验证；静态侧 `BUILD_EXIT=0`（0 error / 0 warning）+ 守卫测试 7 项通过。
+
 ## [1.5.34] - 2026-11-18
 
 ### 修复：场景事件被线程门禁整条丢弃（m07842）
