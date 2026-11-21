@@ -46,6 +46,29 @@ int main()
     groups = Match::Plan(items);
     CHECK(groups[0].members.size() + groups[1].members.size() == 9);
 
+    // Screenshot names/slots, plus an adjacent label that shares most of its spelling.
+    items = { Item("[Rokona] 挎包", 1u << 17), Item("［Rokona］内裤", 1u << 22),
+        Item("[Rokona] 头发", hair), Item("[Rokona] 鞋袜", shoes), Item("[Rokona Extra] 上衣", top) };
+    groups = Match::Plan(items);
+    CHECK(groups.size() == 2 && groups[1].prefix == U"[rokona]");
+    CHECK(groups[1].variants == std::vector<IndexList>({{0, 1, 2, 3}}));
+    CHECK(groups[0].prefix == U"[rokona extra]" && groups[0].variants == std::vector<IndexList>({{4}}));
+    // The previous trie vetoed the whole label when just one deeper branch
+    // (衣服) covered fewer slots than the full, explicitly named family.
+    const std::vector<Piece> nested{Item("[Rokona] 衣服上身", top), Item("[Rokona] 衣服下身", skirt),
+        Item("[Rokona] 头发", hair), Item("[Rokona] 鞋袜", shoes)};
+    CHECK(std::string_view(Match::Plan(nested, {}, false)[0].issue) == "uncertain-family-coverage");
+    CHECK(Match::Plan(nested)[0].variants == std::vector<IndexList>({{0, 1, 2, 3}}));
+    CHECK(Names::ComparisonKey("[A-B] 上衣") != Names::ComparisonKey("[AB] 上衣"));
+    items.push_back(Item("[Rokona] 上衣", top | (1u << 31)));
+    items.push_back(Item("[Rokona] 裙子", skirt | (1u << 31)));
+    groups = Match::Plan(items);
+    CHECK(groups[1].variants.empty() && std::string_view(groups[1].issue) == "overlapping-slot-masks");
+    groups = Match::Plan({Item("[Pack] Orion Top", top), Item("[Pack] Orion Skirt", skirt),
+        Item("[Pack] Nova Top", top), Item("[Pack] Nova Skirt", skirt)});
+    CHECK(groups.size() == 2 && groups[0].prefix == U"[pack]nova" && groups[1].prefix == U"[pack]orion");
+    CHECK(groups[0].variants.size() == 1 && groups[1].variants.size() == 1);
+
     items = { Item("星夜礼服上衣A", top), Item("星夜礼服上衣B", top),
         Item("星夜礼服裙子红色", skirt), Item("星夜礼服裙子黑色", skirt) };
     groups = Match::Plan(items);

@@ -1204,7 +1204,7 @@ namespace SOS::Menu
 			}
 			IG::SameLine();
 			bool espFavorite = settings.espOutfitAutoFavorite;
-			if (IG::Checkbox(I18n::T("Mark generated outfits as favourites", "生成的套装自动收藏"), &espFavorite)) {
+			if (IG::Checkbox(I18n::T("Mark generated outfits as favourites", "生成的幻化自动收藏"), &espFavorite)) {
 				settings.espOutfitAutoFavorite = espFavorite;
 				SaveSettingsThrottled();
 			}
@@ -1552,7 +1552,7 @@ namespace SOS::Menu
 			IG::SeparatorText(I18n::T("Outfit generation", "套装生成"));
 			{
 				bool espFavorite = settings.espOutfitAutoFavorite;
-				if (IG::Checkbox(I18n::T("Mark outfits generated from a plugin as favourites", "从 ESP 生成的套装自动收藏"), &espFavorite)) {
+				if (IG::Checkbox(I18n::T("Mark outfits generated from a plugin as favourites", "从 ESP 生成的幻化自动收藏"), &espFavorite)) {
 					settings.espOutfitAutoFavorite = espFavorite;
 					Settings::Get().Save();
 				}

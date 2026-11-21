@@ -47,10 +47,21 @@ namespace SOS::EspOutfits::Names
 			return {};
 		}
 		std::u32string key;
+		bool inLeadingLabel = false;
 		for (std::size_t i = 0; i < lower.size(); ++i) {
 			char32_t ch = lower[i];
 			if (ch >= 0xD800 && ch <= 0xDBFF && i + 1 < lower.size()) {
 				ch = 0x10000 + ((ch - 0xD800) << 10) + (lower[++i] - 0xDC00);
+			}
+			// Compare the contents of an explicit leading label without erasing
+			// its internal punctuation: [A-B] and [AB] can be distinct styles.
+			if (key.empty() && ch == U'[') {
+				inLeadingLabel = true;
+			}
+			if (inLeadingLabel) {
+				key.push_back(ch);
+				inLeadingLabel = ch != U']';
+				continue;
 			}
 			// Optional joiners, not token boundaries or required separators.
 			if (ch == U'_' || ch == U'-' || ch == U' ' || (ch >= 9 && ch <= 13) ||

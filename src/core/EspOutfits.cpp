@@ -94,24 +94,37 @@ namespace SOS::EspOutfits
 		const auto base = BaseNameFor(a_plugin);
 		const auto maxName = static_cast<std::size_t>(outfit_service_get_singleton_ptr()->inner().max_outfit_name_len());
 		std::vector<bool> included(preview.pieces.size(), false);
+		std::vector<const char*> reasons(preview.pieces.size(), "no-supported-family");
 		std::set<Match::Key> usedNames;
 		for (const auto& group : groups) {
 			const auto label = Names::OriginalPrefix(preview.pieces[group.members.front()].name, group.prefix);
 			if (group.issue) {
+				for (const auto i : group.members) {
+					reasons[i] = group.issue;
+				}
 				SKSE::log::warn("ESP outfits: pending [{}] family='{}' pieces={} reason={}", a_plugin, label, group.members.size(), group.issue);
 				continue;
 			}
 			if (group.variants.size() > Match::kMaxOutfits - preview.outfits.size()) {
 				preview.truncated = true;
+				for (const auto index : group.members) {
+					reasons[index] = "preset-limit";
+				}
 				continue;
 			}
 			for (std::size_t i = 0; i < group.variants.size(); ++i) {
 				auto name = Names::PresetName(base, label, groups.size(), group.variants.size(), i);
 				if (usedNames.contains(Names::ComparisonKey(name))) {
+					for (const auto index : group.variants[i]) {
+						reasons[index] = "duplicate-preset-name";
+					}
 					SKSE::log::warn("ESP outfits: pending [{}] family='{}' reason=duplicate-preset-name", a_plugin, label);
 					continue;
 				}
 				if (name.empty() || name.size() > maxName || Names::ComparisonKey(name).empty()) {
+					for (const auto index : group.variants[i]) {
+						reasons[index] = "unsupported-preset-name";
+					}
 					SKSE::log::warn("ESP outfits: pending [{}] family='{}' reason=unsupported-preset-name", a_plugin, label);
 					continue;
 				}
@@ -129,7 +142,9 @@ namespace SOS::EspOutfits
 		for (std::size_t i = 0; i < included.size(); ++i) {
 			if (!included[i]) {
 				preview.unresolved.push_back(i);
-				SKSE::log::warn("ESP outfits: unplaced [{}] id={:08X}", a_plugin, preview.pieces[i].formId);
+				const auto& piece = preview.pieces[i];
+				SKSE::log::warn("ESP outfits: unplaced [{}] id={:08X} mask={:08X} name='{}' reason={}",
+					a_plugin, piece.formId, piece.mask, piece.name, reasons[i]);
 			}
 		}
 		{

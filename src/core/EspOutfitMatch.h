@@ -125,6 +125,7 @@ namespace SOS::EspOutfits::Match
 			}
 		}
 		if (choices.empty()) {
+			std::sort(shared.begin(), shared.end());
 			group.variants.push_back(std::move(shared));
 			return;
 		}
@@ -148,12 +149,13 @@ namespace SOS::EspOutfits::Match
 		}
 	}
 
-	inline std::vector<Group> Plan(const std::vector<Piece>& pieces, const Aliases& aliases = {})
+	inline std::vector<Group> Plan(const std::vector<Piece>& pieces, const Aliases& aliases = {}, bool useLabels = true)
 	{
 		if (pieces.size() == 1 && !pieces.front().key.empty() && pieces.front().mask) {
 			return { Group{ {}, { 0 }, { { 0 } }, nullptr } };
 		}
 		std::vector<Node> trie(1);
+		std::map<Key, Group> labelled;
 		for (std::size_t i = 0; i < pieces.size(); ++i) {
 			const auto& [key, mask] = pieces[i];
 			if (key.empty() || !mask) {
@@ -162,6 +164,17 @@ namespace SOS::EspOutfits::Match
 			std::size_t node = 0;
 			if (key.size() > 256) {
 				continue;
+			}
+			// A closed leading label is an explicit boundary, not an arbitrary
+			// character-prefix cut. Never merge pieces across different labels.
+			if (useLabels && key.front() == U'[') {
+				const auto end = key.find_first_of(U"[]", 1);
+				if (end > 1 && end < key.size() - 1 && key[end] == U']') {
+					auto& group = labelled[key.substr(0, end + 1)];
+					group.members.push_back(i);
+					group.coverage |= mask;
+					continue;
+				}
 			}
 			for (const auto ch : key) {
 				auto [entry, inserted] = trie[node].children.try_emplace(ch, trie.size());
@@ -182,6 +195,38 @@ namespace SOS::EspOutfits::Match
 		std::vector<Group> groups;
 		Key prefix;
 		FindFamilies(trie, 0, prefix, groups);
+		for (auto& [label, group] : labelled) {
+			// The label identifies a family, not a compatible variant. If the
+			// full label is shared by several independently supported families,
+			// preserve those subfamilies instead of gluing them together.
+			std::vector<Piece> suffixes;
+			suffixes.reserve(group.members.size());
+			bool complementary = false;
+			for (auto i : group.members) {
+				const auto mask = pieces[i].mask;
+				complementary |= std::any_of(suffixes.begin(), suffixes.end(), [mask](const auto& part) {
+					return (mask & part.mask) == 0;
+				});
+				suffixes.push_back({ pieces[i].key.substr(label.size()), mask });
+			}
+			auto deeper = Plan(suffixes, aliases, false);
+			if (deeper.size() > 1) {
+				for (auto& child : deeper) {
+					child.prefix = label + child.prefix;
+					for (auto& i : child.members) {
+						i = group.members[i];
+					}
+					child.variants.clear();  // match again using the original names
+					groups.push_back(std::move(child));
+				}
+				continue;
+			}
+			group.prefix = label;
+			if (!complementary && group.members.size() > 1) {
+				group.issue = "no-complementary-slots";
+			}
+			groups.push_back(std::move(group));
+		}
 		for (auto& group : groups) {
 			if (!group.issue) {
 				MatchVariants(group, pieces, aliases);
