@@ -90,6 +90,7 @@ namespace SOS::Menu
 		bool                    g_espOutfitPicker{ false };
 		char                    g_espOutfitFilter[128]{};
 		std::string             g_espOutfitStatus;
+		EspOutfits::Preview     g_espOutfitPreview;
 
 		// ---- quick picker (standalone window, opened by spell or hotkey) ----
 		MenuBridge::WindowInterface* g_quickWindow{ nullptr };
@@ -1195,7 +1196,7 @@ namespace SOS::Menu
 
 			IG::Separator();
 			IG::SeparatorText(I18n::T("Generate outfits from a plugin", "从 ESP 生成套装"));
-			IG::TextDisabled(I18n::T("Every wearable piece of a plugin becomes an outfit. Pieces whose names start the same way count as one costume, and pieces that share a slot inside a costume are split into <name>_1, <name>_2 ... Every slot policy is set to \"require equipped\".", "把该 ESP 里每件可穿的装备变成幻化；名称开头相同的算同一套服装，同一套里同槽位有多件时拆成 <名称>_1、<名称>_2……；槽位策略一律设为“需要已装备”。"));
+			IG::TextWrapped("%s", I18n::T("Select a plugin to preview its outfits. Uncertain matches are not created.", "选择 ESP 后先预览幻化预设，无法确定的搭配不会生成。"));
 			IG::TextDisabled(I18n::T("Only ordinary clothing is taken: FX effects, records with no editor id and records with no model are left out.", "只收录正常服装：FX 特效槽、没有 EditorID、没有模型的记录都不算在内。"));
 			if (IG::Button(I18n::T("Choose a plugin...", "选择 ESP..."))) {
 				g_espOutfitPicker = !g_espOutfitPicker;
@@ -1229,18 +1230,9 @@ namespace SOS::Menu
 						}
 						IG::PushID(static_cast<int>(it->order));
 						if (IG::Selectable(label)) {
-							const auto result = EspOutfits::GenerateFromPlugin(it->name, settings.espOutfitAutoFavorite);
-							g_espOutfitStatus = result.message;
-							RE::SendHUDMessage::ShowHUDMessage(result.message.c_str(), nullptr, false);
-							SKSE::log::info("Menu: outfits from {}: {}", it->name, result.message);
+							g_espOutfitPreview = EspOutfits::PreviewFromPlugin(it->name);
+							g_espOutfitStatus.clear();
 							g_espOutfitPicker = false;
-							if (result.ok && !result.names.empty()) {
-								// The list jumps to the first generated outfit so the
-								// result is visible without searching for it.
-								FocusOutfitInList(result.names.front());
-								g_quickSignature.clear();
-								CreateRefreshAllArmorsTask();
-							}
 						}
 						IG::PopID();
 					}
@@ -1249,6 +1241,59 @@ namespace SOS::Menu
 					}
 				}
 				IG::EndChild();
+			}
+			if (!g_espOutfitPreview.plugin.empty()) {
+				const auto& preview = g_espOutfitPreview;
+				IG::TextWrapped(I18n::T("%s: %zu proposed, %zu pieces pending, %zu non-clothing records filtered.", "%s：拟生成 %zu 个预设，%zu 件待判断，已过滤 %zu 项非服装。"),
+					preview.plugin.c_str(), preview.outfits.size(), preview.unresolved.size(), preview.notClothing);
+				if (preview.truncated) {
+					IG::TextWrapped("%s", I18n::T("The preset limit was reached; some groups were left pending.", "已达到预设数量上限，部分款式留待判断。"));
+				}
+				if (IG::BeginChild("##espoutfitpreview", ImVec2(0.0f, 220.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
+					const auto drawPiece = [&preview](std::size_t index) {
+						const auto& piece = preview.pieces[index];
+						const auto slots = EspOutfits::SlotNumbers(piece.mask);
+						IG::Text(I18n::T("%s (slots %s) [%08X]", "%s（槽位 %s）[%08X]"),
+							(piece.name.empty() ? piece.editorId : piece.name).c_str(), slots.c_str(), piece.formId);
+					};
+					for (std::size_t i = 0; i < preview.outfits.size(); ++i) {
+						IG::PushID(static_cast<int>(i));
+						const auto& outfit = preview.outfits[i];
+						const auto label = outfit.existing ? outfit.name + I18n::T(" (already exists; will skip)", "（已存在，将跳过）") : outfit.name;
+						if (IG::TreeNode(label.c_str())) {
+							for (const auto index : preview.outfits[i].pieces) {
+								drawPiece(index);
+							}
+							IG::TreePop();
+						}
+						IG::PopID();
+					}
+					if (!preview.unresolved.empty() && IG::TreeNode(I18n::T("Pending pieces (will not be created)", "待判断的装备（不会生成）"))) {
+						for (const auto index : preview.unresolved) {
+							drawPiece(index);
+						}
+						IG::TreePop();
+					}
+				}
+				IG::EndChild();
+				if (!preview.outfits.empty()) {
+					if (IG::Button(I18n::T("Create previewed outfits", "确认生成预览中的幻化"))) {
+						const auto result = EspOutfits::ApplyPreview(preview, settings.espOutfitAutoFavorite);
+						char status[320]{};
+						std::snprintf(status, sizeof(status), I18n::T("Created %zu outfits; skipped %zu. Existing presets were not replaced.", "已生成 %zu 个幻化，跳过 %zu 个；没有覆盖已有预设。"), result.names.size(), result.skipped);
+						g_espOutfitStatus = status;
+						g_espOutfitPreview = {};
+						if (!result.names.empty()) {
+							FocusOutfitInList(result.names.front());
+							g_quickSignature.clear();
+							CreateRefreshAllArmorsTask();
+						}
+					}
+					IG::SameLine();
+				}
+				if (IG::Button(I18n::T("Close outfit preview", "关闭幻化预览"))) {
+					g_espOutfitPreview = {};
+				}
 			}
 			if (!g_espOutfitStatus.empty()) {
 				IG::TextWrapped("%s", g_espOutfitStatus.c_str());

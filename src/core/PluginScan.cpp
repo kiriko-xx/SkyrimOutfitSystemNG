@@ -53,18 +53,14 @@ namespace SOS::PluginScan
 			if (!a_armor) {
 				return OutfitVerdict::kUnnamed;
 			}
-			// A record the menu cannot name is unusable: a generated outfit built
-			// from "unnamed record" tells the user nothing. Either the editor id
-			// or the display name is enough; 1.5.39 only accepted the editor id.
+			// Outfit generation requires an EditorID. Golden items never use this verdict.
 			const char* editorId = a_armor->GetFormEditorID();
-			const char* fullName = a_armor->GetFullName();
-			const bool  named = (editorId && editorId[0] != '\0') || (fullName && fullName[0] != '\0');
-			if (!named) {
+			if (!editorId || editorId[0] == '\0') {
 				return OutfitVerdict::kUnnamed;
 			}
 			constexpr std::uint32_t kFxBit = 1u << 31;
 			const auto              mask = a_armor->GetSlotMask().underlying();
-			if ((mask & ~kFxBit) == 0) {
+			if (mask == 0 || (mask & kFxBit) != 0) {
 				return OutfitVerdict::kFxOnly;
 			}
 			if (a_armor->armorAddons.size() == 0) {
