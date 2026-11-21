@@ -144,14 +144,17 @@ int main()
     CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 }, { 0, 3 } }));
     CHECK(groups[0].pending.empty());
 
-    // Two records with one and the same name cannot be told apart: the second one
-    // is never pretended to be a variant of its own.
+    // Two records with one and the same name and slot are copies of one another: they
+    // are never pretended to be two variants, and the copy that no preset needs is
+    // explained instead of being silently dropped.
     Match::Aliases clash{ { U"红色", U"a" }, { U"黑色", U"a" } };
     std::vector<Piece> same = marks;
     same[3] = Item("星夜礼服裙子红色", skirt);
     groups = Match::Plan(same, clash);
-    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 }, { 0, 3 } }));
-    CHECK(groups[0].pending.empty());
+    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
+    CHECK(groups[0].pending.size() == 1 && groups[0].pending[0].first == 3);
+    CHECK(ReasonOf(groups[0], 3) == std::string_view("same-slot-alternative"));
+    CHECK_COMPLETE(groups, same);
 
     // An empty mark is a legal base variant as long as it is unique.
     std::vector<Piece> base{ Item("Love Letter Maiden Boots", shoes), Item("Love Letter Maiden Loose", top),
@@ -213,19 +216,47 @@ int main()
     CHECK_COMPLETE(groups, five);
 
     // ---- every option ends up in an outfit of its own --------------------
-    // Two records share the mark "2" and cannot be told apart, so they are not paired
-    // by name - but each of them still gets one outfit instead of being left over.
+    // Two records that share both name and slot are interchangeable copies: they never
+    // produce two presets with the same name, and the unused copy stays explained.
     std::vector<Piece> spare{ Item("[Stall] Dress", top), Item("[Stall] Dress 2", top), Item("[Stall] Dress 2", top),
         Item("[Stall] Dress Short", top), Item("[Stall] Stocking", 1u << 8) };
     groups = Match::Plan(spare);
-    CHECK(groups.size() == 1 && !groups[0].issue && groups[0].pending.empty());
-    CHECK(groups[0].variants.size() == 4);
+    CHECK(groups.size() == 1 && !groups[0].issue);
+    CHECK(groups[0].variants.size() == 3);
+    CHECK(groups[0].pending.size() == 1 && groups[0].pending[0].first == 2);
+    CHECK(ReasonOf(groups[0], 2) == std::string_view("same-slot-alternative"));
     CHECK_COMPLETE(groups, spare);
     for (std::size_t piece = 0; piece < spare.size(); ++piece) {
+        if (piece == 2) {
+            continue;  // the copy is worn in place of the record it duplicates
+        }
         CHECK(std::any_of(groups[0].variants.begin(), groups[0].variants.end(), [piece](const IndexList& variant) {
             return std::binary_search(variant.begin(), variant.end(), piece);
         }));
     }
+
+    // ---- a slot clash costs one piece, not the whole style ---------------
+    // Two cuts of every part, and the hoods fight the tops for their slot. Both cuts
+    // still come out whole; only the two hoods are explained. When the style's slots
+    // were taken from every member, this kind of plugin produced no preset at all.
+    std::vector<Piece> clashCut{ Item("Demon Hunter Top Light", top), Item("Demon Hunter Top Heavy", top),
+        Item("Demon Hunter Skirt Light", skirt), Item("Demon Hunter Skirt Heavy", skirt),
+        Item("Demon Hunter Hood Light", top | hair), Item("Demon Hunter Hood Heavy", top | hair) };
+    groups = Match::Plan(clashCut);
+    CHECK(groups.size() == 1);
+    CHECK(groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 3 } }));
+    CHECK(ReasonOf(groups[0], 4) == std::string_view("overlapping-slot-masks"));
+    CHECK(ReasonOf(groups[0], 5) == std::string_view("overlapping-slot-masks"));
+    CHECK_COMPLETE(groups, clashCut);
+
+    // ---- a style with one slot only: each record is a whole outfit -------
+    // Nothing but shoes in the plugin: there is no second part to complete a preset
+    // with, so every record is a one piece preset instead of a dead style.
+    std::vector<Piece> heels{ Item("Jolie Heels A", shoes), Item("Jolie Heels B", shoes), Item("Jolie Heels C", shoes) };
+    groups = Match::Plan(heels);
+    CHECK(groups.size() == 1 && groups[0].variants.size() == 3 && groups[0].pending.empty());
+    CHECK(groups[0].variants == std::vector<IndexList>({ { 0 }, { 1 }, { 2 } }));
+    CHECK_COMPLETE(groups, heels);
 
     // ---- real [BAKU]DOAXVV Love Letter Maiden shape ----------------------
     std::vector<Piece> maiden{ Item("Love Letter Maiden Boots", shoes), Item("Love Letter Maiden Gloves", 1u << 3),
@@ -250,24 +281,30 @@ int main()
     groups = Match::Plan(cover);
     CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
 
-    // A part that covers two slots and a part that covers one of them cannot be
-    // worn together, and the style can never be filled: nothing is claimed.
+    // A part that covers two slots and a part that covers one of them cannot be worn
+    // together. The clash costs the two pieces that clash, not the whole style: boots
+    // and skirt still make a complete outfit, and the parts that lost their slot say
+    // so. A style whose slots only a clashing piece could fill used to give nothing.
     std::vector<Piece> coverSkirt = cover;
     coverSkirt.push_back(Item("Orion Skirt", skirt));
     groups = Match::Plan(coverSkirt);
-    CHECK(groups.size() == 1 && groups[0].variants.empty());
-    CHECK(groups[0].issue == std::string_view("overlapping-slot-masks"));
+    CHECK(groups.size() == 1);
+    CHECK(groups[0].variants == std::vector<IndexList>({ { 2, 3 } }));
+    CHECK(!groups[0].issue);
     CHECK(ReasonOf(groups[0], 0) == std::string_view("overlapping-slot-masks"));
     CHECK(ReasonOf(groups[0], 1) == std::string_view("overlapping-slot-masks"));
-    CHECK(ReasonOf(groups[0], 3) == std::string_view("incomplete-slots"));
+    CHECK(ReasonOf(groups[0], 2) == nullptr && ReasonOf(groups[0], 3) == nullptr);
+    CHECK_COMPLETE(groups, coverSkirt);
 
     // A single piece is its own outfit; unrelated names are left alone.
     groups = Match::Plan({ Item("Orion Dress", top | skirt) });
     CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0 } }));
 
+    // A part that covers two slots and a part that covers one of them cannot be worn
+    // together, and no other part proves they are one style: nothing is claimed.
     CHECK(Match::Plan({ Item("Orion Top", top | skirt), Item("Orion Skirt", skirt) }).size() == 1);
     groups = Match::Plan({ Item("Orion Top", top | skirt), Item("Orion Skirt", skirt) });
-    CHECK(groups[0].issue == std::string_view("overlapping-slot-masks"));
+    CHECK(groups[0].variants.empty() && groups[0].issue == std::string_view("overlapping-slot-masks"));
 
     CHECK(Match::Plan({ Item("星夜礼服上衣A", top), Item("Dawn Skirt", skirt) }).empty());
     CHECK(Match::Plan({ Item("Dark Top", top), Item("Dawn Skirt", skirt) }).empty());
@@ -286,6 +323,23 @@ int main()
     CHECK(groups[0].variants[0] == IndexList({ 0, 1 }));
     CHECK(groups[0].pending.size() == 1 && groups[0].pending[0].second == std::string_view("variant-limit"));
 
+    // A plugin that ships a male and a female copy of every piece gives every
+    // difference mark a twin; this used to reach into an empty list and crash.
+    std::vector<Piece> twins{ Item("Body SMP Object A 48", shoes), Item("Body SMP Object A 50", skirt),
+        Item("Body SMP Object A 48", shoes), Item("Body SMP Object A 50", skirt) };
+    groups = Match::Plan(twins);
+    CHECK(groups.size() == 1);
+    CHECK(groups[0].variants == std::vector<IndexList>({ { 0, 1 } }));
+    CHECK(ReasonOf(groups[0], 2) == std::string_view("same-slot-alternative"));
+    CHECK(ReasonOf(groups[0], 3) == std::string_view("same-slot-alternative"));
+
+    // The same copies with a readable difference still give one preset per option,
+    // and the duplicate of each option stays explained instead of crashing.
+    std::vector<Piece> twinsMarks{ Item("Object A 48", shoes), Item("Object A 50", skirt), Item("Object A 48", shoes),
+        Item("Object A 50 Trans", skirt) };
+    groups = Match::Plan(twinsMarks);
+    CHECK(groups.size() == 1 && !groups[0].variants.empty());
+    CHECK_COMPLETE(groups, twinsMarks);
     std::cout << "ESP outfit matching: all checks passed\n";
     return 0;
 }
