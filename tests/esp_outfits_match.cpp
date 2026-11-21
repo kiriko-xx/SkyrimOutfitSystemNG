@@ -119,6 +119,37 @@ int main()
     CHECK(groups[0].prefix == U"[pack]orion" && groups[0].variants == std::vector<IndexList>({ { 0, 1 } }));
     CHECK(groups[1].prefix == U"[pack]nova" && groups[1].variants == std::vector<IndexList>({ { 2, 3 } }));
 
+    // One label, one style, an alternative for every slot: the label names the
+    // outfit, so the pieces belong together instead of each becoming a preset of
+    // its own. This is the shape that filled [SSE] Personal Pack vol.2 with
+    // one-piece presets.
+    std::vector<Piece> wardrobe{ Item("[URGF] 短裙 1", skirt), Item("[URGF] 短裙 2", skirt), Item("[URGF] 靴子 1", shoes),
+        Item("[URGF] 靴子 2", shoes), Item("[URGF] 针织上衣 1", top), Item("[URGF] 针织上衣 2", top) };
+    groups = Match::Plan(wardrobe);
+    CHECK(groups.size() == 1 && !groups[0].issue);
+    CHECK(groups[0].prefix == U"[urgf]");
+    CHECK(groups[0].variants == std::vector<IndexList>({ { 0, 2, 4 }, { 1, 3, 5 } }));
+    CHECK(groups[0].pending.empty());
+    CHECK_COMPLETE(groups, wardrobe);
+
+    // Options that differ only by a number are not styles: they stay one outfit per
+    // option, and no piece is left behind as a preset of its own.
+    std::vector<Piece> numbered{ Item("[URGF] 短裙 1", skirt), Item("[URGF] 靴子 1", shoes), Item("[URGF] 针织上衣 1", top),
+        Item("[URGF] 长裙 2", skirt), Item("[URGF] 凉鞋 2", shoes), Item("[URGF] 衬衫 2", top) };
+    groups = Match::Plan(numbered);
+    CHECK(groups.size() == 1);
+    CHECK(groups[0].pending.empty() && Match::PlacedPieces(groups[0]) == numbered.size());
+    CHECK_COMPLETE(groups, numbered);
+
+    // A label that holds two named styles still splits: the shared parts of the name
+    // dress one outfit each instead of being mixed across styles.
+    std::vector<Piece> twoStyles{ Item("[URGF] 新星短裙", skirt), Item("[URGF] 新星靴子", shoes), Item("[URGF] 新星衬衫", top),
+        Item("[URGF] 幻影短裙", skirt), Item("[URGF] 幻影靴子", shoes), Item("[URGF] 幻影衬衫", top) };
+    groups = Match::Plan(twoStyles);
+    CHECK(groups.size() == 2);
+    CHECK(groups[0].prefix == U"[urgf]幻影" && groups[0].variants == std::vector<IndexList>({ { 3, 4, 5 } }));
+    CHECK(groups[1].prefix == U"[urgf]新星" && groups[1].variants == std::vector<IndexList>({ { 0, 1, 2 } }));
+    CHECK_COMPLETE(groups, twoStyles);
     // ---- difference marks must line up -----------------------------------
     // Marks that do not line up are not paired by name. The style still gets one
     // full outfit per variant, and the skirt that no mark pairs with gets an outfit

@@ -81,6 +81,12 @@ namespace SOS::EspOutfits::Match
 		// with the same name on the same slots). They never get a preset of their own,
 		// because that preset would carry the same name as another one.
 		IndexList duplicates;
+		// How many presets this style may produce. A style with several slots keeps the
+		// kMaxVariants guard so a pack of options cannot flood the outfit list, but a
+		// style that only offers one slot (a hair pack, a shoe pack) cannot multiply at
+		// all: there every record is a whole outfit, and the guard would silently drop
+		// the rest of the pack.
+		std::size_t cap{};
 	};
 
 	struct Node
@@ -143,7 +149,8 @@ namespace SOS::EspOutfits::Match
 	// per such piece instead of by a cross product.
 	inline void FinalizeVariants(Group& group, const std::vector<Piece>& pieces, Rand* rng = nullptr)
 	{
-		std::uint32_t coverage = group.reachable;
+		const std::size_t cap = group.cap ? group.cap : kMaxVariants;
+		std::uint32_t     coverage = group.reachable;
 		if (coverage == 0) {
 			for (const auto i : group.members) {
 				coverage |= BodySlots(pieces[i].mask);
@@ -165,7 +172,7 @@ namespace SOS::EspOutfits::Match
 		std::vector<std::pair<IndexList, const char*>> dead;
 		std::vector<std::size_t>                       overflowed;
 		for (auto& variant : group.variants) {
-			if (kept.size() >= kMaxVariants) {
+			if (kept.size() >= cap) {
 				for (const auto i : variant) {
 					overflowed.push_back(i);
 				}
@@ -231,7 +238,7 @@ namespace SOS::EspOutfits::Match
 			if (used(i) || BodySlots(pieces[i].mask) == 0 || isDuplicate(i)) {
 				continue;
 			}
-			if (kept.size() >= kMaxVariants) {
+			if (kept.size() >= cap) {
 				tooMany.push_back(i);
 				continue;
 			}
@@ -327,6 +334,11 @@ namespace SOS::EspOutfits::Match
 	// unreadable slot no longer sinks the whole outfit.
 	inline void MatchVariants(Group& group, const std::vector<Piece>& pieces, const Aliases& aliases, Rand* rng = nullptr)
 	{
+		std::uint32_t touched = 0;
+		for (const auto i : group.members) {
+			touched |= BodySlots(pieces[i].mask);
+		}
+		group.cap = std::popcount(touched) <= 1 ? (std::max)(kMaxVariants, group.members.size()) : kMaxVariants;
 		std::map<std::uint32_t, IndexList> buckets;
 		for (const auto i : group.members) {
 			buckets[pieces[i].mask].push_back(i);
@@ -382,11 +394,11 @@ namespace SOS::EspOutfits::Match
 				shared.push_back(bucket.front());
 				continue;
 			}
-			for (std::size_t i = kMaxVariants; i < bucket.size(); ++i) {
+			for (std::size_t i = group.cap; i < bucket.size(); ++i) {
 				group.pending.push_back({ bucket[i], "variant-limit" });
 			}
-			if (bucket.size() > kMaxVariants) {
-				bucket.resize(kMaxVariants);
+			if (bucket.size() > group.cap) {
+				bucket.resize(group.cap);
 			}
 			const std::u32string_view first = pieces[bucket.front()].key;
 			std::size_t               common = first.size();
@@ -671,6 +683,30 @@ namespace SOS::EspOutfits::Match
 		return families;
 	}
 
+	// A plan explains more pieces with fewer presets when the pieces belong together.
+	// Splitting a label into one preset per part only pays off when the parts cannot
+	// be worn at the same time: otherwise the split spends a preset on every part and
+	// explains no more pieces than one outfit with its alternatives.
+	inline bool StyleBetter(const std::vector<Group>& lhs, const std::vector<Group>& rhs)
+	{
+		std::size_t lhsPlaced = 0;
+		std::size_t lhsPresets = 0;
+		std::size_t rhsPlaced = 0;
+		std::size_t rhsPresets = 0;
+		for (const auto& group : lhs) {
+			lhsPlaced += PlacedPieces(group);
+			lhsPresets += group.variants.size();
+		}
+		for (const auto& group : rhs) {
+			rhsPlaced += PlacedPieces(group);
+			rhsPresets += group.variants.size();
+		}
+		if (lhsPlaced != rhsPlaced) {
+			return lhsPlaced > rhsPlaced;
+		}
+		return lhsPresets < rhsPresets;
+	}
+
 	// Pieces that share no supported name still conflict over slots; saying so beats
 	// claiming they have nothing in common.
 	inline void ReportLeftovers(std::vector<Group>& groups, const std::vector<Piece>& pieces, const IndexList& rest)
@@ -735,8 +771,26 @@ namespace SOS::EspOutfits::Match
 				});
 				suffixes.push_back({ pieces[i].key.substr(label.size()), mask });
 			}
+			// The label may well name one outfit that ships a second copy of every part
+			// (every part repeated with the same suffix). Splitting that into a style
+			// per part would answer with one preset per part, so the split only wins
+			// when the parts of the label cannot be worn together at all.
+			const auto labelSlots = pieces[group.members.front()].mask;
+			const bool oneSlotLabel = !complementary && group.members.size() > 1 &&
+				std::all_of(group.members.begin(), group.members.end(), [&](std::size_t i) {
+					return BodySlots(pieces[i].mask) == BodySlots(labelSlots);
+				});
+			Group whole;
+			whole.prefix = label;
+			whole.members = group.members;
+			whole.singleSlots = oneSlotLabel;
+			if (!complementary && !oneSlotLabel && group.members.size() > 1) {
+				whole.issue = "no-complementary-slots";
+			} else {
+				MatchVariants(whole, pieces, aliases, rng);
+			}
 			auto deeper = Plan(suffixes, aliases, false, rng);
-			if (deeper.size() > 1) {
+			if (deeper.size() > 1 && StyleBetter(deeper, { whole })) {
 				for (auto& child : deeper) {
 					child.prefix = label + child.prefix;
 					for (auto& i : child.members) {
@@ -757,23 +811,7 @@ namespace SOS::EspOutfits::Match
 				}
 				continue;
 			}
-			group.prefix = label;
-			// Every part of the label fights for the same slot: unless they all offer
-			// exactly the same slot, nothing in this label can be worn together. A label
-			// of that one slot (a plug-in of nothing but heels or nothing but hair) is a
-			// style of its own, one record per preset.
-			const auto labelSlots = pieces[group.members.front()].mask;
-			const bool oneSlotLabel = !complementary && group.members.size() > 1 &&
-				std::all_of(group.members.begin(), group.members.end(), [&](std::size_t i) {
-					return BodySlots(pieces[i].mask) == BodySlots(labelSlots);
-				});
-			group.singleSlots = oneSlotLabel;
-			if (!complementary && !oneSlotLabel && group.members.size() > 1) {
-				group.issue = "no-complementary-slots";
-			} else {
-				MatchVariants(group, pieces, aliases, rng);
-			}
-			groups.push_back(std::move(group));
+			groups.push_back(std::move(whole));
 		}
 		IndexList leftover;
 		for (auto& family : FamiliesOf(pieces, aliases, plain, fullKeys, leftover, false, rng)) {

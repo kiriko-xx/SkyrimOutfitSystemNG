@@ -138,14 +138,20 @@ namespace SOS::EspOutfits
 				SKSE::log::warn("ESP outfits: pending piece [{}] family='{}' id={:08X} mask={:08X} name='{}' reason={}",
 					a_plugin, label, piece.formId, piece.mask, piece.name, why);
 			}
-			if (group.variants.size() > Match::kMaxOutfits - preview.outfits.size()) {
+			// Take the presets that still fit instead of dropping the whole style: a full
+			// list must not cost this style every preset it has.
+			const auto room = Match::kMaxOutfits - preview.outfits.size();
+			if (group.variants.size() > room) {
 				preview.truncated = true;
-				for (const auto index : group.members) {
-					reasons[index] = "preset-limit";
+				for (std::size_t i = room; i < group.variants.size(); ++i) {
+					for (const auto index : group.variants[i]) {
+						reasons[index] = "preset-limit";
+					}
 				}
-				continue;
+				SKSE::log::warn("ESP outfits: pending [{}] family='{}' reason=preset-limit variants={}", a_plugin, label, group.variants.size() - room);
 			}
-			for (std::size_t i = 0; i < group.variants.size(); ++i) {
+			const auto wanted = group.variants.size() < room ? group.variants.size() : room;
+			for (std::size_t i = 0; i < wanted; ++i) {
 				auto name = Names::PresetName(base, label, styleCount, group.variants.size(), i);
 				if (usedNames.contains(Names::ComparisonKey(name))) {
 					for (const auto index : group.variants[i]) {
