@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.43**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只修金件页三处（m10387）—— ①左侧组行「鼠标很难点中，或者说压根点不中」：`Selectable` 用了 `(0,0)` 尺寸、右栏 `ImVec2(0, …)` 在剩余宽度为负时盖住左栏 ⇒ 新增 `GoldenRow()` 显式宽高并把双栏宽度夹紧；②取消金件 JSON 的自动导出：`g_goldenDirty` + 只有「导出」按钮写盘，页面常显 `[not saved]` 提示（改动仍在内存里即时生效）；③light(ESL) 插件金件显示 `<当前加载顺序里没有>`：id 原先存成 `formId & 0xFFFFFF`，把运行时**光索引**一起存了下来，而 `TESDataHandler::GetFormID` 对 light 插件不掩码 ⇒ `LookupForm` 二次叠加（`0 entr(ies) resolved, 61 missing`）；新增 `PluginScan::IsLightPlugin()` / `LocalIdFor()` / `ResolveForm()` 按插件宽度归一，旧档加载即自愈。引擎侧（1.5.25 基础幻化、1.5.34 场景套装、1.5.42 删除崩溃修复）一行未改。
+- 当前版本：**1.5.44**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只修一件事（m10689：「金件列表依旧点不中」）：左栏组行的 ImGui 控件 id 原先由 `IG::PushID(group.plugin.c_str())` 生成，而 `Golden::Groups()` 每帧返回一份新副本 ⇒ 指针每帧都变 ⇒ 按下帧与松开帧的 id 不一致 ⇒ ImGui 直接丢弃这次点击（同页插件选择器用整数 `PushID(it->order)` 所以能点；「添加某个 ESP 的全部装备」是代码直接赋 `g_goldenSelected`，所以用完之后该组会自己选中）。修法：组行改压行号 `IG::PushID(static_cast<int>(rowIndex))`，选中日志升级为 info `Menu: golden group <名字> selected (<N> of <M>).` 便于实机判定，并新增守卫脚本 `tests/golden_row_id.ps1` 禁止再用字符串指针当 id。1.5.43 的三项（显式行高、手动导出 + `[not saved]`、light 插件 id 宽度）原样保留；引擎侧（1.5.25 基础幻化、1.5.34 场景套装、1.5.42 删除崩溃修复）一行未改。
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 

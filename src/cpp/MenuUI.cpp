@@ -1950,17 +1950,23 @@ namespace SOS::Menu
 				if (groups.empty()) {
 					IG::TextDisabled(I18n::T("No golden items yet - add a plugin above, or pick a single piece by its form id.", "还没有金件 - 先在上面添加一个 ESP，或按 FormID 添加单件。"));
 				}
+				std::size_t rowIndex = 0;
 				for (const auto& group : groups) {
-					IG::PushID(group.plugin.c_str());
+					// The id must be the same on the frame the button goes down and the
+					// frame it comes up: Golden::Groups() hands out a fresh copy every
+					// frame, so PushID(plugin.c_str()) pushed a different pointer each
+					// frame and ImGui dropped the click (the row looked unclickable).
+					IG::PushID(static_cast<int>(rowIndex));
 					char label[384]{};
 					std::snprintf(label, sizeof(label), "%s  (%zu)", group.plugin.c_str(), group.localIds.size());
 					const bool isSelected = !g_goldenSelected.empty() && Lower(group.plugin) == Lower(g_goldenSelected);
 					if (GoldenRow(label, isSelected)) {
 						g_goldenSelected = group.plugin;
 						g_goldenLocalId[0] = 0;
-						SKSE::log::debug("Menu: golden group '{}' selected.", group.plugin);
+						SKSE::log::info("Menu: golden group '{}' selected ({} of {}).", group.plugin, rowIndex + 1, groups.size());
 					}
 					IG::PopID();
+					++rowIndex;
 				}
 			}
 			IG::EndChild();

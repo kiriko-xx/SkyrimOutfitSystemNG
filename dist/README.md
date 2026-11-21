@@ -4,7 +4,15 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-## 1.5.43 最新说明（2026-11-21）
+## 1.5.44 最新说明（2026-11-21）
+
+- **修：金件列表依旧点不中**（m10689）—— 1.5.43 给行补了显式宽高，但没修控件 id：`Golden::Groups()` 每帧返回一份新副本，组行却用 `IG::PushID(group.plugin.c_str())` 把**指针**压进 id 栈（`const char*` 命中 `PushID(const void*)`），指针每帧都变 ⇒ ImGui 认为「按下」与「松开」不是同一个控件 ⇒ 点击被丢弃。旁证：同一页的插件选择器用 `PushID(it->order)`（整数）所以能点；「添加某个 ESP 的全部装备」是代码直接赋值，所以那一组会「自动焦点中」。
+- **修法**：组行改用行号做 id（`IG::PushID(static_cast<int>(rowIndex))`，`Golden::Groups()` 按插件名排序，行号跨帧稳定）；选中日志从 `debug` 提升到 `info` 并带位置：`Menu: golden group <名字> selected (<第几行> of <总数>).` —— 默认日志级别就能看出点击有没有进到代码里。
+- **没动的东西**：1.5.43 的三条修复（显式命中矩形、两栏宽度夹紧、只有「导出」才写盘 + `[not saved]` 提示、light 插件 id 宽度）原样保留；引擎侧（钩子 / 贴件 / 槽清理 / `.tri` / 场景套装）一行未改。
+- **产物**：`OutfitSystemNG.dll` 2,042,368 字节 / `859d81d5…` / `1.5.44.0`；测试包 `SkyrimOutfitSystemNG-1.5.44-test.zip` 只含 DLL + 说明，可直接用 MO2 装。
+- **未实机验证**：判据只有日志里那行 `Menu: golden group … selected (N of M).`（有 = 点击通了；没有 = 仍被吃掉）。
+
+## 1.5.43 说明（历史，其金件列表仍点不中：组行把字符串指针当 ImGui id）
 
 - **修：金件页三处**（m10387）—— ①左侧金件列表「鼠标很难点中，或者说压根点不中」；②取消金件 JSON 的自动导出，改成界面上提示、点「导出」才写盘；③「添加某个 ESP 的全部装备」之后，右侧单件菜单每行都显示 `<当前加载顺序里没有>`。1.5.42 的删除崩溃已被用户实机确认修好。
 - **点不中的原因**：组行用的是 `IG::Selectable(label, isSelected)`（尺寸默认 `(0, 0)`），命中矩形只有一行文字高；再加上左栏宽度取用户可拖的 `outfitListWidth`、右侧编辑栏 `BeginChild(..., ImVec2(0, 440))` 的 0 表示「剩余宽度」，剩余宽度为负时右栏会盖到左栏上把点击吃掉。
@@ -258,6 +266,7 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 51. **1.5.41**（2026-11-21）：修 1.5.40 的启动即闪退 —— 金件库 `std::mutex` 在同线程被重入加锁（`ImportText` 持锁后调 `TotalCount`），MSVC 抛 `std::system_error("resource deadlock would occur")` 且异常逃出 SKSE 回调；改递归锁 + `TotalCountLocked()`，并给启动加载与消息回调各加一道 try/catch 兜底。
 52. **1.5.42**（2026-11-21）：修 1.5.41 报出的新崩溃 —— 删除幻化套装预设时闪退（m10183）。菜单分页切片在删除后仍用旧页码：`g_filtered.clear()` 后 `end = 0` 而 `begin > 0`，`end - begin` 的 `size_t` 下溢让 `std::vector::assign` 抛 `std::length_error("vector too long")`，异常逃出渲染回调把游戏带走。修法是先取 `total`、把 `begin` / `end` 都 `min` 到 `total`，并加 `tests/menu_page_slice.ps1` 守卫。引擎侧与金件存库零改动。
 53. **1.5.43**（2026-11-21）：修金件页三处（m10387）—— 组行点不中（`Selectable` 尺寸 `(0,0)` + 右栏负宽覆盖左栏，改 `GoldenRow()` 显式宽高与双栏夹紧）、每次编辑都自动写盘（改 `g_goldenDirty`，只有「导出」按钮写盘并常显未保存提示）、light(ESL) 插件金件显示 `<当前加载顺序里没有>`（存 id 时把光索引一起存了，`LookupForm` 二次叠加 ⇒ 全 missing；新增 `PluginScan::LocalIdFor()` / `ResolveForm()` 按插件宽度归一，旧档加载自愈）。引擎侧零改动。
+54. **1.5.44**（2026-11-21）：修 1.5.43 遗留的「金件列表依旧点不中」（m10689）—— 组行把字符串指针当 ImGui id（`PushID(group.plugin.c_str())`，而 `Golden::Groups()` 每帧返回新副本），按下帧与松开帧的 id 不同，点击被 ImGui 丢弃。改用行号 id，选中日志升到 info 并带位置。1.5.43 的显式宽高 / 手动导出 / light id 宽度全部保留。
 
 
 ## 常见问题

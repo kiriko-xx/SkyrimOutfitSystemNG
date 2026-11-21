@@ -1,5 +1,20 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.44] - 2026-11-21
+
+### 修：金件列表依旧点不中——控件 id 跨帧不稳定（m10689）
+
+- **用户原话**：「“金件”列表依旧点不中，“添加某个esp的全部装备”后可以自动焦点中。」
+- **症状**：金件栏左侧的插件组行怎么点都没反应；但用「添加某个 ESP 的全部装备」加进来之后，那个组会自己变成选中状态（右侧编辑区随之出现）。
+- **真因**：`MenuUI::RenderGolden()` 每帧 `const auto groups = Golden::Groups();`（`std::vector<Group> Groups();` 是**返回值**，每帧一份新副本），组行却 `IG::PushID(group.plugin.c_str())` —— `const char*` 命中 `PushID(const void*)` 重载，指针每帧都变。ImGui 的点击判定要求「按下」与「松开」落在同一个控件 id 上（`ActiveId` 比对），id 一变这次点击就被丢弃。**对照组**：同页插件选择器推 `PushID(it->order)`（整数）所以能点；「添加全部装备」是代码直接给 `g_goldenSelected` 赋值，不经过点击判定。1.5.43 只补了显式宽高，没碰到 id，所以问题原样留下。
+- **修法一**（`MenuUI::RenderGolden()`）：组行改用行号做 id —— `std::size_t rowIndex = 0;` + `IG::PushID(static_cast<int>(rowIndex));` + 循环尾 `++rowIndex;`（`Groups()` 按插件名排序，行号跨帧稳定）。
+- **修法二**（取证能力）：选中日志从 `debug` 升到 `info` 并带位置：`Menu: golden group <名字> selected (<第几行> of <总数>).` —— 默认日志级别就能证明点击有没有进到代码里。
+- **修法三**（守卫）：新增 `tests/golden_row_id.ps1`，断言全仓不再有 `PushID(<字符串指针>)`、组行按行号推 id、选中日志为 info、`GoldenRow` 的显式宽高仍在。
+- **保留**：1.5.43 的三条修复（显式命中矩形、两栏宽度夹紧、脏标记 + 只有「导出」写盘 + `[not saved]` 提示）与 light 插件 id 宽度全部不动。
+- **未改动**：注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装切换、钩子安装、逐槽策略、从 ESP 生成套装、金件存库锁。
+- **产物**：DLL `OutfitSystemNG.dll` 2,042,368 字节，sha256 `859d81d55db6de8b91224a96f998f03f32caf34dd96d8344f9d4134d0640914f`，FileVersion/ProductVersion `1.5.44.0`；Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，留档 `build/build_1_5_44.log`）；全量包 31 条目、测试包 2 条目（只含 DLL + 说明）。
+- **未验证**：本机没有游戏，结论来自 ImGui 点击语义 + 同函数里「指针 id 坏 / 整数 id 好」的对照事实，不是实机复现。判据是日志里的 `Menu: golden group … selected (N of M).`。
+
 ## [1.5.43] - 2026-11-21
 
 ### 修：金件页三处（点不中 / 每次编辑都写盘 / light 插件金件解析不到）（m10387）

@@ -1,6 +1,20 @@
 # 交付说明（DELIVERY）
 
-## 1.5.43 最新交付准备（2026-11-21）
+## 1.5.44 最新交付准备（2026-11-21）
+
+**验证状态（1.5.44）**：**尚未实机验证**。1.5.43 实机反馈（m10689）：「“金件”列表依旧点不中，“添加某个esp的全部装备”后可以自动焦点中。」—— 1.5.43 给行补了显式宽高，但组行的 ImGui **id 不稳定**：`Golden::Groups()` 每帧返回一份新的 `std::vector<Group>`，组行却推的是 `IG::PushID(group.plugin.c_str())`（指针当 id）⇒ 鼠标按下那一帧与松开那一帧 id 不同 ⇒ ImGui 把这次点击整个丢掉。旁证两条：同一页面的插件选择器推的是 `IG::PushID(it->order)`（稳定的整数）⇒ 那一栏能点；「添加某个 ESP 的全部装备」是代码直接给 `g_goldenSelected` 赋值 ⇒ 侧栏照样显示选中。本版只改 id 与日志级别，UI 布局、写盘策略、light id 宽度、引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装 / 钩子安装）一行未改。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log`，留档 `build/build_1_5_44.log`）；新增守卫 `tests/golden_row_id.ps1` 通过。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 2,042,368 字节；`859d81d55db6de8b91224a96f998f03f32caf34dd96d8344f9d4134d0640914f`；`1.5.44.0`（build/Release 与 dist 逐字节一致） |
+| 安装包与复核记录 | SkyrimOutfitSystemNG-1.5.44.zip：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；测试包 SkyrimOutfitSystemNG-1.5.44-test.zip：2 条目（只含 DLL + 说明文本），可直接用 MO2 装；最终 zip 的大小/哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256` |
+
+- **为什么点不中（issue 1）**：`RenderGolden()` 每帧开头都执行 `const auto groups = Golden::Groups();` —— 那是**返回值**（`std::vector<Group> Groups();`），每组名字都是这帧新建的字符串；组行却用 `IG::PushID(group.plugin.c_str())` 把**指针**压进 id 栈。`const char*` 会匹配到 `PushID(const void*)` 那个重载，于是每帧的控件 id 都不同。ImGui 的点击判定要求「按下」与「松开」落在同一个 id 上（`ActiveId` 比对），id 一变，这一次点击就被丢弃 —— 表现就是怎么点都没反应。本项目的其它列表（幻化套装、ESP 选择器、单件行）用的都是 `PushID(static_cast<int>(…))`，所以只有这一栏坏。
+- **修法（issue 1）**：组行改用行号做 id —— `std::size_t rowIndex = 0;` + `IG::PushID(static_cast<int>(rowIndex));` + 循环尾 `++rowIndex;`（`Golden::Groups()` 按插件名排序，行号跨帧稳定；行 label 里本来就带插件名，就算行号撞上也不会串）。同时把选中日志从 `debug` 提升为 `info` 并带上位置：`Menu: golden group <名字> selected (<第几行> of <总数>).` —— 默认日志级别（info）下就能取证「点了到底有没有到代码里」。
+- **1.5.43 已修的部分继续保留**：显式命中矩形（`GoldenRow()`）、两栏宽度夹紧、脏标记 + 只有「导出」才写盘 + `[not saved]` 提示、light 插件 id 宽度与 `ResolveForm()` 兜底，全部不动。
+- **本版不动引擎侧**：注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装切换、钩子安装、逐槽策略、从 ESP 生成套装、金件存库锁一行未改（1.5.25 的基础幻化、1.5.34 的场景切换、1.5.42 的删除崩溃修复都不受影响）。
+
+## 1.5.43 交付准备（历史，已被 1.5.44 取代：其组行仍把字符串指针当 ImGui id，金件列表点不中）
 
 **验证状态（1.5.43）**：**尚未实机验证**。1.5.42 的删除崩溃已由用户实机确认修好（m10387 首句「上个轮问题已修复。」），同一轮报出金件页三处缺陷：**左侧金件列表点不中**、**每次编辑都自动写盘**、**light（ESL）插件的金件在右侧显示「<当前加载顺序里没有>」**。本版只修这三处，引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装 / 钩子安装）一行未改。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log`，留档 `build/build_1_5_43.log`）；守卫测试 18 项 PASS（新增 `tests/golden_local_id.ps1`，并同步改掉 `tests/esp_outfits_filter.ps1` 里因重构失效的单件查找断言），另 2 项是已知环境失败（`hair_tint_read_only.ps1` 的锚点已随代码迁移消失、`skse_listener_replay.ps1` 需要现场 `bug/skse64.log`），不是本版回归。
 
@@ -279,6 +293,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | 「"金件"里点击"从ESP自动生成金件"点击后就闪退，金件左侧列表选不中，右侧菜单也不显示」（m09740） | 中文译文占位符顺序与英文相反，`I18n::T()` 结果被当 printf 格式串 ⇒ `%s` 吃到 `size_t` ⇒ AV。改中文串为同序，并在 `I18n::Apply()` 加占位符校验护栏（不一致就回退英文）。见 §4.64 |
 | 「1.5.41启动游戏时的ctd修复了，又出现新的ctd：在删除幻化套装预设时出现了ctd」（m10183） | 删除按钮先清空过滤列表再用删除前的页码算本页区间，`end - begin` 以 `size_t` 下溢 ⇒ `std::vector::assign` 抛 `std::length_error("vector too long")`，异常从菜单渲染回调逃出直接终止游戏；第 1 页删除不触发，只在第 2 页及以后崩。见 §4.66 | 1.5.42 取 `total` 后把 `begin` / `end` 都夹进总数（`begin <= end <= total` 恒成立），并加 `tests/menu_page_slice.ps1` 守卫 |
 | 「“金件”列表里鼠标很难点中金件，或者说压根点不中；把金件的 json 自动导出取消，在界面提示，完成修改后需要手动点击导出才会保存；“添加某个 esp 的全部装备」后右侧单件菜单显示「<当前加载顺序里没有>」（m10387） | 三处各有其因：①组行 `IG::Selectable(label, isSelected)` 用默认 `(0, 0)` 尺寸（命中矩形只有一行文字高），且左栏宽度可能超过剩余宽度、把右栏挤成负宽压在左栏上吞点击；②1.5.39 起每次编辑都当场 `Golden::SaveToDisk()`，没有「改完再存」的余地；③金件 id 存的是 `formId & 0x00FFFFFF`，对 light(ESL) 插件这 24 位里高 12 位是光索引（日志那批 `002E280C` / `002E1D66` / `002E0823` 的 0x2E0/0x2E1/0x2E2 正是光索引），而 `TESDataHandler::GetFormID` 对 light 插件不掩码 ⇒ `LookupForm` 二次叠加 ⇒ 61 条全 missing。见 §4.67 | 1.5.43 加 `GoldenRow()`（宽 `max(可用宽, 文本宽+32)`、高 `行高+8`）与双栏宽度夹紧；四处自动保存改 `g_goldenDirty = true`、只有「导出」写盘并常显未保存提示；`PluginScan` 新增 `IsLightPlugin()` / `LocalIdFor()`（light 掩 `0xFFF`）/ `ResolveForm()`（掩码 id 优先、24 位兜底），金件四处与菜单单件行全部改走它，旧档在加载时自动归一化 |
+| 「“金件”列表依旧点不中，“添加某个esp的全部装备”后可以自动焦点中」（m10689，1.5.43 实机） | 1.5.43 给行加了显式宽高却没修 id：`RenderGolden()` 每帧 `const auto groups = Golden::Groups();`（返回值，每帧新建字符串），组行却 `IG::PushID(group.plugin.c_str())` —— `const char*` 命中 `PushID(const void*)` 重载，指针每帧不同 ⇒ 按下帧与松开帧的控件 id 不一致 ⇒ ImGui 丢弃点击。同一页插件选择器用 `PushID(it->order)` 所以能点；「添加全部装备」是代码直接赋 `g_goldenSelected` 所以能选中。见 §4.68 | 1.5.44 组行改用行号做 id（`IG::PushID(static_cast<int>(rowIndex))` + `++rowIndex`），选中日志从 debug 升为 info 并带位置 `Menu: golden group <名字> selected (<第几行> of <总数>).`；其余 UI 布局、写盘策略、light id 宽度不动 |
 ## 4. 本版变更
 
 ### 4.1 移除感知层（Perception）
@@ -1718,7 +1733,8 @@ if (!OnGameThread()) {
 
 | 日志 | 含义 |
 | --- | --- |
-| `Menu: golden group <名字> selected.`（debug，1.5.43） | 左栏组行被选中。点不动时先看有没有这行 —— 没有就是命中矩形问题（把这行与分辨率一起发回）。 |
+| `Menu: golden group <名字> selected (<N> of <M>).`（info，1.5.44） | **1.5.44 起这条是 info**：金件左栏组行被选中，括号里是行位置。**点不动时先看这条** —— 完全没有 = 点击仍被吃掉（把菜单窗口大小与分辨率发回）；有但右侧不换 = 选中态没生效（把前后 20 行发回）。1.5.43 这条是 debug，默认级别看不到，所以上一轮无法区分「没点到」与「点到了没生效」。 |
+| 组行「点得中但下一帧又弹回未选中」 | 控件 id 在帧间变了：任何 `IG::PushID(<字符串指针>)` 都会这样（`const char*` 会命中 `PushID(const void*)`）。本项目的列表一律用 `PushID(static_cast<int>(行号或 FormID))`；新增列表照此办理。 |
 | `[not saved] The changes live in memory only; press Export to write OutfitSystemGoldenItems.json.` | 有未保存改动（1.5.43 起不再自动写盘）。点「导出到 OutfitSystemGoldenItems.json」后变成下面那条。 |
 | `Changes reach the file only when you press Export.` | 没有未保存改动（刚导入 / 刚导出 / 首次进页面）。 |
 | `Golden items: N entr(ies) resolved, 0 missing.` | **1.5.43 期望值**：全部解析成功。若仍有 `was not found in this load order`，把插件名与 id 发回。 |
@@ -1735,13 +1751,65 @@ if (!OnGameThread()) {
 
 - 本机没有 Skyrim：三处都是读源码 + 读日志得出的结论。点不中一处的根因判断（`(0,0)` 命中矩形 + 负宽覆盖）依据是 ImGui 语义与 `MenuUI.cpp:737-738` 那处「显式给宽高才点得中」的既有对照，不是实机复现。
 - 实机请按 §6 第 60 条走：①点左栏组能不能选中（看 debug 行）；②改一件不点导出、重启后确认**没**保存（这正是本版要的行为）；③light 插件（例：`[SSE]Mini Bunny.esp`）的金件右侧应显示真实名字与 `[slot 30/32/…]`，日志 `0 missing`。
+## 4.68 1.5.44：金件列表依旧点不中——控件 id 跨帧不稳定（m10689）
+
+### 症状
+
+1.5.43 实机反馈：**「金件」栏左侧列表依旧点不中**；而点「添加某个 ESP 的全部装备」之后，那个组会**自动**被选中（右侧编辑区随之出现）。
+
+### 真因：控件 id 每帧都不一样
+
+`src/cpp/MenuUI.cpp` 的 `RenderGolden()`：
+
+```cpp
+const auto groups = Golden::Groups();          // std::vector<Group> Groups(); —— 返回值，每帧一份新副本
+for (const auto& group : groups) {
+    IG::PushID(group.plugin.c_str());          // 指针进 id 栈：const char* -> PushID(const void*)
+    ...
+    if (GoldenRow(label, isSelected)) { g_goldenSelected = group.plugin; ... }
+```
+
+ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上（`ActiveId` 与当前控件 id 比对）。这里 id 的一部分是一个**指针**，而它指向的字符串属于当帧新建的 `std::vector<Group>` 副本 —— 副本在帧末销毁、下帧重新分配，指针几乎必然会变。于是「按下」把 `ActiveId` 设成了旧 id，「松开」时提交的是新 id：`ButtonBehavior` 找不到匹配、`ActiveId` 被清掉而没有产生点击 ⇒ **怎么点都没反应**。
+
+旁证（同一份代码里的对照组）：
+
+- 同一页面的插件选择器行用的是 `IG::PushID(static_cast<int>(it->order));`（整数、跨帧不变）⇒ 那一栏能点，而且用户正是靠那一栏完成了「添加某个 ESP 的全部装备」。
+- 「添加某个 ESP 的全部装备」走的是**代码赋值**（`g_goldenSelected = it->name;`），不经过点击判定 ⇒ 组被选中，看起来像「自动焦点中」。
+- 项目里其它所有列表（幻化套装、单件行、逐槽策略）用的都是 `PushID(static_cast<int>(…))`，所以只有金件组栏坏。
+
+### 修法
+
+1. 组行的 id 换成行号：`std::size_t rowIndex = 0;` → `IG::PushID(static_cast<int>(rowIndex));` → 循环尾 `++rowIndex;`（`Golden::Groups()` 按插件名排序，行号跨帧稳定；行 label 自带插件名，重复 id 的风险为零）。
+2. 选中日志从 `debug` 升到 `info` 并带位置：`Menu: golden group <名字> selected (<第几行> of <总数>).` —— 默认日志级别就能证明「点击到底有没有进到代码里」，下一轮不必再开 Verbose。
+3. 1.5.43 的三条修复原样保留：`GoldenRow()` 显式宽高、两栏宽度夹紧、脏标记 + 只有「导出」写盘（含 `[not saved]` 提示）。
+
+### 新日志（判定用）
+
+| 日志 | 含义 |
+| --- | --- |
+| `Menu: golden group <plugin> selected (2 of 5).`（info） | 组行点击已到达代码。括号里是行位置；完全没有这一行 = 点击仍被吃掉（把分辨率与窗口大小发回）。 |
+| `[not saved] The changes live in memory only; press Export to write OutfitSystemGoldenItems.json.` | 有未保存改动（1.5.43 起不再自动写盘）。 |
+
+### 兼容性
+
+- 只改 `src/cpp/MenuUI.cpp` 一个函数体（`RenderGolden()` 的组行循环），外加 `version.h` / `CMakeLists.txt` 的版本号。引擎侧一行未改。
+- 金件 JSON 结构与写盘时机不变；1.5.43 归一化过的 light id 继续有效。
+- 逐槽策略、从 ESP 生成套装、幻化 / 场景套装 / `.tri` 跟随全部不受影响。
+
+### 未验证
+
+本机没有游戏。判断依据是 ImGui 的点击语义（`ActiveId` 必须与松开时的控件 id 一致）加上「指针 vs 整数 id」的对照事实，不是实机复现。若装 1.5.44 后组行仍点不动，看日志里有没有那行 `Menu: golden group … selected (N of M).`：
+
+- **没有** ⇒ 点击仍未进入代码：可能是列表被别的窗口盖住（把菜单窗口大小、分辨率、是否开了界面缩放发回），或该栏所在的 child 高度为 0。
+- **有但右侧不换** ⇒ 选中态没生效：把该行前后 20 行发回。
+
 ## 5. 静态验证
 
 
 | 项 | 结果 |
 | --- | --- |
-| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.43 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_43.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
-| 版本资源 | `FileVersion = 1.5.43.0` / `ProductVersion = 1.5.43.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
+| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.44 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_44.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
+| 版本资源 | `FileVersion = 1.5.44.0` / `ProductVersion = 1.5.44.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
 | 导入表 | 仅 KERNEL32 / USER32 / ole32 / VERSION / SHELL32 |
 | 延迟导入 | 目录 RVA = 0、size = 0（无延迟导入项） |
 | 导出 | SKSEPlugin_Load / SKSEPlugin_Query / SKSEPlugin_Version 均存在 |
@@ -1758,11 +1826,12 @@ if (!OnGameThread()) {
 | 1.5.31 关键字符串 | `Model Rebuild for` / `Skipping model rebuild for` / `asking the game to rebuild the model of` / `so the illusion reaches the drawn 3D` / `could not be assigned for the` / `could not be restored after the` / `rebuildActorModel` 可检索；`FileVersion = 1.5.31.0`、`ProductVersion = 1.5.31.0`；DLL 1,941,504 字节，SHA256 `c8c8ae5db004c0017b029110b23dd707e1e519789c2acf81ba637a5ed63ad6b2`；模块文件名仍 `OutfitSystemNG.dll` |
 | 1.5.32 关键字符串（历史） | `no '{}' outfit for the {} scene` / `could not be assigned for the` / `could not be restored after the` / `SceneOutfits: ` / `1.5.32` 可检索；1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` **已全部从 DLL 中消失**；`FileVersion = 1.5.32.0`、`ProductVersion = 1.5.32.0`（PowerShell `VersionInfo` 实测）；DLL 1,937,920 字节，sha256 `da9ec8995c599f00cb249b611d66a13c2f3f030f845951b3d6b5eacdca05f875`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.33 关键字符串 | `setOutfitByName` / `SceneOutfits: ` / `scene started;` / `scene ended;` / `create an outfit with exactly that name` / `the scene switch is skipped` / `1.5.33` 可检索；1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 以及 1.5.32 队列相关的 `scene event dropped` **已全部从 DLL 中消失**；`FileVersion = 1.5.33.0`、`ProductVersion = 1.5.33.0`（PowerShell `VersionInfo` 实测）；DLL 1,934,848 字节，sha256 `8c23e5eec3ae0f4561125ab2cabb71e63ef7c21d01e6a8b85755687454716aaf`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist |
-| 1.5.34 关键字符串 | `handed to the game thread` / `came from thread` / `there is no task interface` / `scene started;` / `scene ended;` / `setOutfitByName` / `1.5.34` 可检索；1.5.33 的丢弃行 `arrived off the game thread` **已从 DLL 中消失**，1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 仍全部不存在；`FileVersion = 1.5.34.0`、`ProductVersion = 1.5.34.0`（PowerShell `VersionInfo` 实测）；DLL 1,937,408 字节，sha256 `e1cdb9518149d0e1f7a23d1835317620b8258c1e030d6d987b658e4718283782`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist || 1.5.40 关键字符串 | `count as clothing` / `does not use the placeholders` / `were ignored because their placeholders` / `已添加 %zu 件，来自 %s。` / `已导入 %zu 件，来源 %s` 可检索；旧错串 `已添加 %s 的 %zu 件` / `已从 %s 导入 %zu 件` 已 **0 命中**；`FileVersion = 1.5.40.0`、`ProductVersion = 1.5.40.0`（PowerShell `VersionInfo` 实测）；DLL 2,036,224 字节，sha256 `95c2b38848bf3d3f2a0577f2b611b8cbc06c7ad76f653674eb89fbcb5a5618bf`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
+| 1.5.34 关键字符串 | `handed to the game thread` / `came from thread` / `there is no task interface` / `scene started;` / `scene ended;` / `setOutfitByName` / `1.5.34` 可检索；1.5.33 的丢弃行 `arrived off the game thread` **已从 DLL 中消失**，1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 仍全部不存在；`FileVersion = 1.5.34.0`、`ProductVersion = 1.5.34.0`（PowerShell `VersionInfo` 实测）；DLL 1,937,408 字节，sha256 `e1cdb9518149d0e1f7a23d1835317620b8258c1e030d6d987b658e4718283782`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist |
 | 1.5.39 关键字符串 | `OutfitSystemGoldenItems.json` / `ESP outfits: ` / `wearable clothing` / `FX effects and other non clothing records were left out` / `skipped as not clothing` / `Golden items: ` / `PluginScan: ` / `1.5.39` 可检索；`FileVersion = 1.5.39.0`、`ProductVersion = 1.5.39.0`（PowerShell `VersionInfo` 实测）；DLL 2,030,592 字节，sha256 `c72a60a6f4a400bbb4cf06a9b2e1c81a86baca487fbf901119e264421aee83da`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增（只多用 `GetFormArray` / `GetLoadedLightMods` 等 SKSE+引擎既有接口）；1.5.34 的 `handed to the game thread` / `scene started;` 与 1.5.30/31 已删机件仍保持原状态 |
 | 1.5.41 关键字符串 | `the golden list stays empty for this session` / `an exception escaped` / `count as clothing` / `does not use the placeholders` / `resource deadlock would occur`（MSVC 运行库串） / `1.5.41` 可检索；`TotalCountLocked` 因 Release 内联不出现在字符串表（属正常）；`FileVersion = 1.5.41.0`、`ProductVersion = 1.5.41.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,037,760 字节，sha256 `39f6b65e…fd967ad0`；导入依赖未新增 |
 | 1.5.42 关键字符串 | `Outfits: deleted ` / `Menu: sections registered` 可检索；本版是算式修正，DLL 内不新增独特日志串，判据是「删除后不再崩」；`FileVersion = 1.5.42.0`、`ProductVersion = 1.5.42.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,037,760 字节，sha256 `b80e5a53…4f947a73`；导入依赖未新增 |
 | 1.5.43 关键字符串 | `Menu: golden group ` / `selected.` / `[not saved] The changes live in memory only` / `Changes reach the file only when you press Export.` / `No armour with that id was found` / `OutfitSystemGoldenItems.json` / `count as clothing` / `1.5.43` 可检索；1.5.40 的旧串 `No slot armour with that id was found` 已 **0 命中**；`LocalIdFor` / `IsLightPlugin` / `ResolveForm` 是内部符号，Release 内联后不出现在字符串表（属正常）；`FileVersion = 1.5.43.0`、`ProductVersion = 1.5.43.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,041,856 字节，sha256 `349a3e0f83c3871b67534f8ee02859e881d2855d9ef503165a8f2adce679ee99`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
+| 1.5.44 关键字符串 | `Menu: golden group ` / `selected ({} of {}).` / `[not saved] The changes live in memory only` / `Changes reach the file only when you press Export.` / `No armour with that id was found` / `count as clothing` / `1.5.44` 可检索；组行不再用指针当 id（源码层面 `PushID(group.plugin.c_str())` 已 0 处，`PushID` 是内部调用点、不出现在字符串表）；`FileVersion = 1.5.44.0`、`ProductVersion = 1.5.44.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,042,368 字节，sha256 `859d81d55db6de8b91224a96f998f03f32caf34dd96d8344f9d4134d0640914f`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.40 关键字符串 | `count as clothing` / `does not use the placeholders` / `were ignored because their placeholders` / `已添加 %zu 件，来自 %s` / `已导入 %zu 件，来源 %s` / `1.5.40` 可检索；1.5.39 的两条错序中文串（`已添加 %s 的 %zu 件。` / `已从 %s 导入 %zu 件`）**已从 DLL 中消失**；`FileVersion = 1.5.40.0`；DLL 大小 2,036,224 字节，sha256 `95c2b388…a5618bf` |
 | 1.5.29 关键字符串 | `detached ` / `illusion clone(s) whose slot left the display set` / `lost the illusion in slot mask` / `after 3 rebuilds` / `rebuilding the actor` / `left to the engine` 可检索；`ClearBipedPart` 与 `IllusionMissingSlots` 作为内部符号不出现在字符串表（前者只剩一处调用）；FileVersion 1.5.29.0、DLL 1,936,384 B / `4f0bcae1…`、导入依赖未新增 |
 | 1.5.27 关键字符串 | `uses .tri ` / `has no .tri beside it` / `Probed: ` / `the armour addon the engine attached` / `has no armour addon yet` / `leaving the clones to the next morph pass instead of cycling` / `but the illusion carries .tri targets` / `every illusion clone whose armour model ships a .tri` / `1.5.27` 均可检索；1.5.26 的 `.tri morph targets are attached to every illusion clone` 已从 DLL 中消失；`carries a .tri morph target on` / `stay armed` / `BODYTRI` / `MorphShapeCallback` 仍在；`FileVersion = 1.5.27.0`、`ProductVersion = 1.5.27.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,875,456 字节，sha256 `22eb7794…a91af178f`；导入依赖未新增 |
@@ -1856,6 +1925,10 @@ if (!OnGameThread()) {
 59. **1.5.42 删除幻化套装预设不再闪退（对应 m10183）**：①进菜单 → 幻化栏，把套装列表**翻到第 2 页（或更后面）**；②选中一套自己建的预设，点删除 —— **不应闪退**，页面应立即重画、条数少一条；③再去第 1 页删一次做对照。日志判定：删除后应有 `Outfits: deleted '<名字>': yes.`，且其后**继续出现正常的渲染/菜单行**（不再有崩溃日志）。若又崩，把崩溃日志里 `RenderOutfits` 那几帧与 `[RSP+188]` 的字符串发回。
 
 60. **1.5.43 金件页三处（对应 m10387）**：①进菜单 →「金件」栏，**用鼠标点左栏的插件组行** —— 应该一点就选中（右侧编辑区随之切换），开 Verbose 时能看到 `Menu: golden group <名字> selected.`；点不动就把该行与分辨率发回。②随便增删一件，**先不要点导出**：数据路径下面应显示 `[not saved] The changes live in memory only; press Export to write OutfitSystemGoldenItems.json.`；直接退出游戏再进，确认那件**没有**被保存（这正是本版要的行为）。③再点「导出到 OutfitSystemGoldenItems.json」，提示变回 `Changes reach the file only when you press Export.`，重启后改动应还在。④选一个 **light（ESL）插件**（例：`[SSE]Mini Bunny.esp`）点「Add every piece of a plugin」—— 右侧每行必须显示真实名字与 `[slot 30/32/…]`，不再是 `<当前加载顺序里没有>`；日志里应是 `Golden items: N entr(ies) resolved, 0 missing.`（旧档那 61 条会在加载时自动归一化，启动那次也应是 `0 missing`）。若仍 missing，把插件名、id 与那行日志发回。见 §4.67 与 TESTING §3.51。
+61. **1.5.44 金件组行终于点得中（对应 m10689）**：①进菜单 →「金件」栏，左栏随便点一个插件组行 —— 应当**一点就选中**，右侧编辑区立刻切到该组，日志出现 `Menu: golden group <名字> selected (N of M).`（info，无需 Verbose）；②连点不同的组来回切几次，每次都应变；③再验一遍 1.5.43 的两条（增删一件后**不点导出**应显示 `[not saved] …`，重启后那件不该被保存；light(ESL) 插件的金件应显示真名与 `[slot …]`，日志 `Golden items: N entr(ies) resolved, 0 missing.`）。若仍点不动，把那行日志的有无、菜单窗口大小与分辨率发回（§4.68 的未验证段已写明分流）。
+- **1.5.44 的金件组行修复未实机验证**：本机没有游戏。结论来自 ImGui 的点击语义（`ActiveId` 必须与松开时的控件 id 一致）+ 同一函数里「指针 id 坏、整数 id 好」的对照事实，不是实机复现。判据只有一行日志：`Menu: golden group <名字> selected (N of M).` —— 有则点击已通，无则仍未通（见 §4.68 未验证段）。
+- **金件组行的 id 取行号**：`Golden::Groups()` 按插件名排序，行号跨帧稳定；但如果将来给这一栏加排序切换或过滤，行号会随视图变化，届时同一行在滑动前后的 id 会不同（不影响点击，ImGui 每次按下-松开都在一个视图里，只是不要拿行号当「这组的身份」——身份仍用插件名）。
+
 ## 7. 已知限制
 - **1.5.43 的修复未实机验证**：本机没有游戏。三处判据都来自源码 + 用户日志：`(0,0)` 命中矩形与负宽覆盖是 ImGui 语义推断（对照 `MenuUI.cpp:737-738` 那处显式给宽高的写法），light 插件 id 宽度是从 `002E280C` / `002E1D66` / `002E0823` 高位连续递增的分布加 CL-NG `GetFormID` 不掩码的事实推出。点得中点不中、导出是否真的只有手动一次、light 插件金件是否恢复正常，都要实机确认。
 - **1.5.43 起金件改动不自动落盘**：这是用户要的行为，但意味着「忘了点导出」= 本次改动丢失（重启后回到上次导出的状态）。内存快照仍即时生效，所以当前会话里金件照常工作。
@@ -2056,6 +2129,7 @@ if (!OnGameThread()) {
 | `Changes reach the file only when you press Export.`（1.5.43） | 金件当前没有未保存改动（刚导入 / 刚导出 / 首次进页面）。 |
 | `Golden items: N entr(ies) resolved, 0 missing.`（info） | 金件库全部解析成功（1.5.43 的期望值）。若仍是 `0 resolved, M missing` 且插件是 light(ESL) 文件，说明 id 宽度还没归一化 —— 把这行与一条 `was not found in this load order` 发回。 |
 ## 9. 维护提示
+- **ImGui 控件 id 必须跨帧稳定**（m10689 / 1.5.44）：凡是列表行，`PushID` 只许压整数（行号、FormID、插件 index）。压字符串指针（`x.c_str()` / `x.data()`）会在数据每帧重建时变 id，点击被 ImGui 丢弃，症状是「怎么点都没反应」，而同一页用整数 id 的控件一切正常。要确认某个列表「到底是没点到还是点了没生效」，点击处一律打 **info** 级日志（`debug` 在默认级别看不到，等于没有证据）。
 - **「能不能收」的规则分两条路，不许合并**（m09426）：幻化用的套装生成只收正常服装 —— 走 `PluginScan::IsOutfitArmor()`（有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型），并且分桶时用 `mask & ~kFxBit`；金件是用户自愿指定的任何记录，`Golden::AddAllFromPlugin()` / `AddLocal()` **不调用** `IsOutfitArmor()`。以后新增任何「按 ESP 批量收件」的入口，先想清楚它属于哪条路，不要图省事复用同一个过滤函数。
 - 逐槽策略编辑器的展开状态是 **UI 状态、按套装名分开存**（`MenuOutfitEditor.cpp` 的 `g_slotPolicyOpen`），不是套装数据；它不进 JSON、不能影响别的套装，也不能拿它当「这套装了逐槽策略」的判据（判据是 `slotPolicies` 非空）。
 - 模块文件名（1.5.30 起 `OutfitSystemNG.dll`）**只影响** SKSE 的加载与消息路由顺序；插件身份不许跟着改：`SOS_PCH.h` 的 `Plugin::NAME`、日志文件名 `SkyrimOutfitSystemNG.log`、Papyrus 翻译前缀 `SkyrimOutfitSystemNG_<lang>.txt`、存档标识一律保持原值。改名时必须确认 `Data/SKSE/Plugins` 最终 VFS 里只有一份，绝不能双加载。
