@@ -21,7 +21,11 @@ function Assert-Present([string] $haystack, [string] $needle, [string] $label) {
 Assert-Present $esp 'PluginScan::IsOutfitArmor(armor)' 'clothing test on the outfit path'
 Assert-Absent $esp 'kFxBit' 'do not erase or filter the FX bit again when combining ordinary pieces'
 Assert-Present $esp 'armor->GetSlotMask().underlying() != item.mask' 'confirmation checks the full mask'
-Assert-Present $esp '(occupied & item.mask) != 0' 'all occupied slots take part in overlap checks'
+Assert-Present $esp '(occupied & body) != 0' 'the body slots of every piece take part in overlap checks'
+# 1.5.55: two pieces may both carry the FX bit; FX is not a body slot, so the
+# overlap check has to run on the body slots only. One piece per body slot is
+# enforced in the store as well (see tests/slot_uniqueness.ps1).
+Assert-Present $esp 'SOS::BodySlotsOf(item.mask)' 'overlap check ignores the FX bit'
 Assert-Present $esp 'not clothing' 'skipped-record report'
 Assert-Present $espHeader 'outfitArmors' 'clothing count in the plugin row'
 

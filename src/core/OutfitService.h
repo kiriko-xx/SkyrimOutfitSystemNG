@@ -57,6 +57,12 @@ namespace SOS
 		[[nodiscard]] Outfit* get_or_create_mut_outfit_ptr(const char* a_name);
 		bool add_outfit(const char* a_name);
 		bool delete_outfit(const char* a_name);
+
+		// Removes several presets in one go (bulk delete from the menu). Every
+		// actor assignment that pointed at one of them is cleared as well, and
+		// the revision is bumped once, so the menu rebuilds once. Returns how
+		// many presets were actually removed.
+		std::size_t delete_outfits(const std::vector<std::string>& a_names);
 		[[nodiscard]] bool has_outfit(const char* a_name) const;
 		void set_favorite(const char* a_name, bool a_favorite);
 		bool modify_outfit(const char* a_name, const std::vector<const RE::TESObjectARMO*>& a_add, const std::vector<const RE::TESObjectARMO*>& a_remove, bool a_createIfNeeded);

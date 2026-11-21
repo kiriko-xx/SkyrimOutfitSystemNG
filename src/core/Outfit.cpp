@@ -107,6 +107,23 @@ namespace SOS
 		_policiesDirty = false;
 	}
 
+	std::vector<const RE::TESObjectARMO*> Outfit::slot_conflicts(const RE::TESObjectARMO* a_armor) const
+	{
+		std::vector<const RE::TESObjectARMO*> conflicts;
+		if (!a_armor) {
+			return conflicts;
+		}
+		const auto mask = a_armor->GetSlotMask().underlying();
+		for (const auto* armor : _armors) {
+			// A piece never conflicts with itself, so re-adding one that is already
+			// in the outfit stays a no-op instead of looking like a slot clash.
+			if (armor && armor != a_armor && SlotsCollide(armor->GetSlotMask().underlying(), mask)) {
+				conflicts.push_back(armor);
+			}
+		}
+		return conflicts;
+	}
+
 	bool Outfit::conflicts_with(const RE::TESObjectARMO* a_armor) const
 	{
 		if (!a_armor) {
@@ -114,11 +131,56 @@ namespace SOS
 		}
 		const auto mask = a_armor->GetSlotMask().underlying();
 		for (const auto* armor : _armors) {
-			if ((armor->GetSlotMask().underlying() & mask) != 0) {
+			if (armor && SlotsCollide(armor->GetSlotMask().underlying(), mask)) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	bool Outfit::insert_armor_slot_checked(const RE::TESObjectARMO* a_armor, std::vector<const RE::TESObjectARMO*>* a_conflicts)
+	{
+		if (!a_armor) {
+			return false;
+		}
+		auto conflicts = slot_conflicts(a_armor);
+		if (!conflicts.empty()) {
+			if (a_conflicts) {
+				a_conflicts->insert(a_conflicts->end(), conflicts.begin(), conflicts.end());
+			}
+			return false;
+		}
+		insert_armor(a_armor);
+		return true;
+	}
+
+	std::vector<const RE::TESObjectARMO*> KeepSlotUnique(const std::vector<const RE::TESObjectARMO*>& a_armors,
+		std::vector<const RE::TESObjectARMO*>* a_dropped)
+	{
+		std::vector<std::uint32_t> masks;
+		masks.reserve(a_armors.size());
+		for (const auto* armor : a_armors) {
+			masks.push_back(armor ? armor->GetSlotMask().underlying() : 0u);
+		}
+		std::vector<std::size_t> kept;
+		std::vector<std::size_t> dropped;
+		KeepOnePiecePerSlot(masks, kept, dropped);
+		std::vector<const RE::TESObjectARMO*> result;
+		result.reserve(kept.size());
+		for (const auto index : kept) {
+			if (a_armors[index]) {
+				result.push_back(a_armors[index]);
+			}
+		}
+		if (a_dropped) {
+			for (const auto index : dropped) {
+				// A null entry was not a piece at all, so it is not worth reporting.
+				if (a_armors[index]) {
+					a_dropped->push_back(a_armors[index]);
+				}
+			}
+		}
+		return result;
 	}
 
 	std::vector<TESObjectARMOPtr> Outfit::compute_display_set_c(rust::Slice<const RE::TESObjectARMO*> a_equipped) const

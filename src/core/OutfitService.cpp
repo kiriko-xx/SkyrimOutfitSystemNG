@@ -30,6 +30,23 @@ namespace SOS
 			return false;
 		}
 
+		// One piece per body slot is enforced on every add path: a piece that
+		// would cover a slot that is already taken is dropped instead of quietly
+		// winning or losing against whatever was there first.
+		void LogDroppedPieces(const char* a_where, const char* a_outfit, const std::vector<const RE::TESObjectARMO*>& a_dropped)
+		{
+			for (const auto* armor : a_dropped) {
+				if (!armor) {
+					continue;
+				}
+				const char* name = armor->GetFullName();
+				const char* editor = armor->GetFormEditorID();
+				SKSE::log::warn("Slot rule: [{}] preset='{}' dropped {:08X} '{}' editor='{}' mask={:08X} - the slot is already covered by another piece",
+					a_where, a_outfit ? a_outfit : "", armor->GetFormID(), name ? name : "", editor ? editor : "",
+					armor->GetSlotMask().underlying());
+			}
+		}
+
 		RE::TESObjectARMO* ResolveArmor(const nlohmann::json& a_entry, const SKSE::SerializationInterface* a_intfc)
 		{
 			if (!a_entry.is_object()) {
@@ -159,10 +176,14 @@ namespace SOS
 		auto& outfit = it->second;
 		outfit.set_favorite(a_favorite);
 		outfit.erase_all_armors();
-		for (const auto* armor : a_armors) {
+		std::vector<const RE::TESObjectARMO*> dropped;
+		for (const auto* armor : KeepSlotUnique(a_armors, &dropped)) {
 			if (armor) {
 				outfit.insert_armor(armor);
 			}
+		}
+		if (!dropped.empty()) {
+			LogDroppedPieces("create_outfit_preset", a_name.c_str(), dropped);
 		}
 		// Start from "nothing is shown" and then apply what the preset actually
 		// carries, exactly like the legacy save import does. Without the reset a
@@ -204,6 +225,38 @@ namespace SOS
 		return true;
 	}
 
+	std::size_t OutfitService::delete_outfits(const std::vector<std::string>& a_names)
+	{
+		std::vector<std::string> removed;
+		removed.reserve(a_names.size());
+		for (const auto& name : a_names) {
+			if (name.empty()) {
+				continue;
+			}
+			const auto key = Canonical(name);
+			// Names in the list come from the menu and may be stale (renamed or
+			// deleted from another path meanwhile), so a miss is not an error.
+			if (_outfits.erase(key) != 0) {
+				removed.push_back(key);
+			}
+		}
+		if (removed.empty()) {
+			return 0;
+		}
+		++_revision;
+		for (auto& [formId, assignment] : _assignments) {
+			if (assignment.current && std::find(removed.begin(), removed.end(), *assignment.current) != removed.end()) {
+				assignment.current.reset();
+			}
+			for (auto& state : assignment.stateBased) {
+				if (state && std::find(removed.begin(), removed.end(), *state) != removed.end()) {
+					state.reset();
+				}
+			}
+		}
+		return removed.size();
+	}
+
 	bool OutfitService::has_outfit(const char* a_name) const
 	{
 		if (!a_name) {
@@ -234,8 +287,14 @@ namespace SOS
 		for (const auto* armor : a_remove) {
 			outfit->erase_armor(armor);
 		}
+		std::vector<const RE::TESObjectARMO*> refused;
 		for (const auto* armor : a_add) {
-			outfit->insert_armor(armor);
+			if (!outfit->insert_armor_slot_checked(armor) && armor) {
+				refused.push_back(armor);
+			}
+		}
+		if (!refused.empty()) {
+			LogDroppedPieces("modify_outfit", a_name, refused);
 		}
 		++_revision;
 		return true;
@@ -251,10 +310,14 @@ namespace SOS
 			return false;
 		}
 		outfit->erase_all_armors();
-		for (const auto* armor : a_armors) {
+		std::vector<const RE::TESObjectARMO*> dropped;
+		for (const auto* armor : KeepSlotUnique(a_armors, &dropped)) {
 			if (armor) {
 				outfit->insert_armor(armor);
 			}
+		}
+		if (!dropped.empty()) {
+			LogDroppedPieces("replace_outfit_armors", a_name, dropped);
 		}
 		++_revision;
 		return true;

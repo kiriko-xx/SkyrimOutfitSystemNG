@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/SlotRules.h"
 #include "core/Types.h"
 
 #include <array>
@@ -38,6 +39,17 @@ namespace SOS
 		void erase_all_armors();
 
 		[[nodiscard]] bool conflicts_with(const RE::TESObjectARMO* a_armor) const;
+
+		// Pieces already in the outfit that cover one of the body slots of
+		// \a a_armor. Empty means the piece can go in without a slot clash.
+		// FX (bit 31) is not a body slot, see core/SlotRules.h.
+		[[nodiscard]] std::vector<const RE::TESObjectARMO*> slot_conflicts(const RE::TESObjectARMO* a_armor) const;
+
+		// Adds the piece only when none of its body slots is taken yet, so an
+		// outfit never holds two pieces of the same slot. Returns whether the
+		// piece was added; the blocking pieces are appended to \a a_conflicts
+		// when it is not null, which lets the caller offer to replace them.
+		bool insert_armor_slot_checked(const RE::TESObjectARMO* a_armor, std::vector<const RE::TESObjectARMO*>* a_conflicts = nullptr);
 
 		// The heart of the illusion: decide what to actually draw on the actor.
 		[[nodiscard]] std::vector<TESObjectARMOPtr> compute_display_set_c(rust::Slice<const RE::TESObjectARMO*> a_equipped) const;
@@ -81,4 +93,11 @@ namespace SOS
 		std::array<std::optional<std::string>, kSlotCount> _slotPolicies{};
 		std::string _blanketPolicy{ "XXOO" };
 	};
+
+	// Applies the one-piece-per-slot rule to a whole list: the first piece of a
+	// slot wins and later pieces that only cover slots already taken are
+	// dropped. Dropped pieces are appended to \a a_dropped when it is not null.
+	// Used by every bulk add path (preset creation, paste, overwrite, import).
+	[[nodiscard]] std::vector<const RE::TESObjectARMO*> KeepSlotUnique(const std::vector<const RE::TESObjectARMO*>& a_armors,
+		std::vector<const RE::TESObjectARMO*>* a_dropped = nullptr);
 }// namespace SOS

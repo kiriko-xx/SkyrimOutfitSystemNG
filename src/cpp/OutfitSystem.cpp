@@ -636,7 +636,17 @@ namespace OutfitSystem {
             auto outfit_ptr = service->inner().get_mut_outfit_ptr(name.data());
             if (!outfit_ptr) throw std::out_of_range("");
             auto& outfit = *outfit_ptr;
-            outfit.insert_armor(armor);
+            std::vector<const RE::TESObjectARMO*> conflicts;
+            if (!outfit.insert_armor_slot_checked(armor, &conflicts)) {
+                // One piece per body slot, on every path. Papyrus callers used
+                // to be able to stack two pieces on one slot, which made the
+                // illusion show whichever piece the set iterated last.
+                registry->TraceStack("That armor uses a body slot that this outfit already covers; remove the other piece first.",
+                                     stackId, RE::BSScript::IVirtualMachine::Severity::kWarning);
+                SKSE::log::warn("AddArmorToOutfit: outfit='{}' refused {:08X} mask={:08X} - {} piece(s) already cover its slots",
+                    name.c_str(), armor->GetFormID(), armor->GetSlotMask().underlying(), conflicts.size());
+                return;
+            }
         } catch (std::out_of_range) {
             registry->TraceStack("The specified outfit does not exist.", stackId, RE::BSScript::IVirtualMachine::Severity::kWarning);
         }
@@ -857,6 +867,13 @@ namespace OutfitSystem {
                 if (armor) {
                     pieces.push_back(armor);
                 }
+            }
+            std::vector<const RE::TESObjectARMO*> dropped;
+            pieces = SOS::KeepSlotUnique(pieces, &dropped);
+            if (!dropped.empty()) {
+                registry->TraceStack("OverwriteOutfit: pieces that covered an already used body slot were dropped (one piece per slot).",
+                                     stackId, RE::BSScript::IVirtualMachine::Severity::kWarning);
+                SKSE::log::warn("OverwriteOutfit: outfit='{}' dropped {} piece(s) that shared a body slot", name.c_str(), dropped.size());
             }
             if (service->inner().replace_outfit_armors(name.data(), pieces, true)) {
                 // Overwriting the active outfit has to update the illusion and

@@ -365,6 +365,23 @@ namespace SOS::OutfitClipboard
 			}
 		}
 
+		// A pasted outfit may come from a file the user hand edited, so it can
+		// list two pieces of one slot. Keep the first piece of every slot and
+		// report the rest instead of letting the store pick a winner silently.
+		if (!armors.empty()) {
+			std::vector<const RE::TESObjectARMO*> dropped;
+			const auto                         unique = KeepSlotUnique(armors, &dropped);
+			if (!dropped.empty()) {
+				for (const auto* armor : dropped) {
+					if (armor) {
+						SKSE::log::warn("Slot rule: pasted preset dropped {:08X} mask={:08X} - the slot is already covered by another piece",
+							armor->GetFormID(), armor->GetSlotMask().underlying());
+					}
+				}
+				armors = unique;
+			}
+		}
+
 		const auto blanket = ReadPolicy(entry, { "slotPolicy", "slot_policy" }).value_or(std::string("XXXX"));
 
 		std::vector<std::pair<std::uint32_t, std::string>> slots;

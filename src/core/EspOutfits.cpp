@@ -4,6 +4,7 @@
 #include "core/EspOutfitNames.h"
 #include "core/OutfitService.h"
 #include "core/PluginScan.h"
+#include "core/SlotRules.h"
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
@@ -215,11 +216,14 @@ namespace SOS::EspOutfits
 			for (const auto index : outfit.pieces) {
 				const auto& item = a_preview.pieces.at(index);
 				const auto* armor = RE::TESForm::LookupByID<RE::TESObjectARMO>(item.formId);
+				// The body slots are what may not repeat; the FX bit some pieces carry
+				// is not a slot, exactly like the matcher that produced this preset.
+				const auto body = SOS::BodySlotsOf(item.mask);
 				if (!PluginScan::IsOutfitArmor(armor) || armor->GetSlotMask().underlying() != item.mask ||
-					(occupied & item.mask) != 0) {
+					(occupied & body) != 0) {
 					break;
 				}
-				occupied |= item.mask;
+				occupied |= body;
 				chosen.push_back(armor);
 			}
 			if (chosen.empty() || chosen.size() != outfit.pieces.size() ||

@@ -18,7 +18,9 @@
 #include "bindings.h"
 #include "core/Outfit.h"
 #include "core/OutfitService.h"
+#include "core/PluginScan.h"
 #include "core/Policy.h"
+#include "core/SlotRules.h"
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
@@ -149,6 +151,31 @@ namespace SOS::Menu::Editor
 			return a_text;
 		}
 
+		// Local form id of an armour, the six digit number the plugin list shows.
+		std::string HexLocalIdOf(std::uint32_t a_localId)
+		{
+			char text[16]{};
+			std::snprintf(text, sizeof(text), "%06X", a_localId & 0x00FFFFFFu);
+			return text;
+		}
+
+		// "32, 37" - the numbers Creation Kit and xEdit show, i.e. the zero based
+		// BOD2 index plus 30.
+		std::string SlotNumbersText(const RE::TESObjectARMO* a_armor)
+		{
+			const auto  mask = a_armor ? a_armor->GetSlotMask().underlying() : 0;
+			std::string text;
+			for (std::uint32_t bit = 0; bit < 32; ++bit) {
+				if ((mask & (1u << bit)) == 0) {
+					continue;
+				}
+				char number[8]{};
+				std::snprintf(number, sizeof(number), text.empty() ? "%u" : ", %u", bit + kDisplaySlotOffset);
+				text += number;
+			}
+			return text.empty() ? std::string("?") : text;
+		}
+
 		// ---- editor state ---------------------------------------------------
 		char                      g_search[96]{};
 		bool                      g_playableOnly{ true };
@@ -173,6 +200,16 @@ namespace SOS::Menu::Editor
 		const RE::TESObjectARMO*  g_pendingRemove{ nullptr };
 		std::uint32_t             g_pendingRemoveSlot{ 0 };
 		std::string               g_pendingRemoveOutfit;
+
+		// "From a plugin (ESP)": pick a plugin first, then click one of its
+		// pieces, the same way the golden items page picks a piece out of a
+		// plugin. The piece goes through AddArmor(), so the one-piece-per-slot
+		// rule applies exactly as it does for every other way of adding.
+		std::string               g_piecePlugin;
+		char                      g_piecePluginFilter[96]{};
+		char                      g_pieceFilter[96]{};
+		bool                      g_piecePickerOpen{ false };
+		bool                      g_pieceFreeOnly{ false };
 
 		// Scanning every armour record and building lower-case copies on every
 		// keystroke is the most expensive thing this panel does on a large load
@@ -478,6 +515,122 @@ namespace SOS::Menu::Editor
 					}
 				}
 				IG::EndChild();
+			}
+
+			// 1.5.55: pick a single piece out of a plugin instead of hunting for
+			// its form id. Same flow as the golden items page: choose the plugin,
+			// then click the piece. Pieces whose body slot is already taken by this
+			// outfit are marked, and AddArmor() asks before replacing anything.
+			if (IG::CollapsingHeader(I18n::T("From a plugin (ESP)", "从 ESP 添加单个部件"))) {
+				IG::TextDisabled(I18n::T("Choose a plugin, then click one of its pieces. One piece per body slot: a piece that collides with a slot this outfit already covers is marked and can only be added by replacing the other piece.",
+					"先选 ESP，再点其中一件。一个槽位只能放一件：与当前幻化已占槽位冲突的装备会被标出，加入时必须先替换占用该槽位的那件。"));
+				IG::SetNextItemWidth(220.0f);
+				IG::InputTextWithHint("##piecepluginsearch", I18n::T("Search plugins...", "搜索 ESP..."), g_piecePluginFilter, sizeof(g_piecePluginFilter));
+				IG::SameLine();
+				if (IG::Button(I18n::T("Choose a plugin...", "选择 ESP..."))) {
+					g_piecePickerOpen = !g_piecePickerOpen;
+				}
+				IG::SameLine();
+				IG::TextDisabled("%s", g_piecePlugin.empty() ? I18n::T("(no plugin chosen)", "（未选择 ESP）") : g_piecePlugin.c_str());
+
+				if (g_piecePickerOpen) {
+					const auto plugins = PluginScan::PluginsWithArmor();
+					const auto needle = LowerCopy(std::string(g_piecePluginFilter));
+					if (IG::BeginChild("##pieceplugins", ImVec2(0.0f, 140.0f), true)) {
+						std::size_t row = 0;
+						// Newest plugin first: the one just installed is the one the
+						// user is looking for.
+						for (auto it = plugins.rbegin(); it != plugins.rend(); ++it) {
+							if (!needle.empty() && LowerCopy(it->name).find(needle) == std::string::npos) {
+								continue;
+							}
+							IG::PushID(static_cast<int>(row++));
+							char label[400]{};
+							std::snprintf(label, sizeof(label), I18n::T("%s  (%zu pieces, %zu wearable)", "%s  （%zu 件，可幻化 %zu 件）"),
+								it->name.c_str(), it->armors, it->outfitArmors);
+							if (IG::Selectable(label, g_piecePlugin == it->name)) {
+								g_piecePlugin = it->name;
+								g_piecePickerOpen = false;
+								g_pieceFilter[0] = 0;
+							}
+							IG::PopID();
+						}
+					}
+					IG::EndChild();
+				}
+
+				if (!g_piecePlugin.empty()) {
+					const auto armors = PluginScan::ArmorsOf(g_piecePlugin);
+					// Slot masks this outfit already covers, read once per frame so the
+					// list can mark pieces that would collide instead of letting the
+					// click fail without an explanation.
+					std::vector<std::uint32_t> takenMasks;
+					{
+						auto service = outfit_service_get_singleton_ptr();
+						if (const auto* outfit = service->inner().get_outfit_ptr(a_outfit.c_str())) {
+							takenMasks.reserve(outfit->armors().size());
+							for (const auto* existing : outfit->armors()) {
+								if (existing) {
+									takenMasks.push_back(existing->GetSlotMask().underlying());
+								}
+							}
+						}
+					}
+					IG::SetNextItemWidth(240.0f);
+					IG::InputTextWithHint("##piecefilter", I18n::T("Search pieces...", "搜索装备..."), g_pieceFilter, sizeof(g_pieceFilter));
+					IG::SameLine();
+					IG::Checkbox(I18n::T("Only free slots", "只显示槽位空闲的"), &g_pieceFreeOnly);
+					IG::SameLine();
+					IG::TextDisabled(I18n::T("%zu slot armour record(s) in this plugin; click a piece to add it.", "该 ESP 共有 %zu 条槽位护甲记录；点一件即可加入。"), armors.size());
+					if (IG::BeginChild("##piecepieces", ImVec2(0.0f, 200.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
+						const auto        needle = LowerCopy(std::string(g_pieceFilter));
+						constexpr std::size_t kMaxPieceRows = 400;
+						std::size_t       shown = 0;
+						std::size_t       row = 0;
+						for (const auto* armor : armors) {
+							if (!armor) {
+								continue;
+							}
+							const char* full = armor->GetFullName();
+							const char* editor = armor->GetFormEditorID();
+							const char* name = (full && full[0] != 0) ? full : ((editor && editor[0] != 0) ? editor : "");
+							const auto  mask = armor->GetSlotMask().underlying();
+							bool        occupied = false;
+							for (const auto taken : takenMasks) {
+								if (SlotsCollide(taken, mask)) {
+									occupied = true;
+									break;
+								}
+							}
+							if (g_pieceFreeOnly && occupied) {
+								continue;
+							}
+							const auto idText = HexLocalIdOf(PluginScan::LocalIdFor(g_piecePlugin, armor->GetFormID()));
+							if (!needle.empty() && LowerCopy(std::string(name)).find(needle) == std::string::npos && LowerCopy(idText).find(needle) == std::string::npos) {
+								continue;
+							}
+							if (shown >= kMaxPieceRows) {
+								IG::TextDisabled(I18n::T("Showing the first %zu of %zu pieces - refine the search or tick 「only free slots」.", "只显示前 %zu 件（共 %zu 件）——请缩小搜索或勾选「只显示槽位空闲的」。"), shown, armors.size());
+								break;
+							}
+							++shown;
+							char label[640]{};
+							std::snprintf(label, sizeof(label), "%s%s  %s",
+								occupied ? I18n::T("[slot taken] ", "[槽位已占用] ") : "", name, idText.c_str());
+							IG::PushID(static_cast<int>(row++));
+							if (IG::Selectable(label)) {
+								AddArmor(a_outfit, armor);
+							}
+							IG::SameLine();
+							IG::TextDisabled(I18n::T("[slot %s]", "[槽位 %s]"), SlotNumbersText(armor).c_str());
+							IG::PopID();
+						}
+						if (shown == 0) {
+							IG::TextDisabled(I18n::T("No piece of this plugin matches that search.", "该 ESP 里没有匹配的装备。"));
+						}
+					}
+					IG::EndChild();
+				}
 			}
 		}
 

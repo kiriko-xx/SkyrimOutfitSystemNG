@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -59,6 +60,13 @@ namespace SOS::Menu
 		char                      g_newName[257]{};
 		char                      g_renameName[257]{};
 		std::string               g_pendingDelete;
+		// 1.5.55: bulk delete. Ticking the box turns every row into a checkbox and
+		// the count of ticked presets is shown above the list, so the user sees how
+		// many presets a confirm is about to remove before pressing it.
+		bool                      g_bulkMode{ false };
+		std::set<std::string>     g_bulkSelected;
+		bool                      g_bulkConfirm{ false };
+		std::string               g_bulkStatus;
 		// Result line of the last OutfitSystemData.json import / export.
 		std::string               g_dataStatus;
 		// Which actor the browser and the editor act on; 0 means the player.
@@ -443,6 +451,22 @@ namespace SOS::Menu
 					continue;
 				}
 				g_filtered.push_back(name);
+			}
+
+			// Renames and deletes elsewhere invalidate ticked rows. The list is the
+			// only place a tick can come from, so pruning here (once per rebuild,
+			// not once per frame) is enough and keeps the count honest.
+			if (!g_bulkSelected.empty()) {
+				for (auto it = g_bulkSelected.begin(); it != g_bulkSelected.end();) {
+					if (!inner.has_outfit(it->c_str())) {
+						it = g_bulkSelected.erase(it);
+					} else {
+						++it;
+					}
+				}
+				if (g_bulkSelected.empty()) {
+					g_bulkConfirm = false;
+				}
 			}
 
 			const auto pageSize = static_cast<std::size_t>(OutfitPageSize());
@@ -906,6 +930,14 @@ namespace SOS::Menu
 			if (IG::Checkbox("Favourites only", &g_searchFavoritesOnly)) {
 				g_page = 1;
 			}
+			IG::SameLine();
+			if (IG::Checkbox(I18n::T("Bulk delete", "批量删除"), &g_bulkMode)) {
+				g_bulkConfirm = false;
+				if (!g_bulkMode) {
+					g_bulkSelected.clear();
+					g_bulkStatus.clear();
+				}
+			}
 
 			RefreshList();
 
@@ -992,9 +1024,81 @@ namespace SOS::Menu
 			// vector::assign throws std::length_error("vector too long"), which
 			// escaped the menu render callback and closed the game (m10183, crash
 			// 2026-11-21-05-13-54, KERNELBASE raise from inside RenderOutfits).
-			const std::size_t total = g_filtered.size();
-			const std::size_t begin = std::min(total, static_cast<std::size_t>(std::max(0, (g_page - 1) * pageSize)));
-			const std::size_t end = std::min(total, begin + static_cast<std::size_t>(pageSize));
+			// Not const: the bulk delete below empties the list inside this frame and
+			// has to collapse the range, exactly like the single delete above.
+			std::size_t total = g_filtered.size();
+			std::size_t begin = std::min(total, static_cast<std::size_t>(std::max(0, (g_page - 1) * pageSize)));
+			std::size_t end = std::min(total, begin + static_cast<std::size_t>(pageSize));
+
+			// 1.5.55: bulk delete. The tick count is drawn from g_bulkSelected, so it
+			// is always the number of presets the confirm button will remove.
+			if (g_bulkMode) {
+				IG::Text(I18n::T("%zu preset(s) ticked", "已勾选 %zu 套幻化"), g_bulkSelected.size());
+				IG::SameLine();
+				if (IG::SmallButton(I18n::T("Tick this page", "本页全选"))) {
+					for (std::size_t i = begin; i < end; ++i) {
+						g_bulkSelected.insert(g_filtered[i]);
+					}
+					g_bulkConfirm = false;
+				}
+				IG::SameLine();
+				if (IG::SmallButton(I18n::T("Untick this page", "本页取消"))) {
+					for (std::size_t i = begin; i < end; ++i) {
+						g_bulkSelected.erase(g_filtered[i]);
+					}
+					g_bulkConfirm = false;
+				}
+				IG::SameLine();
+				if (IG::SmallButton(I18n::T("Tick every match", "全部筛选结果"))) {
+					g_bulkSelected.insert(g_filtered.begin(), g_filtered.end());
+					g_bulkConfirm = false;
+				}
+				IG::SameLine();
+				if (IG::SmallButton(I18n::T("Untick all", "清空勾选"))) {
+					g_bulkSelected.clear();
+					g_bulkConfirm = false;
+				}
+				IG::SameLine();
+				if (g_bulkSelected.empty()) {
+					IG::TextDisabled(I18n::T("Tick presets in the list, then confirm the delete.", "先在下方列表勾选幻化，再确认删除。"));
+				} else if (IG::Button(I18n::T("Delete the ticked presets", "删除勾选的幻化"))) {
+					g_bulkConfirm = true;
+				}
+				if (g_bulkConfirm && !g_bulkSelected.empty()) {
+					IG::TextWrapped(I18n::T("Delete %zu preset(s)? This also removes them from every actor and state assignment.",
+										"删除勾选的 %zu 套幻化？这也会把它们从所有角色与状态指派中移除。"),
+						g_bulkSelected.size());
+					if (IG::Button(I18n::T("Yes, delete them", "确认删除"))) {
+						std::vector<std::string> names(g_bulkSelected.begin(), g_bulkSelected.end());
+						const auto removed = outfit_service_get_mut_singleton_ptr()->inner().delete_outfits(names);
+						SKSE::log::info("Outfits: bulk delete removed {} of {} ticked preset(s).", removed, names.size());
+						char text[160]{};
+						std::snprintf(text, sizeof(text), I18n::T("Deleted %zu preset(s).", "已删除 %zu 套幻化。"), removed);
+						g_bulkStatus = text;
+						if (g_bulkSelected.count(g_selected) != 0) {
+							g_selected.clear();
+						}
+						g_bulkSelected.clear();
+						g_bulkConfirm = false;
+						g_pendingDelete.clear();
+						g_filterSignature.clear();
+						g_quickSignature.clear();
+						g_filtered.clear();
+						total = 0;
+						begin = 0;
+						end = 0;
+						CreateRefreshAllArmorsTask();
+					}
+					IG::SameLine();
+					if (IG::Button(I18n::T("Cancel", "取消"))) {
+						g_bulkConfirm = false;
+					}
+				}
+				if (!g_bulkStatus.empty()) {
+					IG::TextUnformatted(g_bulkStatus.c_str());
+				}
+				IG::Separator();
+			}
 
 			auto* target = TargetActor();
 			std::string wornName;
@@ -1048,6 +1152,19 @@ namespace SOS::Menu
 					const float     textWidth = IG::CalcTextSize(label).x + 8.0f;
 					const float     buttonX = std::max(textWidth + 8.0f, std::max(listWidth - kButtonReserve, 0.0f));
 					const float     nameWidth = std::max(buttonX - 8.0f, textWidth);
+
+					if (g_bulkMode) {
+						bool ticked = g_bulkSelected.count(name) != 0;
+						if (IG::Checkbox("##bulk", &ticked)) {
+							if (ticked) {
+								g_bulkSelected.insert(name);
+							} else {
+								g_bulkSelected.erase(name);
+							}
+							g_bulkConfirm = false;
+						}
+						IG::SameLine();
+					}
 
 					if (IG::Selectable(label, isSelected, 0, ImVec2(nameWidth, 0.0f))) {
 						g_selected = name;
