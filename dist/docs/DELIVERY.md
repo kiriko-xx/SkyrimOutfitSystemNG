@@ -1,6 +1,20 @@
 # 交付说明（DELIVERY）
 
-## 1.5.44 最新交付准备（2026-11-21）
+## 1.5.45 最新交付准备（2026-11-21）
+
+**验证状态（1.5.45）**：**尚未实机验证**。用户 m10869 提两件事：①「金件」页的「按 FormID 添加单件」改成「按 ESP 添加单件」—— 先选该单件所属 ESP，再弹出该 ESP 里所有符合条件的装备，点一件就加入；左侧金件组被选中时，右侧的「添加单件」同样改成这个操作。②「幻化」页的「从 ESP 生成套装」要能兼容同一个 ESP 里有多套服装：按服装名字判断，同一套服装前面几个字段通常相同。本版只动这两处（`src/core/EspOutfits.cpp` 重写分组逻辑、`src/cpp/MenuUI.cpp` 金件页两处添加入口改成装备列表、`src/cpp/I18n.cpp` 补译文），引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装 / 钩子安装）一行未改。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 2,074,112 字节；`075e211e59f1b6ad87b949eb8747bdcfeff73a231cf900ecf089625f34d4928f`；`1.5.45.0`（build/Release 与 dist 逐字节一致） |
+| 安装包与复核记录 | SkyrimOutfitSystemNG-1.5.45.zip：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；测试包 SkyrimOutfitSystemNG-1.5.45-test.zip：2 条目（只含 DLL + 说明文本），可直接用 MO2 装；最终 zip 的大小/哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256` |
+
+- **金件「按 ESP 添加单件」（issue 1）**：原来的「按 FormID 添加单件」要求手输十六进制本地 id（`000800` / `Plugin.esp:000800`）—— 实际没法用，用户既不知道该 id 也无处可查。改成两级：点「Add one piece from a plugin... / 按 ESP 添加单件...」→ 页面内联出插件列表（按加载顺序倒序、带搜索框）→ 点一个 ESP 后，下方展开该 ESP 的**全部槽位护甲**列表（`PluginScan::ArmorsOf()`，自带搜索框、已加入的行标 `[已加入]`、行尾标 `[槽位 30/32/…]`），点任意一行即 `Golden::AddLocal()` 把它加进该 ESP 的组。左侧金件组被选中时，右侧编辑器底部不再有 FormID 输入框，而是同一个列表（只含该组所属 ESP 的装备）——两处共用 `RenderGoldenPieceList()`，用 `PushID(a_scopeId)` 把两组列表的 id 分开，行 id 用行号（1.5.44 的教训：不许拿字符串指针当 id）。
+- **生成套装按服装名分组（issue 2）**：`EspOutfits::GenerateFromPlugin()` 先把每件装备的名字切成词（`[]` / `()` 包住的标签词忽略，中文按字节判断不切词，最多比较前 4 个词），再取「至少两件共享的最长前缀」当作这套服装的组名；没有共享前缀的装备落进「其余」组并沿用 ESP 原名。组内仍按槽位冲突拆变体（`BuildVariants()`，上限 32），第 n 个变体用第 1 个变体的件补齐它没覆盖的槽位（沿用 1.5.39 的行为）。**一个 ESP 只有一套服装时，套装名与以前完全一致**（`<ESP名称>`、`<ESP名称>_1`…）；有多套时是 `<ESP名称> <服装名>`，同名再加 `_2`、`_3` 去重。总上限 96 套，超了置 `truncated`（消息尾缀写明）：每套仍统一 `set_blanket_slot_policy_c("XXXO")`（需要已装备才显示幻化）。
+- **服装过滤不变**：仍是 `PluginScan::IsOutfitArmor()`（有 EditorID 或全名 + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型，双性别都查）；金件路径不调用它（用户自愿指定的记录不受服装过滤约束）。
+- **金件写盘规则不变**：仍然只有「导出」按钮才 `Golden::SaveToDisk()`，添加/移除都只置 `g_goldenDirty` 并显示 `[not saved] …`。
+- **本版不动引擎侧**：注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装切换、钩子安装、金件存库锁一行未改（1.5.25 的基础幻化、1.5.34 的场景切换、1.5.42 的删除崩溃、1.5.44 的组行点击都不受影响）。
+## 1.5.44 交付准备（历史，已被 1.5.45 取代：其金件页仍要求手输 FormID、ESP 生成套装不认同一 ESP 里的多套服装）
 
 **验证状态（1.5.44）**：**尚未实机验证**。1.5.43 实机反馈（m10689）：「“金件”列表依旧点不中，“添加某个esp的全部装备”后可以自动焦点中。」—— 1.5.43 给行补了显式宽高，但组行的 ImGui **id 不稳定**：`Golden::Groups()` 每帧返回一份新的 `std::vector<Group>`，组行却推的是 `IG::PushID(group.plugin.c_str())`（指针当 id）⇒ 鼠标按下那一帧与松开那一帧 id 不同 ⇒ ImGui 把这次点击整个丢掉。旁证两条：同一页面的插件选择器推的是 `IG::PushID(it->order)`（稳定的整数）⇒ 那一栏能点；「添加某个 ESP 的全部装备」是代码直接给 `g_goldenSelected` 赋值 ⇒ 侧栏照样显示选中。本版只改 id 与日志级别，UI 布局、写盘策略、light id 宽度、引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装 / 钩子安装）一行未改。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log`，留档 `build/build_1_5_44.log`）；新增守卫 `tests/golden_row_id.ps1` 通过。
 
@@ -294,6 +308,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | 「1.5.41启动游戏时的ctd修复了，又出现新的ctd：在删除幻化套装预设时出现了ctd」（m10183） | 删除按钮先清空过滤列表再用删除前的页码算本页区间，`end - begin` 以 `size_t` 下溢 ⇒ `std::vector::assign` 抛 `std::length_error("vector too long")`，异常从菜单渲染回调逃出直接终止游戏；第 1 页删除不触发，只在第 2 页及以后崩。见 §4.66 | 1.5.42 取 `total` 后把 `begin` / `end` 都夹进总数（`begin <= end <= total` 恒成立），并加 `tests/menu_page_slice.ps1` 守卫 |
 | 「“金件”列表里鼠标很难点中金件，或者说压根点不中；把金件的 json 自动导出取消，在界面提示，完成修改后需要手动点击导出才会保存；“添加某个 esp 的全部装备」后右侧单件菜单显示「<当前加载顺序里没有>」（m10387） | 三处各有其因：①组行 `IG::Selectable(label, isSelected)` 用默认 `(0, 0)` 尺寸（命中矩形只有一行文字高），且左栏宽度可能超过剩余宽度、把右栏挤成负宽压在左栏上吞点击；②1.5.39 起每次编辑都当场 `Golden::SaveToDisk()`，没有「改完再存」的余地；③金件 id 存的是 `formId & 0x00FFFFFF`，对 light(ESL) 插件这 24 位里高 12 位是光索引（日志那批 `002E280C` / `002E1D66` / `002E0823` 的 0x2E0/0x2E1/0x2E2 正是光索引），而 `TESDataHandler::GetFormID` 对 light 插件不掩码 ⇒ `LookupForm` 二次叠加 ⇒ 61 条全 missing。见 §4.67 | 1.5.43 加 `GoldenRow()`（宽 `max(可用宽, 文本宽+32)`、高 `行高+8`）与双栏宽度夹紧；四处自动保存改 `g_goldenDirty = true`、只有「导出」写盘并常显未保存提示；`PluginScan` 新增 `IsLightPlugin()` / `LocalIdFor()`（light 掩 `0xFFF`）/ `ResolveForm()`（掩码 id 优先、24 位兜底），金件四处与菜单单件行全部改走它，旧档在加载时自动归一化 |
 | 「“金件”列表依旧点不中，“添加某个esp的全部装备”后可以自动焦点中」（m10689，1.5.43 实机） | 1.5.43 给行加了显式宽高却没修 id：`RenderGolden()` 每帧 `const auto groups = Golden::Groups();`（返回值，每帧新建字符串），组行却 `IG::PushID(group.plugin.c_str())` —— `const char*` 命中 `PushID(const void*)` 重载，指针每帧不同 ⇒ 按下帧与松开帧的控件 id 不一致 ⇒ ImGui 丢弃点击。同一页插件选择器用 `PushID(it->order)` 所以能点；「添加全部装备」是代码直接赋 `g_goldenSelected` 所以能选中。见 §4.68 | 1.5.44 组行改用行号做 id（`IG::PushID(static_cast<int>(rowIndex))` + `++rowIndex`），选中日志从 debug 升为 info 并带位置 `Menu: golden group <名字> selected (<第几行> of <总数>).`；其余 UI 布局、写盘策略、light id 宽度不动 |
+| 「“金件”按FormID添加单件改成按ESP添加单件，选 ESP 后弹出该 ESP 的全部符合条件的装备、点一件即加入；左侧金件组选中时右侧同样」+「幻化从 ESP 自动生成套装要兼容一个 ESP 里的多套服装，按服装名称判断（同一套服装前面几个字段相同）」（m10869） | 见 §4.69：金件页把 FormID 输入框换成两级列表（选 ESP → 点该 ESP 的装备，带搜索与 `[已加入]` 标记）；生成套装按名字「至少两件共享的最长前缀（≤4 词）」分服装组，组内按槽位冲突拆变体并沿用首变体补齐，单服装 ESP 的套装名不变。 |
 ## 4. 本版变更
 
 ### 4.1 移除感知层（Perception）
@@ -1803,13 +1818,56 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 - **没有** ⇒ 点击仍未进入代码：可能是列表被别的窗口盖住（把菜单窗口大小、分辨率、是否开了界面缩放发回），或该栏所在的 child 高度为 0。
 - **有但右侧不换** ⇒ 选中态没生效：把该行前后 20 行发回。
 
+## 4.69 1.5.45：金件「按 ESP 添加单件」+ 从 ESP 生成套装按服装名分组（m10869）
+
+### 4.69.1 用户诉求
+
+「“金件””按FormID添加单件“改成”按ESP添加单件“，点击后选择该单件所属ESP时，再弹出该esp内所有符合条件的金件装备菜单，点击即可添加单件。同理在点击左侧金件列表中金件esp预设时，右侧的添加单件也改成类似操作。 “幻化”中的从ESP自动生成套装的规则还需优化，兼容同一个esp中包含多种服装的情况，可以通过服装名称来判断，一般同一套服装前面的几个字段都是相同的。」
+
+### 4.69.2 金件页：手输 FormID 换成「选 ESP → 点装备」两级列表
+
+1.5.39–1.5.44 的「Add one piece by id...」是 `ParseLocalId()` + `InputTextWithHint("##goldenlocalid", "000800", …)`：用户必须自己知道 `000800` 这一串本地 FormID，还要知道它属于哪个插件 —— 实际不可用（1.5.43 的日志里那 61 条 `was not found in this load order` 就是这条路径的产物）。本版整段删除，换成两处共用的列表：
+
+- **入口一（页面级）**：`Add one piece from a plugin... / 按 ESP 添加单件...` → 内联插件列表（`PluginScan::PluginsWithArmor()` 倒序 + 搜索框）→ 点一个 ESP 后，下方展开 `RenderGoldenPieceList(g_goldenPiecePlugin, AddedIdsOf(groups, g_goldenPiecePlugin), 1, 220.0f, …)`：该 ESP 的全部槽位护甲（`PluginScan::ArmorsOf()`），每行 `<名称>  <FormID>`，已在该组的行标 `[已加入]`，行尾标 `[槽位 30/32/…]`，点一下 `Golden::AddLocal()` 就加进去（只置脏，不写盘）。
+- **入口二（组内）**：选中左侧金件组后，右侧编辑器底部的 FormID 输入框换成同一个列表（`RenderGoldenPieceList(selected->plugin, selected->localIds, 2, 200.0f, …)`），只列该组所属 ESP 的装备 —— 组是哪个 ESP 就是哪个 ESP，不会再出现「把 A 插件的件塞进 B 组」。
+- 两个列表用 `IG::PushID(a_scopeId)`（1 与 2）把 id 栈分开，行 id 用行号 —— 1.5.44 的教训：不许拿字符串指针当 ImGui id。
+
+### 4.69.3 生成套装：按名字前缀分服装组
+
+1.5.39–1.5.44 的 `GenerateFromPlugin()` 把一个 ESP 的全部槽位护甲当成**一套**服装，只按槽位冲突拆变体 ⇒ 一个包里放了三套衣服时，会拆出「上衣 A + 鞋 B + 假发 C」这类混搭套装。本版改成按名字分组：
+
+1. **切词**：`SplitWords()` 按「字母数字或非 ASCII 字节」切词（中文按字节，不会被切成碎片），`NameWords()` 丢掉被 `[]` / `()` 包住的标签词（`[Caenarvon]`、`(Female)` 这类）。
+2. **取组名**：统计每件装备前 1..4 个词（小写、用 `0x01` 连接成 key）在**本 ESP 内**出现的次数，每件取「出现次数 ≥ 2 的最长前缀」；一件都没共享前缀的装备落进「其余」组（key 空），组名用 ESP 原名。
+3. **组内拆变体**：仍用 `BuildVariants()` —— 一件件往第一个不冲突的变体里塞，塞不进就新开一个（上限 32），随后第 1..n 个变体用第 1 个变体的件补齐自己没覆盖的槽位。所以「一套衣服的上衣/下装/鞋/假发」会进同一个变体，两件同槽位的上衣会分成 `<名称>` 与 `<名称>_1`。
+4. **命名**：只有一个服装组时**保持老命名**（`<ESP名称>`、`<ESP名称>_1`…），有多组时 `<ESP名称> <服装名>`（服装名用原始拼写，不是小写 key），再撞名就 `_2`、`_3`。总上限 96 套，超了置 `truncated`。
+5. **策略不变**：每套 `set_blanket_slot_policy_c("XXXO")`（需要已装备才显示幻化），生成后可自动收藏（`EspOutfitAutoFavorite`，默认开）。
+
+### 4.69.4 新日志
+
+| 日志 | 含义 |
+| --- | --- |
+| `ESP outfits: <消息> (<plugin>; N wearable of M slot record(s)).`（info） | `<消息>` 是新增的 `N outfit(s) from M piece(s) in K name group(s); C created, U updated…` —— **K 就是按名字分出来的服装组数**。一个 ESP 里有三套衣服时 K 应为 3。 |
+| `Menu: golden piece <plugin>:<id> <名称>`（info） | 在金件的装备列表里点了一件。完全没有这行 = 点击没到代码（看行高/栏宽）；有但列表没变 = 该件已在组里（行首有 `[已加入]`）。 |
+| `Golden items: N piece(s) of <plugin> added.`（info） | 「Add every piece of a plugin」的结果（不过滤）。 |
+| `[not saved] The changes live in memory only; press Export to write OutfitSystemGoldenItems.json.` | 有未保存改动 —— 1.5.43 起只有「导出」写盘，本版未变。 |
+
+### 4.69.5 兼容性与不动的地方
+
+- 存档 / 配置：金件 JSON 结构没变（`{"version":1,"groups":[{"plugin":…,"items":["000800",…]}]}`），旧档照读；套装是普通幻化预设，结构未变。
+- 生成规则对**单服装 ESP** 完全等于 1.5.39–1.5.44 的结果（名字、拆分、策略都一样），所以「以前生成过的套装」不会被改名覆盖成奇怪的名字（同名时原地覆盖）。
+- 引擎侧一行未改：注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装 / 钩子安装 / 金件存库锁。
+
+### 4.69.6 未验证
+
+本机没有游戏。分组口径（「最长共享前缀 ≥2 件」）是从用户那句「一般同一套服装前面的几个字段都是相同的」推出来的启发式，**没有在真实 ESP 上跑过** —— 可能出现两种偏差：①某个 ESP 里两套服装的前缀恰好相同（如都以 `Outfit` 开头）会被并成一组；②同一套衣服里有一件的名字前缀与众不同（如 `Shoes_...`）会掉进「其余」组。两者都只影响**命名与分组**，不影响「生成的套装能不能用」。判定方法见 §6 第 62 条的 `K name group(s)` 计数。
+
 ## 5. 静态验证
 
 
 | 项 | 结果 |
 | --- | --- |
-| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.44 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_44.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
-| 版本资源 | `FileVersion = 1.5.44.0` / `ProductVersion = 1.5.44.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
+| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.45 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_45.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
+| 版本资源 | `FileVersion = 1.5.45.0` / `ProductVersion = 1.5.45.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
 | 导入表 | 仅 KERNEL32 / USER32 / ole32 / VERSION / SHELL32 |
 | 延迟导入 | 目录 RVA = 0、size = 0（无延迟导入项） |
 | 导出 | SKSEPlugin_Load / SKSEPlugin_Query / SKSEPlugin_Version 均存在 |
@@ -1832,6 +1890,7 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 | 1.5.42 关键字符串 | `Outfits: deleted ` / `Menu: sections registered` 可检索；本版是算式修正，DLL 内不新增独特日志串，判据是「删除后不再崩」；`FileVersion = 1.5.42.0`、`ProductVersion = 1.5.42.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,037,760 字节，sha256 `b80e5a53…4f947a73`；导入依赖未新增 |
 | 1.5.43 关键字符串 | `Menu: golden group ` / `selected.` / `[not saved] The changes live in memory only` / `Changes reach the file only when you press Export.` / `No armour with that id was found` / `OutfitSystemGoldenItems.json` / `count as clothing` / `1.5.43` 可检索；1.5.40 的旧串 `No slot armour with that id was found` 已 **0 命中**；`LocalIdFor` / `IsLightPlugin` / `ResolveForm` 是内部符号，Release 内联后不出现在字符串表（属正常）；`FileVersion = 1.5.43.0`、`ProductVersion = 1.5.43.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,041,856 字节，sha256 `349a3e0f83c3871b67534f8ee02859e881d2855d9ef503165a8f2adce679ee99`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.44 关键字符串 | `Menu: golden group ` / `selected ({} of {}).` / `[not saved] The changes live in memory only` / `Changes reach the file only when you press Export.` / `No armour with that id was found` / `count as clothing` / `1.5.44` 可检索；组行不再用指针当 id（源码层面 `PushID(group.plugin.c_str())` 已 0 处，`PushID` 是内部调用点、不出现在字符串表）；`FileVersion = 1.5.44.0`、`ProductVersion = 1.5.44.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,042,368 字节，sha256 `859d81d55db6de8b91224a96f998f03f32caf34dd96d8344f9d4134d0640914f`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
+| 1.5.45 关键字符串 | `Add one piece from a plugin` / `Search pieces...` / `slot armour record(s) in this plugin; click a piece to add it.` / `No piece of this plugin matches that search.` / `Close the piece list` / `[in the list] %s  %s` / `Menu: golden piece ` / `name group(s)` / `1.5.45` 可检索；1.5.44 的 `Add one piece by id...` 与 `##goldenlocalid` 已 **0 命中**（手输 FormID 的路径已整体删除）；`RenderGoldenPieceList` / `BuildVariants` / `WordKey` 是内部符号，Release 内联后不出现在字符串表（属正常）；`FileVersion = 1.5.45.0`、`ProductVersion = 1.5.45.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,074,112 字节，sha256 `075e211e59f1b6ad87b949eb8747bdcfeff73a231cf900ecf089625f34d4928f`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.40 关键字符串 | `count as clothing` / `does not use the placeholders` / `were ignored because their placeholders` / `已添加 %zu 件，来自 %s` / `已导入 %zu 件，来源 %s` / `1.5.40` 可检索；1.5.39 的两条错序中文串（`已添加 %s 的 %zu 件。` / `已从 %s 导入 %zu 件`）**已从 DLL 中消失**；`FileVersion = 1.5.40.0`；DLL 大小 2,036,224 字节，sha256 `95c2b388…a5618bf` |
 | 1.5.29 关键字符串 | `detached ` / `illusion clone(s) whose slot left the display set` / `lost the illusion in slot mask` / `after 3 rebuilds` / `rebuilding the actor` / `left to the engine` 可检索；`ClearBipedPart` 与 `IllusionMissingSlots` 作为内部符号不出现在字符串表（前者只剩一处调用）；FileVersion 1.5.29.0、DLL 1,936,384 B / `4f0bcae1…`、导入依赖未新增 |
 | 1.5.27 关键字符串 | `uses .tri ` / `has no .tri beside it` / `Probed: ` / `the armour addon the engine attached` / `has no armour addon yet` / `leaving the clones to the next morph pass instead of cycling` / `but the illusion carries .tri targets` / `every illusion clone whose armour model ships a .tri` / `1.5.27` 均可检索；1.5.26 的 `.tri morph targets are attached to every illusion clone` 已从 DLL 中消失；`carries a .tri morph target on` / `stay armed` / `BODYTRI` / `MorphShapeCallback` 仍在；`FileVersion = 1.5.27.0`、`ProductVersion = 1.5.27.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,875,456 字节，sha256 `22eb7794…a91af178f`；导入依赖未新增 |
@@ -1926,10 +1985,16 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 
 60. **1.5.43 金件页三处（对应 m10387）**：①进菜单 →「金件」栏，**用鼠标点左栏的插件组行** —— 应该一点就选中（右侧编辑区随之切换），开 Verbose 时能看到 `Menu: golden group <名字> selected.`；点不动就把该行与分辨率发回。②随便增删一件，**先不要点导出**：数据路径下面应显示 `[not saved] The changes live in memory only; press Export to write OutfitSystemGoldenItems.json.`；直接退出游戏再进，确认那件**没有**被保存（这正是本版要的行为）。③再点「导出到 OutfitSystemGoldenItems.json」，提示变回 `Changes reach the file only when you press Export.`，重启后改动应还在。④选一个 **light（ESL）插件**（例：`[SSE]Mini Bunny.esp`）点「Add every piece of a plugin」—— 右侧每行必须显示真实名字与 `[slot 30/32/…]`，不再是 `<当前加载顺序里没有>`；日志里应是 `Golden items: N entr(ies) resolved, 0 missing.`（旧档那 61 条会在加载时自动归一化，启动那次也应是 `0 missing`）。若仍 missing，把插件名、id 与那行日志发回。见 §4.67 与 TESTING §3.51。
 61. **1.5.44 金件组行终于点得中（对应 m10689）**：①进菜单 →「金件」栏，左栏随便点一个插件组行 —— 应当**一点就选中**，右侧编辑区立刻切到该组，日志出现 `Menu: golden group <名字> selected (N of M).`（info，无需 Verbose）；②连点不同的组来回切几次，每次都应变；③再验一遍 1.5.43 的两条（增删一件后**不点导出**应显示 `[not saved] …`，重启后那件不该被保存；light(ESL) 插件的金件应显示真名与 `[slot …]`，日志 `Golden items: N entr(ies) resolved, 0 missing.`）。若仍点不动，把那行日志的有无、菜单窗口大小与分辨率发回（§4.68 的未验证段已写明分流）。
+
+62. **1.5.45 金件「按 ESP 添加单件」+ 套装按服装名分组（对应 m10869）**：①进菜单 →「金件」栏，点 `Add one piece from a plugin... / 按 ESP 添加单件...` → 出现插件列表（倒序、有搜索框）→ 点一个 ESP → 下方展开该 ESP 的全部槽位护甲，每行有名称、FormID 与 `[槽位 …]`；点一行即加入该组，行首变 `[已加入]`，日志出现 `Menu: golden piece <plugin>:<id> <名称>`（info）。②选中左侧某个金件组 → 右侧编辑器底部应是**同一个列表**（只含该组所属 ESP 的装备），**不应再有任何 FormID 输入框**。③先不点导出：数据路径下应显示 `[not saved] …`；退出再进确认那件没被保存。④进「幻化」栏 → `Choose a plugin...` → 选一个**含多套服装**的 ESP → 日志里 `ESP outfits: … in K name group(s); …` 的 K 应等于你数出来的套数（K=1 说明这些装备的名字前缀不共享，把几条名字发回）；左栏应出现 `<ESP名称> <服装名>` 这样的套装，每套只含同一套衣服的件。⑤再选一个**只有一套服装**的 ESP 做对照 —— 生成的名字应与 1.5.44 完全一样（`<ESP名称>` / `<ESP名称>_1`），件数不变。见 §4.69 与 TESTING §3.53。
 - **1.5.44 的金件组行修复未实机验证**：本机没有游戏。结论来自 ImGui 的点击语义（`ActiveId` 必须与松开时的控件 id 一致）+ 同一函数里「指针 id 坏、整数 id 好」的对照事实，不是实机复现。判据只有一行日志：`Menu: golden group <名字> selected (N of M).` —— 有则点击已通，无则仍未通（见 §4.68 未验证段）。
 - **金件组行的 id 取行号**：`Golden::Groups()` 按插件名排序，行号跨帧稳定；但如果将来给这一栏加排序切换或过滤，行号会随视图变化，届时同一行在滑动前后的 id 会不同（不影响点击，ImGui 每次按下-松开都在一个视图里，只是不要拿行号当「这组的身份」——身份仍用插件名）。
 
 ## 7. 已知限制
+- **1.5.45 的两处改动未实机验证**：本机没有游戏。金件两级列表是按 `PluginScan` 已有的索引能力 + ImGui 列表语义推的（1.5.44 的 id 教训已照做：行号 id、`PushID(scopeId)` 分栈）；分组口径是「最长共享前缀 ≥ 2 件」的启发式，只影响命名与分桶，不在真实 ESP 上跑过。
+- **套装分组的两种已知偏差**：同一 ESP 里两套服装的前缀恰好相同 → 会被并成一组；同一套衣服里有一件的第一个词不一样（`Shoes_xxx`）→ 会掉进「其余」组。两者都能通过把装备名或 ESP 拆开重试绕过，但本版没有提供手动分组的 UI。
+- **最多 96 套 / 每组最多 32 个变体**：超上限抛 `truncated` 尾缀，多出来的件不会进任何套装（不会崩，也不会写坏已有预设）。
+- **金件列表一次列出一个 ESP 的全部槽位护甲**（可能上百行），没有分页 —— 靠搜索框过滤；极端大的 ESP 会有一屏滚动，但不会卡死（ImGui 只画可见行）。
 - **1.5.43 的修复未实机验证**：本机没有游戏。三处判据都来自源码 + 用户日志：`(0,0)` 命中矩形与负宽覆盖是 ImGui 语义推断（对照 `MenuUI.cpp:737-738` 那处显式给宽高的写法），light 插件 id 宽度是从 `002E280C` / `002E1D66` / `002E0823` 高位连续递增的分布加 CL-NG `GetFormID` 不掩码的事实推出。点得中点不中、导出是否真的只有手动一次、light 插件金件是否恢复正常，都要实机确认。
 - **1.5.43 起金件改动不自动落盘**：这是用户要的行为，但意味着「忘了点导出」= 本次改动丢失（重启后回到上次导出的状态）。内存快照仍即时生效，所以当前会话里金件照常工作。
 - **金件 id 宽度按「插件是不是 light 文件」判定**：普通插件写 24 位、light 插件写 12 位。`ResolveForm()` 对两种写法都做兜底，所以旧的 24 位 light id 也能读；但如果某个插件在加载顺序里由 light 变成普通（或反之），旧条目仍会被兜底救回，只是日志里可能多一条 missing 计数。
@@ -1991,6 +2056,8 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 | --- | --- |
 | `PluginScan: N plugins loaded, M slot armour record(s) indexed.`（debug） | 加载顺序视图建好。N 应≈你启用的插件数；插件列表为空或数量异常说明 esm/esp/esl 都没读到。 |
 | `ESP outfits: … ; N wearable of M slot record(s)).` | 生成套装的权威行：M 是该 ESP 的槽位护甲总数、N 是通过服装过滤的数量。N=0 时会改打 `ESP outfits: That plugin holds no wearable clothing: …`。 |
+| `ESP outfits: N outfit(s) from M piece(s) in K name group(s); C created, U updated…`（info，1.5.45） | **1.5.45 的权威分组行**：K = 按名字分出来的服装组数。K 与你自己数的套数不符时，把该 ESP 里几件的名字发回（判据见 §4.69.6）。 |
+| `Menu: golden piece <plugin>:<id> <名称>`（info，1.5.45） | 在金件的装备列表里点了一件并已加入。没有这行 = 点击没到代码；有但列表没变 = 该件本来就在组里（行首 `[已加入]`）。 |
 | `ESP outfits: That plugin holds no wearable clothing: every slot record is an FX effect, has no editor id or has no model.` | 这个 ESP 一件正常服装都没有：没有 EditorID、只覆盖 FX 槽（CK 槽 61 / 掩码第 31 位）、或 armor addon 没模型。换一个 ESP，或直接做成金件。 |
 | `Golden items: N piece(s) of <plugin> added.` | 金件「添加某个 ESP 的全部装备」的结果 —— 这条**不过滤**，FX 件与无 EditorID 的件都会进来。 |
 | `Golden items: <plugin>:<id> was added as a golden item.` / `Golden items: … could not be resolved` | 金件单件添加：前者成功，后者说明 `plugin:localid` 解析不到（FormID 写错、插件名不对、或该记录没有槽位掩码）。 |
@@ -2129,6 +2196,8 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 | `Changes reach the file only when you press Export.`（1.5.43） | 金件当前没有未保存改动（刚导入 / 刚导出 / 首次进页面）。 |
 | `Golden items: N entr(ies) resolved, 0 missing.`（info） | 金件库全部解析成功（1.5.43 的期望值）。若仍是 `0 resolved, M missing` 且插件是 light(ESL) 文件，说明 id 宽度还没归一化 —— 把这行与一条 `was not found in this load order` 发回。 |
 ## 9. 维护提示
+- **金件「添加单件」只许走列表，不许恢复手输 FormID**（m10869 / 1.5.45）：手输 `000800` 这条路 1.5.39–1.5.44 一直在产生 `was not found in this load order`，用户根本无从得知本地 FormID。入口只能是「选 ESP → 点该 ESP 的装备」（`RenderGoldenPieceList()`），行 id 用行号、两个列表用 `PushID(scopeId)` 分栈。
+- **按名字分组只用于命名与分桶，不许变成白名单**（m10869 / 1.5.45）：判断「哪些件属于同一套衣服」只许用「名字前几个词的最长共享前缀」，不许写死关键词（`Dress` / `Skirt` / 某个 mod 的前缀），也不许改成「恒为真」或「一个 ESP 一套」。改判据就必须回头复核 §4.69.3 的两条偏差是否还能复现。
 - **ImGui 控件 id 必须跨帧稳定**（m10689 / 1.5.44）：凡是列表行，`PushID` 只许压整数（行号、FormID、插件 index）。压字符串指针（`x.c_str()` / `x.data()`）会在数据每帧重建时变 id，点击被 ImGui 丢弃，症状是「怎么点都没反应」，而同一页用整数 id 的控件一切正常。要确认某个列表「到底是没点到还是点了没生效」，点击处一律打 **info** 级日志（`debug` 在默认级别看不到，等于没有证据）。
 - **「能不能收」的规则分两条路，不许合并**（m09426）：幻化用的套装生成只收正常服装 —— 走 `PluginScan::IsOutfitArmor()`（有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型），并且分桶时用 `mask & ~kFxBit`；金件是用户自愿指定的任何记录，`Golden::AddAllFromPlugin()` / `AddLocal()` **不调用** `IsOutfitArmor()`。以后新增任何「按 ESP 批量收件」的入口，先想清楚它属于哪条路，不要图省事复用同一个过滤函数。
 - 逐槽策略编辑器的展开状态是 **UI 状态、按套装名分开存**（`MenuOutfitEditor.cpp` 的 `g_slotPolicyOpen`），不是套装数据；它不进 JSON、不能影响别的套装，也不能拿它当「这套装了逐槽策略」的判据（判据是 `slotPolicies` 非空）。

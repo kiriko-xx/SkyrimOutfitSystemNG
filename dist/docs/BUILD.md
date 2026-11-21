@@ -1,13 +1,21 @@
 # 构建说明（BUILD）
 
-## 1.5.44 构建与交付复核状态
+## 1.5.45 构建与交付复核状态
+
+**验证状态（1.5.45）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_45.log`）。
+
+- **本版改动面**：`src/core/EspOutfits.cpp`（整文件重写：切词 / 最长共享前缀分组 / `BuildVariants` / `kMaxOutfits`）、`src/core/EspOutfits.h`（头注释）、`src/cpp/MenuUI.cpp`（删 `ParseLocalId` 与 `##goldenlocalid`，新增 `RenderGoldenPieceList` / `AddedIdsOf`，两处入口改列表）、`src/cpp/I18n.cpp`（11 条文案）、`src/cpp/include/version.h`、`CMakeLists.txt`、两个新守卫脚本。
+- **构建后必查**：源码里 `ParseLocalId(` 与 `##goldenlocalid` 必须 **0 处**；`RenderGoldenPieceList(` 必须 **3 处**（1 定义 + 2 调用）；DLL 里应能搜到 `Add one piece from a plugin` / `Search pieces...` / `slot armour record(s) in this plugin` / `[in the list] %s  %s` / `name group(s)` / `Menu: golden piece ` / `1.5.45`；`Add one piece by id...` 应 **0 命中**。
+- **静态守卫**：`tests/golden_piece_picker.ps1` 打印 `GOLDEN_PIECE_PICKER_OK`、`tests/esp_outfits_names.ps1` 打印 `ESP_OUTFITS_NAMES_OK`。跑法：`C:/Program Files/PowerShell/7/pwsh.exe -NoProfile -File tests/<名字>.ps1`，env 需带 `PATHEXT=.COM;.EXE;.BAT;.CMD`。
+- **交付两种包**：①全量包 `SkyrimOutfitSystemNG-1.5.45.zip`（`build/pack_1_5_45.ps1`，31 条目，dist 全量 + `SHA256SUMS.txt`）；②测试包 `SkyrimOutfitSystemNG-1.5.45-test.zip`（`build/pack_1_5_45_test.ps1`，2 条目：`SKSE/Plugins/OutfitSystemNG.dll` + 说明文本），可直接用 MO2 装。
+## 1.5.44 构建与交付复核状态（历史，金件页仍要求手输 FormID、套装不按服装名分组）
 
 **验证状态（1.5.44）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_44.log`，末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。
 
 - **本版改动面（只修金件组行的 id）**：`src/cpp/MenuUI.cpp`（`RenderGolden()` 组行循环：`std::size_t rowIndex = 0;` + `IG::PushID(static_cast<int>(rowIndex));` + 循环尾 `++rowIndex;`，并把选中日志从 `debug` 提到 `info` 带位置）、`src/cpp/include/version.h`（PATCH 44）、`CMakeLists.txt`（VERSION 1.5.44）、新增 `tests/golden_row_id.ps1`。
 - **构建后必查**：源码里 `PushID(group.plugin.c_str())` 必须 **0 处**；DLL 里应能搜到 `selected ({} of {})` / `Menu: golden group ` / `[not saved] The changes live in memory only` / `1.5.44`；DLL 大小 2,042,368 字节、sha256 `859d81d55db6de8b91224a96f998f03f32caf34dd96d8344f9d4134d0640914f`、FileVersion `1.5.44.0`。
 - **静态守卫**：`tests/golden_row_id.ps1` 必须打印 `GOLDEN_ROW_ID_OK`。跑法：`C:/Program Files/PowerShell/7/pwsh.exe -NoProfile -File tests/golden_row_id.ps1`，`env.PATHEXT` 要有 `.COM;.EXE;.BAT;.CMD`（PowerShell 5.1 会让部分脚本假失败）。
-- **交付两种包**：①全量包 `SkyrimOutfitSystemNG-1.5.44.zip`（`build/pack_1_5_44.ps1`，31 条目，dist 全量 + `SHA256SUMS.txt`）；②测试包 `SkyrimOutfitSystemNG-1.5.44-test.zip`（`build/pack_1_5_44_test.ps1`，2 条目：`SKSE/Plugins/OutfitSystemNG.dll` + 说明文本），可直接用 MO2 装。
+- **交付两种包**：①全量包 `SkyrimOutfitSystemNG-1.5.44.zip`（`build/pack_1_5_45.ps1`，31 条目，dist 全量 + `SHA256SUMS.txt`）；②测试包 `SkyrimOutfitSystemNG-1.5.44-test.zip`（`build/pack_1_5_44_test.ps1`，2 条目：`SKSE/Plugins/OutfitSystemNG.dll` + 说明文本），可直接用 MO2 装。
 
 ## 1.5.43 构建与交付复核状态（历史，其组行仍用指针当 ImGui id，金件列表点不中）
 

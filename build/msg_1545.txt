@@ -1,0 +1,11 @@
+1.5.45: pick golden pieces out of a plugin list, group generated outfits by costume name
+
+- golden items: drop the hand typed local form id (ParseLocalId, ##goldenlocalid) and
+  add RenderGoldenPieceList: pick a plugin, the page lists every slot armour of it,
+  click a row to add that single piece. The editor of a group shows the same list for
+  the plugin of that group. Rows use a row number id, the two lists use PushID(scope).
+- outfits from a plugin: group the slot armour by the longest word prefix shared by
+  at least two pieces (at most four words, bracketed tags ignored), split every
+  costume by slot conflicts as before. A plugin with one costume keeps the old names,
+  several costumes get "<plugin> <costume>". 96 outfits, 32 variants.
+- tests: golden_piece_picker.ps1 and esp_outfits_names.ps1.

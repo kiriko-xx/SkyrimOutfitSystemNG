@@ -71,7 +71,12 @@ namespace SOS::Menu
 		// inside one plugin: adding a single piece to the selected group fixes
 		// the plugin and only asks for the local form id.
 		std::string g_goldenSelected;
-		char        g_goldenLocalId[32]{};
+		// 1.5.45: a single piece is picked out of a list instead of being typed,
+		// so the page stores which plugin's piece list is open and two search
+		// boxes: one for the picker above, one for the editor on the right.
+		std::string g_goldenPiecePlugin;
+		char        g_goldenPieceFilter[128]{};
+		char        g_goldenEditorFilter[128]{};
 		char        g_goldenFilter[128]{};
 		std::string g_goldenStatus;
 		// True while the golden item store differs from the file on disk. Every
@@ -79,8 +84,8 @@ namespace SOS::Menu
 		// (1.5.43: the Export button is the only thing that saves).
 		bool        g_goldenDirty{ false };
 		// The framework has no popup windows, so the plugin chooser of both pages
-		// is an inline list: 1 = every piece of a plugin, 2 = the plugin that
-		// owns one hand typed piece.
+		// is an inline list: 1 = every piece of a plugin, 2 = the plugin whose
+		// pieces are listed so one of them can be picked.
 		int                     g_goldenPluginPicker{ 0 };
 		bool                    g_espOutfitPicker{ false };
 		char                    g_espOutfitFilter[128]{};
@@ -1190,7 +1195,7 @@ namespace SOS::Menu
 
 			IG::Separator();
 			IG::SeparatorText(I18n::T("Generate outfits from a plugin", "从 ESP 生成套装"));
-			IG::TextDisabled(I18n::T("Every wearable piece of a plugin becomes an outfit. Pieces that share a slot are split into <name>_1, <name>_2 ... and every slot policy is set to \"require equipped\".", "把该 ESP 里每件可穿的装备变成一套幻化；同一槽位有多件时拆成 <名称>_1、<名称>_2……，槽位策略一律设为“需要已装备”。"));
+			IG::TextDisabled(I18n::T("Every wearable piece of a plugin becomes an outfit. Pieces whose names start the same way count as one costume, and pieces that share a slot inside a costume are split into <name>_1, <name>_2 ... Every slot policy is set to \"require equipped\".", "把该 ESP 里每件可穿的装备变成幻化；名称开头相同的算同一套服装，同一套里同槽位有多件时拆成 <名称>_1、<名称>_2……；槽位策略一律设为“需要已装备”。"));
 			IG::TextDisabled(I18n::T("Only ordinary clothing is taken: FX effects, records with no editor id and records with no model are left out.", "只收录正常服装：FX 特效槽、没有 EditorID、没有模型的记录都不算在内。"));
 			if (IG::Button(I18n::T("Choose a plugin...", "选择 ESP..."))) {
 				g_espOutfitPicker = !g_espOutfitPicker;
@@ -1778,43 +1783,6 @@ namespace SOS::Menu
 			return text.empty() ? std::string("?") : text;
 		}
 
-		// Accepts "000800", "0x800" and "Plugin.esp:000800"; the plugin part is
-		// reported to the caller, which decides whether it is allowed (the selected
-		// group is the only plugin its editor takes pieces of).
-		bool ParseLocalId(const char* a_text, std::string& a_plugin, std::uint32_t& a_localId)
-		{
-			if (!a_text) {
-				return false;
-			}
-			const auto trim = [](std::string& a_value) {
-				const auto notSpace = [](unsigned char c) { return std::isspace(c) == 0; };
-				a_value.erase(a_value.begin(), std::find_if(a_value.begin(), a_value.end(), notSpace));
-				a_value.erase(std::find_if(a_value.rbegin(), a_value.rend(), notSpace).base(), a_value.end());
-			};
-			std::string text(a_text);
-			trim(text);
-			if (text.empty()) {
-				return false;
-			}
-			std::string idText = text;
-			if (const auto colon = text.find(':'); colon != std::string::npos) {
-				a_plugin = text.substr(0, colon);
-				trim(a_plugin);
-				idText = text.substr(colon + 1);
-				trim(idText);
-			}
-			if (idText.empty()) {
-				return false;
-			}
-			char*      end = nullptr;
-			const auto value = std::strtoul(idText.c_str(), &end, 16);
-			if (end == idText.c_str() || (end && *end != '\0')) {
-				return false;
-			}
-			a_localId = static_cast<std::uint32_t>(value) & 0x00FFFFFFu;
-			return true;
-		}
-
 		// A list row the mouse can actually hit: the full width of what is
 		// visible plus a little vertical padding. The plain two-argument
 		// Selectable spans the content region of a scrolling child, which in this
@@ -1825,6 +1793,86 @@ namespace SOS::Menu
 			const float width = std::max(IG::ContentRegionAvail().x, IG::CalcTextSize(a_label).x + 32.0f);
 			const float height = IG::CalcTextSize("A").y + 8.0f;
 			return IG::Selectable(a_label, a_selected, 0, ImVec2(width, height));
+		}
+
+		// The local ids the store already holds for one plugin, so the piece list
+		// can mark them. An empty list means the plugin is not a group yet.
+		std::vector<std::uint32_t> AddedIdsOf(const std::vector<Golden::Group>& a_groups, const std::string& a_plugin)
+		{
+			const auto needle = Lower(a_plugin);
+			for (const auto& group : a_groups) {
+				if (Lower(group.plugin) == needle) {
+					return group.localIds;
+				}
+			}
+			return {};
+		}
+
+		// Every slot armour of one plugin as a clickable row; a click adds that
+		// single piece to the plugin's golden group. 1.5.45 replaced the hand
+		// typed local form id with this list: the plugin is picked first and the
+		// piece is clicked out of it, so a wrong id can no longer be typed in.
+		void RenderGoldenPieceList(const std::string& a_plugin, const std::vector<std::uint32_t>& a_added, int a_scopeId, float a_height, char* a_filter, std::size_t a_filterSize)
+		{
+			if (a_plugin.empty()) {
+				return;
+			}
+			const auto armors = PluginScan::ArmorsOf(a_plugin);
+			IG::PushID(a_scopeId);
+			IG::SetNextItemWidth(280.0f);
+			IG::InputTextWithHint("##goldenpiecefilter", I18n::T("Search pieces...", "搜索装备..."), a_filter, a_filterSize);
+			IG::SameLine();
+			IG::TextDisabled(I18n::T("%zu slot armour record(s) in this plugin; click a piece to add it.", "该 ESP 共有 %zu 条槽位护甲记录；点一件即可加入。"), armors.size());
+			if (IG::BeginChild("##goldenpieces", ImVec2(0.0f, a_height), true, ImGuiWindowFlags_HorizontalScrollbar)) {
+				const auto  needle = Lower(std::string(a_filter ? a_filter : ""));
+				std::size_t shown = 0;
+				std::size_t rowIndex = 0;
+				for (const auto* armor : armors) {
+					if (!armor) {
+						continue;
+					}
+					const char* full = armor->GetFullName();
+					const char* editor = armor->GetFormEditorID();
+					const char* name = (full && full[0] != 0) ? full : ((editor && editor[0] != 0) ? editor : "");
+					const auto  localId = PluginScan::LocalIdFor(a_plugin, armor->GetFormID());
+					const auto  idText = HexLocalId(localId);
+					if (!needle.empty() && !ContainsNoCase(name, needle) && !ContainsNoCase(idText, needle)) {
+						continue;
+					}
+					++shown;
+					const bool added = std::find(a_added.begin(), a_added.end(), localId) != a_added.end();
+					char label[640]{};
+					if (added) {
+						std::snprintf(label, sizeof(label), I18n::T("[in the list] %s  %s", "[已加入] %s  %s"), name, idText.c_str());
+					} else {
+						std::snprintf(label, sizeof(label), "%s  %s", name, idText.c_str());
+					}
+					IG::PushID(static_cast<int>(rowIndex));
+					++rowIndex;
+					if (GoldenRow(label, added)) {
+						std::string message;
+						if (Golden::AddLocal(a_plugin, localId, message)) {
+							g_goldenDirty = true;
+							char text[512]{};
+							std::snprintf(text, sizeof(text), I18n::T("Added %s.", "已添加 %s。"), message.c_str());
+							g_goldenStatus = text;
+							CreateRefreshAllArmorsTask();
+						} else {
+							g_goldenStatus = message;
+						}
+						RE::SendHUDMessage::ShowHUDMessage(g_goldenStatus.c_str(), nullptr, false);
+						SKSE::log::info("Menu: golden piece {}:{} {}", a_plugin, idText, g_goldenStatus);
+					}
+					IG::SameLine();
+					IG::TextDisabled(I18n::T("[slot %s]", "[槽位 %s]"), SlotNumbersFor(armor).c_str());
+					IG::PopID();
+				}
+				if (shown == 0) {
+					IG::TextDisabled(I18n::T("No piece of this plugin matches that search.", "该 ESP 里没有匹配的装备。"));
+				}
+			}
+			IG::EndChild();
+			IG::PopID();
 		}
 
 		void RenderGolden()
@@ -1859,7 +1907,7 @@ namespace SOS::Menu
 				g_goldenFilter[0] = 0;
 			}
 			IG::SameLine();
-			if (IG::Button(I18n::T("Add one piece by id...", "按 FormID 添加单件..."))) {
+			if (IG::Button(I18n::T("Add one piece from a plugin...", "按 ESP 添加单件..."))) {
 				g_goldenPluginPicker = (g_goldenPluginPicker == 2) ? 0 : 2;
 				g_goldenFilter[0] = 0;
 			}
@@ -1899,7 +1947,7 @@ namespace SOS::Menu
 				IG::SetNextItemWidth(320.0f);
 				IG::InputTextWithHint("##goldenpluginfilter", I18n::T("Search plugins...", "搜索 ESP..."), g_goldenFilter, sizeof(g_goldenFilter));
 				IG::SameLine();
-				IG::TextDisabled(g_goldenPluginPicker == 1 ? I18n::T("Add every slot armour of the chosen plugin.", "添加选中 ESP 的全部槽位护甲。") : I18n::T("Choose the plugin that owns the piece.", "选择这件装备所属的 ESP。"));
+				IG::TextDisabled(g_goldenPluginPicker == 1 ? I18n::T("Add every slot armour of the chosen plugin.", "添加选中 ESP 的全部槽位护甲。") : I18n::T("Choose the plugin that holds the piece; its pieces are listed below.", "选择这件装备所属的 ESP，它的全部装备会列在下面。"));
 				if (IG::BeginChild("##goldenplugins", ImVec2(0.0f, 200.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
 					const auto  plugins = PluginScan::PluginsWithArmor();
 					const auto  needle = Lower(g_goldenFilter);
@@ -1925,10 +1973,12 @@ namespace SOS::Menu
 								RE::SendHUDMessage::ShowHUDMessage(g_goldenStatus.c_str(), nullptr, false);
 								CreateRefreshAllArmorsTask();
 							} else {
-								// The piece is typed in the editor of a group, so picking the
-								// plugin here only selects that group.
+								// 1.5.45: picking the plugin opens its own piece list, so the
+								// piece is clicked out of that plugin instead of typed in.
 								g_goldenSelected = it->name;
-								g_goldenStatus = I18n::T("Enter the local form id of the piece in the editor on the right.", "在右侧编辑器里输入该件的本地 FormID。");
+								g_goldenPiecePlugin = it->name;
+								g_goldenPieceFilter[0] = 0;
+								g_goldenStatus = I18n::T("Pick a piece of that plugin below.", "在下面点一件该 ESP 的装备。");
 							}
 							g_goldenPluginPicker = 0;
 						}
@@ -1941,6 +1991,14 @@ namespace SOS::Menu
 				IG::EndChild();
 			}
 
+			if (!g_goldenPiecePlugin.empty()) {
+				IG::SeparatorText(g_goldenPiecePlugin.c_str());
+				RenderGoldenPieceList(g_goldenPiecePlugin, AddedIdsOf(groups, g_goldenPiecePlugin), 1, 220.0f, g_goldenPieceFilter, sizeof(g_goldenPieceFilter));
+				if (IG::Button(I18n::T("Close the piece list", "关闭装备列表"))) {
+					g_goldenPiecePlugin.clear();
+				}
+			}
+
 			// Keep both panes inside the window: a list wider than the free space
 			// used to push the editor pane over the list, and the pane drawn last
 			// swallowed the clicks meant for the rows underneath it.
@@ -1948,7 +2006,7 @@ namespace SOS::Menu
 			const float listWidth = std::min(static_cast<float>(std::clamp(settings.outfitListWidth, 240, 1200)), std::max(240.0f, avail - 320.0f));
 			if (IG::BeginChild("##goldengroups", ImVec2(listWidth, 440.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
 				if (groups.empty()) {
-					IG::TextDisabled(I18n::T("No golden items yet - add a plugin above, or pick a single piece by its form id.", "还没有金件 - 先在上面添加一个 ESP，或按 FormID 添加单件。"));
+					IG::TextDisabled(I18n::T("No golden items yet - add a plugin above, or pick a single piece out of a plugin.", "还没有金件 - 先在上面添加一个 ESP，或从某个 ESP 里挑一件。"));
 				}
 				std::size_t rowIndex = 0;
 				for (const auto& group : groups) {
@@ -1962,7 +2020,7 @@ namespace SOS::Menu
 					const bool isSelected = !g_goldenSelected.empty() && Lower(group.plugin) == Lower(g_goldenSelected);
 					if (GoldenRow(label, isSelected)) {
 						g_goldenSelected = group.plugin;
-						g_goldenLocalId[0] = 0;
+						g_goldenEditorFilter[0] = 0;
 						SKSE::log::info("Menu: golden group '{}' selected ({} of {}).", group.plugin, rowIndex + 1, groups.size());
 					}
 					IG::PopID();
@@ -2028,39 +2086,8 @@ namespace SOS::Menu
 						IG::PopID();
 					}
 					IG::Separator();
-					IG::TextDisabled(I18n::T("Add a piece of this plugin by its local form id in hex (e.g. 000800). A piece typed here always belongs to the selected plugin.", "用十六进制本地 FormID 添加该 ESP 的一件装备（例如 000800）。这里输入的件一律归属选中的 ESP。"));
-					IG::SetNextItemWidth(160.0f);
-					IG::InputTextWithHint("##goldenlocalid", "000800", g_goldenLocalId, sizeof(g_goldenLocalId));
-					IG::SameLine();
-					if (IG::Button(I18n::T("Add piece", "添加单件"))) {
-						std::string   typedPlugin;
-						std::uint32_t localId = 0;
-						if (!ParseLocalId(g_goldenLocalId, typedPlugin, localId)) {
-							g_goldenStatus = I18n::T("That is not a hexadecimal form id.", "这不是十六进制 FormID。");
-						} else if (!typedPlugin.empty() && Lower(typedPlugin) != Lower(selected->plugin)) {
-							{
-							char text[512]{};
-							std::snprintf(text, sizeof(text), I18n::T("This group only takes pieces of %s.", "该组只接受 %s 的装备。"), selected->plugin.c_str());
-							g_goldenStatus = text;
-						}
-						} else {
-							std::string message;
-							if (Golden::AddLocal(selected->plugin, localId, message)) {
-								g_goldenDirty = true;
-								{
-								char text[512]{};
-								std::snprintf(text, sizeof(text), I18n::T("Added %s.", "已添加 %s。"), message.c_str());
-								g_goldenStatus = text;
-							}
-								g_goldenLocalId[0] = 0;
-								CreateRefreshAllArmorsTask();
-							} else {
-								g_goldenStatus = message;
-							}
-						}
-						RE::SendHUDMessage::ShowHUDMessage(g_goldenStatus.c_str(), nullptr, false);
-						SKSE::log::info("Menu: golden item add: {}", g_goldenStatus);
-					}
+					IG::TextDisabled(I18n::T("Pick a piece of this plugin below; the list holds only pieces of the selected plugin.", "在下面点一件该 ESP 的装备；列表只含选中 ESP 的装备。"));
+					RenderGoldenPieceList(selected->plugin, selected->localIds, 2, 200.0f, g_goldenEditorFilter, sizeof(g_goldenEditorFilter));
 				}
 			}
 			IG::EndChild();

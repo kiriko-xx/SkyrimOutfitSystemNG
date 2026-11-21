@@ -1,5 +1,25 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.45] - 2026-11-21
+
+### 改：金件「按 ESP 添加单件」+ 从 ESP 生成套装按服装名分组（m10869）
+
+**用户原话**：「“金件””按FormID添加单件“改成”按ESP添加单件“，点击后选择该单件所属ESP时，再弹出该esp内所有符合条件的金件装备菜单，点击即可添加单件。同理在点击左侧金件列表中金件esp预设时，右侧的添加单件也改成类似操作。 “幻化”中的从ESP自动生成套装的规则还需优化，兼容同一个esp中包含多种服装的情况，可以通过服装名称来判断，一般同一套服装前面的几个字段都是相同的。」
+
+- **金件页（两处入口换成列表）**：删掉 `ParseLocalId()` 与 `InputTextWithHint("##goldenlocalid", "000800", …)`（手输本地 FormID 这条路 1.5.39–1.5.44 一直在产生 `was not found in this load order`）。新增 `RenderGoldenPieceList(plugin, added, scopeId, height, filter, size)`：列出某个 ESP 的全部槽位护甲（`PluginScan::ArmorsOf()`），带搜索框、`[已加入]` 标记、`[槽位 30/32/…]`，点一行即 `Golden::AddLocal()`（只置 `g_goldenDirty`，不写盘）。入口一 = `Add one piece from a plugin... / 按 ESP 添加单件...`（选 ESP → 展开该 ESP 的装备）；入口二 = 选中金件组后右侧编辑器底部的同一列表（只含该组所属 ESP）。两个列表用 `PushID(a_scopeId)` 分栈、行 id 用行号。
+- **生成套装按名字分组**：`EspOutfits::GenerateFromPlugin()` 先 `SplitWords()` / `NameWords()` 切词（忽略 `[]` / `()` 标签词、中文不切词、最多比 4 个词），再取「至少两件共享的最长前缀」当服装组名，无共享前缀的落「其余」组；组内仍用 `BuildVariants()` 按槽位冲突拆变体（上限 32，第 n 个变体用首变体补齐）。只有一套服装时命名与以前完全一致（`<ESP名称>` / `<ESP名称>_1`），多套时 `<ESP名称> <服装名>`。总上限 96 套、超了打 `truncated`。每套仍是 `XXXO`（需要已装备才显示幻化）。
+- **I18n**：新增/改写 11 条中英文案（`Add one piece from a plugin...`、`Pick a piece of that plugin below.`、`Close the piece list`、`Search pieces...`、`%zu slot armour record(s) in this plugin; click a piece to add it.`、`No piece of this plugin matches that search.`、`[in the list] %s  %s` 等），中英占位符同序（1.5.40 的护栏会在顺序不一致时回退英文）。
+- **守卫测试**：新增 `tests/golden_piece_picker.ps1`（两处入口都走列表、无手输 FormID、`SaveToDisk` 只在导出路径 1 次）与 `tests/esp_outfits_names.ps1`（切词/共享前缀 ≥2/变体上限/`XXXO`/消息含 `name group(s)`）。全套 23 个脚本：21 通过，2 个既有环境失败（`hair_tint_read_only.ps1` 锚点随代码迁移消失、`skse_listener_replay.ps1` 需现场 `bug/skse64.log`），非本版回归。
+
+### 未改动
+
+- 引擎侧一行未改：注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装切换 / 钩子安装 / 金件存库锁。1.5.25 的基础幻化、1.5.34 的场景切换、1.5.42 的删除崩溃、1.5.44 的组行点击都不受影响。
+- 金件 JSON 结构未变（旧档照读）；金件仍只有「导出」写盘。
+
+### 未验证
+
+- 本机没有游戏。分组口径（最长共享前缀 ≥ 2 件）是从「同一套服装前面几个字段相同」推出的启发式，未在真实 ESP 上跑过；两种已知偏差（两套前缀相同被并组、某件第一个词不同掉进「其余」组）只影响命名与分桶。判据是日志里的 `K name group(s)` 与自己数出的套数是否一致。
+
 ## [1.5.44] - 2026-11-21
 
 ### 修：金件列表依旧点不中——控件 id 跨帧不稳定（m10689）

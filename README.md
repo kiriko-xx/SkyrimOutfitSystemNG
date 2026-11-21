@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.44**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只修一件事（m10689：「金件列表依旧点不中」）：左栏组行的 ImGui 控件 id 原先由 `IG::PushID(group.plugin.c_str())` 生成，而 `Golden::Groups()` 每帧返回一份新副本 ⇒ 指针每帧都变 ⇒ 按下帧与松开帧的 id 不一致 ⇒ ImGui 直接丢弃这次点击（同页插件选择器用整数 `PushID(it->order)` 所以能点；「添加某个 ESP 的全部装备」是代码直接赋 `g_goldenSelected`，所以用完之后该组会自己选中）。修法：组行改压行号 `IG::PushID(static_cast<int>(rowIndex))`，选中日志升级为 info `Menu: golden group <名字> selected (<N> of <M>).` 便于实机判定，并新增守卫脚本 `tests/golden_row_id.ps1` 禁止再用字符串指针当 id。1.5.43 的三项（显式行高、手动导出 + `[not saved]`、light 插件 id 宽度）原样保留；引擎侧（1.5.25 基础幻化、1.5.34 场景套装、1.5.42 删除崩溃修复）一行未改。
+- 当前版本：**1.5.45**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只动菜单两件事（m10869）：①「金件」页的「按 FormID 添加单件」整体删掉（手输 `000800` 这类本地 FormID 根本没法用，1.5.39–1.5.44 一直产生 `was not found in this load order`），换成两级列表 —— 点 `按 ESP 添加单件...` 选一个 ESP，页面下方就列出该 ESP 的全部槽位护甲（带搜索框、`[已加入]` 标记、`[槽位 30/32/…]`），点一行即加入；选中左侧金件组时，右侧编辑器底部也是同一个列表（只含该组所属 ESP）。②「从 ESP 生成套装」按服装名分组：取「本 ESP 内至少两件共享的最长词前缀（最多 4 个词）」当作一套服装，组内仍按槽位冲突拆 `<名称>` / `<名称>_1`，只有一套服装的 ESP 命名与以前完全一致，多套时是 `<ESP名称> <服装名>`（日志 `ESP outfits: … in K name group(s)` 的 K 就是套数；上限 96 套）。金件仍只有「导出」写盘；引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装 / 钩子）一行未改 —— 1.5.25 的基础幻化、1.5.34 的场景切换、1.5.42 的删除崩溃、1.5.44 的组行点击都不受影响。
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 

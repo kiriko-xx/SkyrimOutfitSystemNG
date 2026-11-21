@@ -5,10 +5,16 @@
 #include <string>
 #include <vector>
 
-// "Generate outfits from a plugin": one click turns every armour record of a
-// chosen plugin into outfits, one per slot combination, so the usual case of a
-// mod that ships three tops, two skirts and one pair of shoes ends up as three
-// switchable outfits instead of one unusable pile.
+// "Generate outfits from a plugin": one click turns the armour records of a
+// chosen plugin into switchable outfits instead of one unusable pile.
+//
+// 1.5.45 groups the records by the words their names start with, because one
+// plugin often ships several costumes ("Sailor Top"/"Sailor Skirt" is one
+// costume, "School Top" is another). Inside one costume the pieces are split by
+// slot conflicts: two alternatives for the same slot become <name> and
+// <name>_1, and the second one keeps the base pieces on the slots it does not
+// cover. Records whose names share nothing with the rest form one "rest"
+// costume that keeps the plain plugin name.
 //
 // Slot policies are always set to "require equipped" (XXXO): a generated
 // outfit only draws on a slot the actor actually wears something on, which is
