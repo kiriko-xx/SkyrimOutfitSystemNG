@@ -1259,6 +1259,8 @@ namespace SOS::Menu
 						if (why == "unmatched-difference") return I18n::T("the variant marks do not line up", "同款各槽的差目标号对不上");
 						if (why == "no-complementary-slots") return I18n::T("every piece covers the same slot", "所有件都占同一槽位");
 						if (why == "no-complete-outfit") return I18n::T("not enough pieces for a full outfit", "凑不成成套件");
+						if (why == "incomplete-slots") return I18n::T("this style can never fill its slots", "这套的槽位凑不齐");
+						if (why == "same-slot-alternative") return I18n::T("another option of a slot already filled", "同一槽位已有别的件，这件未采用");
 						if (why == "variant-limit") return I18n::T("too many variants on one slot", "同一槽位的变体过多");
 						if (why == "preset-limit") return I18n::T("preset limit reached", "已达预设数量上限");
 						if (why == "duplicate-preset-name") return I18n::T("a preset with that name already exists", "已有同名预设");

@@ -30,6 +30,26 @@ static const char* ReasonOf(const Match::Group& group, std::size_t index)
     return nullptr;
 }
 
+// Every preset of a style has to fill every slot that style offers; this holds for
+// every case below, so it is checked everywhere instead of case by case.
+static void CheckComplete(const std::vector<Match::Group>& groups, const std::vector<Piece>& pieces, int line)
+{
+    for (const auto& group : groups) {
+        for (const auto& variant : group.variants) {
+            std::uint32_t mask = 0;
+            for (const auto i : variant) {
+                mask |= Match::BodySlots(pieces[i].mask);
+            }
+            if ((group.coverage & ~mask) != 0) {
+                std::cerr << "Failure at line " << line << ": variant leaves a slot of its style empty\n";
+                std::exit(1);
+            }
+        }
+    }
+}
+
+#define CHECK_COMPLETE(groups, pieces) CheckComplete(groups, pieces, __LINE__)
+
 int main()
 {
     // ---- names -----------------------------------------------------------
@@ -75,13 +95,14 @@ int main()
     CHECK(groups[0].prefix == U"[rokona extra]" && groups[0].issue == std::string_view("no-complete-outfit"));
     CHECK(groups[1].prefix == U"[rokona]" && groups[1].variants == std::vector<IndexList>({ { 0, 1, 2, 3 } }));
 
-    // A labelled piece that fights for a slot is reported, the rest still pairs.
+    // Two parts that only share the FX bit fight for no body slot, so both belong
+    // to the same outfit.
     std::vector<Piece> mixed = labelled;
     mixed.insert(mixed.end(), { Item("[Rokona] 上衣", top | fx), Item("[Rokona] 裙子", skirt | fx) });
     groups = Match::Plan(mixed);
     CHECK(groups.size() == 2);
-    CHECK(groups[1].prefix == U"[rokona]" && groups[1].variants == std::vector<IndexList>({ { 0, 1, 2, 3, 5 } }));
-    CHECK(ReasonOf(groups[1], 6) == std::string_view("overlapping-slot-masks"));
+    CHECK(groups[1].prefix == U"[rokona]" && groups[1].variants == std::vector<IndexList>({ { 0, 1, 2, 3, 5, 6 } }));
+    CHECK(groups[1].pending.empty());
 
     // Two styles inside one label are separated by the text after the label.
     std::vector<Piece> nested{ Item("[Rokona] 衣服上身", top), Item("[Rokona] 衣服下身", skirt), Item("[Rokona] 头发", hair),
@@ -99,26 +120,37 @@ int main()
     CHECK(groups[1].prefix == U"[pack]nova" && groups[1].variants == std::vector<IndexList>({ { 2, 3 } }));
 
     // ---- difference marks must line up -----------------------------------
+    // Marks that do not line up are not paired by name. The style still gets one
+    // full outfit per variant, and the second skirt is offered instead of doubling
+    // every outfit with it.
     std::vector<Piece> marks{ Item("星夜礼服上衣A", top), Item("星夜礼服上衣B", top), Item("星夜礼服裙子红色", skirt),
         Item("星夜礼服裙子黑色", skirt) };
     groups = Match::Plan(marks);
-    CHECK(groups.size() == 1 && !groups[0].variants.size());
-    CHECK(groups[0].issue == std::string_view("unmatched-difference"));
-    CHECK(ReasonOf(groups[0], 2) != nullptr && ReasonOf(groups[0], 0) != nullptr);
+    CHECK(groups.size() == 1 && !groups[0].issue);
+    CHECK(groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
+    CHECK(ReasonOf(groups[0], 3) == std::string_view("same-slot-alternative"));
+    CHECK_COMPLETE(groups, marks);
 
     Match::Aliases aliases{ { U"红色", U"a" }, { U"黑色", U"b" } };
     groups = Match::Plan(marks, aliases);
     CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 3 } }));
     CHECK(!groups[0].issue && groups[0].pending.empty());
+    CHECK_COMPLETE(groups, marks);
 
+    // Two options that translate to the same mark cannot be told apart either.
     Match::Aliases duplicate{ { U"红色", U"a" }, { U"黑色", U"a" } };
     groups = Match::Plan(marks, duplicate);
-    CHECK(groups.size() == 1 && groups[0].issue == std::string_view("non-unique-difference"));
+    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
+    CHECK(ReasonOf(groups[0], 3) == std::string_view("non-unique-difference"));
 
+    // Two records with one and the same name cannot be told apart: the second one
+    // is never pretended to be a variant of its own.
+    Match::Aliases clash{ { U"红色", U"a" }, { U"黑色", U"a" } };
     std::vector<Piece> same = marks;
     same[3] = Item("星夜礼服裙子红色", skirt);
-    groups = Match::Plan(same);
-    CHECK(groups.size() == 1 && groups[0].issue == std::string_view("non-unique-difference"));
+    groups = Match::Plan(same, clash);
+    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
+    CHECK(ReasonOf(groups[0], 3) == std::string_view("non-unique-difference"));
 
     // An empty mark is a legal base variant as long as it is unique.
     std::vector<Piece> base{ Item("Love Letter Maiden Boots", shoes), Item("Love Letter Maiden Loose", top),
@@ -126,16 +158,17 @@ int main()
         Item("Love Letter Maiden Panty", panty), Item("Love Letter Maiden Panty (Trans)", panty) };
     groups = Match::Plan(base);
     CHECK(groups.size() == 1 && groups[0].variants.size() == 3);
-    CHECK(groups[0].variants[0] == IndexList({ 0, 1 }) || groups[0].variants[0] == IndexList({ 1 }));
-    CHECK(ReasonOf(groups[0], 4) == std::string_view("unmatched-difference"));
-    CHECK(ReasonOf(groups[0], 5) == std::string_view("unmatched-difference"));
+    CHECK(groups[0].variants == std::vector<IndexList>({ { 0, 1, 4 }, { 0, 2, 4 }, { 0, 3, 4 } }));
+    CHECK(ReasonOf(groups[0], 5) == std::string_view("same-slot-alternative"));
+    CHECK_COMPLETE(groups, base);
 
     // ---- a slot that cannot be paired does not sink the outfit -----------
     std::vector<Piece> orionAC{ Item("Orion Top A", top), Item("Orion Top B", top), Item("Orion Skirt A", skirt),
         Item("Orion Skirt C", skirt) };
     groups = Match::Plan(orionAC);
-    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 } }));
-    CHECK(ReasonOf(groups[0], 3) == std::string_view("unmatched-difference"));
+    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
+    CHECK(ReasonOf(groups[0], 3) == std::string_view("same-slot-alternative"));
+    CHECK_COMPLETE(groups, orionAC);
 
     std::vector<Piece> orionShoes{ Item("Orion Top A", top), Item("Orion Top B", top), Item("Orion Shoes", shoes) };
     groups = Match::Plan(orionShoes);
@@ -144,9 +177,9 @@ int main()
     std::vector<Piece> five{ Item("Orion Top A", top), Item("Orion Top B", top), Item("Orion Skirt Red", skirt),
         Item("Orion Skirt Blue", skirt), Item("Orion Shoes", shoes) };
     groups = Match::Plan(five);
-    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 4 }, { 1, 4 } }));
-    CHECK(ReasonOf(groups[0], 2) == std::string_view("unmatched-difference"));
-    CHECK(ReasonOf(groups[0], 3) == std::string_view("unmatched-difference"));
+    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2, 4 }, { 1, 2, 4 } }));
+    CHECK(ReasonOf(groups[0], 3) == std::string_view("same-slot-alternative"));
+    CHECK_COMPLETE(groups, five);
 
     // ---- real [BAKU]DOAXVV Love Letter Maiden shape ----------------------
     std::vector<Piece> maiden{ Item("Love Letter Maiden Boots", shoes), Item("Love Letter Maiden Gloves", 1u << 3),
@@ -171,12 +204,16 @@ int main()
     groups = Match::Plan(cover);
     CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
 
+    // A part that covers two slots and a part that covers one of them cannot be
+    // worn together, and the style can never be filled: nothing is claimed.
     std::vector<Piece> coverSkirt = cover;
     coverSkirt.push_back(Item("Orion Skirt", skirt));
     groups = Match::Plan(coverSkirt);
-    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 2, 3 } }));
+    CHECK(groups.size() == 1 && groups[0].variants.empty());
+    CHECK(groups[0].issue == std::string_view("overlapping-slot-masks"));
     CHECK(ReasonOf(groups[0], 0) == std::string_view("overlapping-slot-masks"));
     CHECK(ReasonOf(groups[0], 1) == std::string_view("overlapping-slot-masks"));
+    CHECK(ReasonOf(groups[0], 3) == std::string_view("incomplete-slots"));
 
     // A single piece is its own outfit; unrelated names are left alone.
     groups = Match::Plan({ Item("Orion Dress", top | skirt) });

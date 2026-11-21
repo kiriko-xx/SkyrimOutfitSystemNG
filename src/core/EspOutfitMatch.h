@@ -13,11 +13,19 @@
 // Pure planning: indexes refer to the caller's sorted records; no game or storage access.
 namespace SOS::EspOutfits::Match
 {
+	// The FX bit marks a visual effect, not a body slot: two parts may both carry
+	// one without fighting over the same body part.
+	inline constexpr std::uint32_t kFxBit = 1u << 31;
 	inline constexpr std::size_t kMaxVariants = 32;
 	inline constexpr std::size_t kMaxOutfits = 96;
 	using IndexList = std::vector<std::size_t>;
 	using Key = std::u32string;
 	using Aliases = std::map<Key, Key>;  // explicit, already normalized; never infer translations
+
+	inline std::uint32_t BodySlots(std::uint32_t mask)
+	{
+		return mask & ~kFxBit;
+	}
 
 	struct Piece
 	{
@@ -32,6 +40,8 @@ namespace SOS::EspOutfits::Match
 		std::vector<IndexList> variants;
 		const char* issue{};
 		std::uint32_t coverage{};
+		// Pieces this family pairs by name alone, before slots are completed.
+		std::size_t aligned{};
 		// Pieces this family could not place, with the reason the menu shows.
 		std::vector<std::pair<std::size_t, const char*>> pending;
 	};
@@ -49,6 +59,133 @@ namespace SOS::EspOutfits::Match
 		// Non-ASCII languages need no word tokenizer; one code point is still too weak.
 		const bool ascii = std::all_of(prefix.begin(), prefix.end(), [](char32_t ch) { return ch < 128; });
 		return node.complementary && prefix.size() >= (ascii ? 3u : 2u);
+	}
+
+	inline std::size_t PlacedOf(const std::vector<Piece>& pieces, const std::vector<IndexList>& variants)
+	{
+		(void)pieces;
+		IndexList all;
+		for (const auto& variant : variants) {
+			all.insert(all.end(), variant.begin(), variant.end());
+		}
+		std::sort(all.begin(), all.end());
+		all.erase(std::unique(all.begin(), all.end()), all.end());
+		return all.size();
+	}
+
+	// Every preset of a style has to fill every slot that style offers. A slot that
+	// only some variants cover is completed from the family itself - a shared part,
+	// or one option of that same slot - so a style never ends up half dressed.
+	// An empty slot is filled with exactly one piece: the player wants one outfit per
+	// style, not the whole cross product of every option in every slot. The first
+	// piece in plugin order wins, everything else that could have gone there is left
+	// for the player to judge.
+	inline void FinalizeVariants(Group& group, const std::vector<Piece>& pieces)
+	{
+		std::uint32_t coverage = 0;
+		for (const auto i : group.members) {
+			coverage |= BodySlots(pieces[i].mask);
+		}
+		group.coverage = coverage;
+		const auto coveredBy = [&pieces](const IndexList& variant) {
+			std::uint32_t mask = 0;
+			for (const auto i : variant) {
+				mask |= BodySlots(pieces[i].mask);
+			}
+			return mask;
+		};
+		std::vector<IndexList>                 kept;
+		std::vector<std::pair<IndexList, const char*>> dead;
+		std::vector<std::size_t>               spare;
+		std::vector<std::size_t>               overflowed;
+		std::size_t                            overflow = 0;
+		for (auto& variant : group.variants) {
+			if (kept.size() >= kMaxVariants) {
+				++overflow;
+				for (const auto i : variant) {
+					overflowed.push_back(i);
+				}
+				continue;
+			}
+			auto missing = coverage & ~coveredBy(variant);
+			for (const auto i : group.members) {
+				if (std::binary_search(variant.begin(), variant.end(), i)) {
+					continue;
+				}
+				const auto slots = BodySlots(pieces[i].mask);
+				if (slots == 0) {
+					continue;
+				}
+				if ((slots & ~missing) == 0) {
+					variant.push_back(i);
+					missing &= ~slots;
+				} else if ((slots & ~coverage) == 0) {
+					// Takes no slot this style does not already fill, so it is a second
+					// option for a slot that is now taken: kept back, not cross multiplied.
+					spare.push_back(i);
+				}
+			}
+			std::sort(variant.begin(), variant.end());
+			if (missing != 0) {
+				dead.push_back({ std::move(variant), "incomplete-slots" });
+			} else if (variant.size() >= 2) {
+				kept.push_back(std::move(variant));
+			} else {
+				dead.push_back({ std::move(variant), "no-complete-outfit" });
+			}
+		}
+		std::sort(kept.begin(), kept.end());
+		kept.erase(std::unique(kept.begin(), kept.end()), kept.end());
+		const auto used = [&kept](std::size_t index) {
+			return std::any_of(kept.begin(), kept.end(), [index](const IndexList& variant) {
+				return std::binary_search(variant.begin(), variant.end(), index);
+			});
+		};
+		std::vector<std::pair<std::size_t, const char*>> pending;
+		const auto note = [&pending](std::size_t index, const char* why) {
+			if (std::none_of(pending.begin(), pending.end(), [index](const auto& entry) { return entry.first == index; })) {
+				pending.push_back({ index, why });
+			}
+		};
+		// A piece that conflicts with the others is the real reason a style stays
+		// empty, so those remarks come before "another option of that slot".
+		for (const auto& [index, why] : group.pending) {
+			if (!used(index) && std::string_view(why) != "unmatched-difference") {
+				note(index, why);
+			}
+		}
+		for (const auto i : spare) {
+			if (!used(i)) {
+				note(i, "same-slot-alternative");
+			}
+		}
+		for (const auto i : overflowed) {
+			if (!used(i)) {
+				note(i, "variant-limit");
+			}
+		}
+		for (const auto& [index, why] : group.pending) {
+			if (!used(index)) {
+				note(index, why);
+			}
+		}
+		for (const auto& [variant, why] : dead) {
+			for (const auto i : variant) {
+				if (!used(i)) {
+					note(i, why);
+				}
+			}
+		}
+		for (const auto i : group.members) {
+			if (!used(i)) {
+				note(i, "no-complete-outfit");
+			}
+		}
+		(void)overflow;
+
+		std::sort(pending.begin(), pending.end());
+		group.pending = std::move(pending);
+		group.variants = std::move(kept);
 	}
 
 	// Turns one family into presets. Every preset holds at most one piece per slot,
@@ -78,7 +215,7 @@ namespace SOS::EspOutfits::Match
 		std::uint32_t                                      occupied = 0;
 		for (const auto mask : order) {
 			auto& bucket = buckets.at(mask);
-			if ((occupied & mask) != 0) {
+			if ((occupied & BodySlots(mask)) != 0) {
 				for (const auto i : bucket) {
 					group.pending.push_back({ i, "overlapping-slot-masks" });
 				}
@@ -132,11 +269,16 @@ namespace SOS::EspOutfits::Match
 		}
 		if (choices.empty()) {
 			std::sort(shared.begin(), shared.end());
-			if (shared.size() < 2) {
-				group.issue = !group.pending.empty() ? group.pending.front().second : "no-complete-outfit";
-				return;
+			if (shared.size() >= 2) {
+				group.variants.push_back(std::move(shared));
+			} else {
+				group.pending.push_back({ shared.front(), "no-complete-outfit" });
 			}
-			group.variants.push_back(std::move(shared));
+			group.aligned = PlacedOf(pieces, group.variants);
+			FinalizeVariants(group, pieces);
+			if (group.variants.empty()) {
+				group.issue = !group.pending.empty() ? group.pending.front().second : "no-complete-outfit";
+			}
 			return;
 		}
 		// Slots whose difference marks agree form one variant series; a wider series
@@ -184,7 +326,6 @@ namespace SOS::EspOutfits::Match
 			}
 		}
 		std::vector<IndexList> built;
-		IndexList              lost;
 		for (const auto& tag : primary.tags) {
 			IndexList variant = shared;
 			for (const auto slot : primary.slots) {
@@ -198,23 +339,14 @@ namespace SOS::EspOutfits::Match
 				}
 			}
 			std::sort(variant.begin(), variant.end());
-			if (variant.size() >= 2) {
-				built.push_back(std::move(variant));
-			} else {
-				lost.insert(lost.end(), variant.begin(), variant.end());
-			}
-		}
-		for (const auto i : lost) {
-			const bool used = std::any_of(built.begin(), built.end(), [i](const auto& variant) {
-				return std::binary_search(variant.begin(), variant.end(), i);
-			});
-			if (!used) {
-				group.pending.push_back({ i, "no-complete-outfit" });
-			}
+			built.push_back(std::move(variant));
 		}
 		group.variants = std::move(built);
+		group.aligned = PlacedOf(pieces, group.variants);
+		const char* alignedReason = group.pending.empty() ? nullptr : group.pending.front().second;
+		FinalizeVariants(group, pieces);
 		if (group.variants.empty()) {
-			group.issue = !group.pending.empty() ? group.pending.front().second : "no-complete-outfit";
+			group.issue = alignedReason ? alignedReason : (!group.pending.empty() ? group.pending.front().second : "no-complete-outfit");
 		}
 	}
 
@@ -242,7 +374,7 @@ namespace SOS::EspOutfits::Match
 				auto& current = trie[node];
 				if (!current.complementary) {
 					current.complementary = std::any_of(current.members.begin(), current.members.end(), [&](auto j) {
-						return (pieces[j].mask & mask) == 0;
+						return (BodySlots(pieces[j].mask) & BodySlots(mask)) == 0;
 					});
 				}
 				current.members.push_back(i);
@@ -278,8 +410,13 @@ namespace SOS::EspOutfits::Match
 
 	// A family is only worth taking when it actually pairs pieces, it explains as
 	// many pieces as possible, and it leaves as few as possible unexplained.
+	// Pairing by name outranks filling slots: two styles under one shared prefix
+	// must not beat their own two families just because a cross of both fills more.
 	inline bool Better(const Group& lhs, std::size_t lhsPlaced, const Group& rhs, std::size_t rhsPlaced)
 	{
+		if (lhs.aligned != rhs.aligned) {
+			return lhs.aligned > rhs.aligned;
+		}
 		if (lhsPlaced != rhsPlaced) {
 			return lhsPlaced > rhsPlaced;
 		}
@@ -345,7 +482,7 @@ namespace SOS::EspOutfits::Match
 		bool collides = false;
 		for (std::size_t i = 0; i < rest.size() && !collides; ++i) {
 			for (std::size_t j = i + 1; j < rest.size(); ++j) {
-				if ((pieces[rest[i]].mask & pieces[rest[j]].mask) != 0) {
+				if ((BodySlots(pieces[rest[i]].mask) & BodySlots(pieces[rest[j]].mask)) != 0) {
 					collides = true;
 					break;
 				}
@@ -395,7 +532,7 @@ namespace SOS::EspOutfits::Match
 			for (const auto i : group.members) {
 				const auto mask = pieces[i].mask;
 				complementary |= std::any_of(suffixes.begin(), suffixes.end(), [mask](const auto& part) {
-					return (mask & part.mask) == 0;
+					return (BodySlots(mask) & BodySlots(part.mask)) == 0;
 				});
 				suffixes.push_back({ pieces[i].key.substr(label.size()), mask });
 			}
