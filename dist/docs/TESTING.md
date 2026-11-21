@@ -864,6 +864,24 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | E1 | 启动耗时 | 与 1.5.40 无明显差异（金件库解析在 `kDataLoaded`，只解析一次） | 启动显著变慢 ⇒ 看金件库条目数是否异常膨胀 |
 | F1 | 静态守卫 | `tests/golden_lock_guards.ps1` 打印 `GOLDEN_LOCK_GUARDS_OK` | 失败 ⇒ 有人把锁改回 `std::mutex`，或在持锁路径加了加锁 getter |
 
+## 3.50 1.5.42 删除幻化套装预设不再闪退（菜单分页切片夹紧）
+
+> 目标：在第 2 页及以后删除套装时不再崩；第 1 页删除保持正常。静态侧由 `tests/menu_page_slice.ps1` 锁住夹紧写法；本表是实机步骤。
+
+| 编号 | 步骤 | 期望 | 失败判据 |
+| --- | --- | --- | --- |
+| A1 | 进菜单 → 幻化栏，把套装列表翻到**第 2 页**，选中一套自建预设点删除 | **不闪退**；页面立即重画，条数少一条 | 崩溃 ⇒ 抓 `crash-*.log`，看是否仍是 `vector too long` + `RenderOutfits` |
+| A2 | 同一次删除后的日志 | 出现 `Outfits: deleted '<名字>': yes.`，其后继续有正常渲染/菜单行 | 有删除行后立刻断日志 ⇒ 还在同一处崩 |
+| A3 | 翻到第 3 页及更后面（≥2 套）再删一次 | 同样不崩、页码不会跳出范围（末页删空应回落到上一页） | 页码停在空页或崩 ⇒ 发回该段日志 |
+| B1 | 在**第 1 页**删一套（改成 1 页能装下的数量或先筛到只有几套） | 正常删除，不崩 | 崩 ⇒ 说明不是这条切片，按 §8 发回崩溃栈 |
+| B2 | 搜索框输入关键字把列表缩到 1 条，再点删除 | 不崩；过滤结果与页码同步（`Menu` 的筛选签名会重建） | 崩或列表卡住 ⇒ 发回日志 |
+| B3 | 删除后立刻新建一套同名预设 | 正常创建、出现在列表里 | 异常 ⇒ 发回 |
+| C1 | 连续删除 10 套（跨页） | 无 CTD、无卡顿 | CTD ⇒ `crash-*.log` |
+| C2 | 删除 + 导入 JSON（`Imported N outfits …`）交替 5 次 | 数据一致、无崩 | 不一致或崩 ⇒ 发回 |
+| D1 | 装 1.5.42 启动、读档、换装、进 OStim 场景 | 1.5.41 / 1.5.34 已验收行为不回归 | 任一回归 ⇒ 比对 `git diff v1.5.41 HEAD -- src/cpp/MorphRefresh.cpp src/cpp/SceneOutfits.cpp` 应为空 |
+| E1 | 基础幻化（1.5.25 基线） | `Custom: attaching N outfit-only piece(s)`，身体槽不空 | 回归 ⇒ 本版不该动 `Patches.cpp`，先查是不是装错 DLL |
+| F1 | 全日志搜 `Message handler: an exception escaped` | **0 条** | 有 ⇒ 还有别的异常逃出回调，发回整行 |
+
 ## 4. 性能协议（1000+ 套装）
 
 用 Papyrus 生成 1000 个套装后测：
@@ -1152,6 +1170,7 @@ B. 回归
 
 ## 6. 已知未验证项
 
+- **1.5.42 的删除崩溃修复未实机验证**（m10183）：本机无游戏。崩溃点是用自写 PE 解析把栈帧对位到 `MenuUI.cpp` 的 `RenderOutfits` 并复核 `begin` / `end` 的 `size_t` 下溢得出的，不是实机复现。判据是「第 2 页及以后删除不崩 + 删除行之后仍继续渲染」；若仍崩，先看崩溃栈里是否还是 `vector too long`。
 - **1.5.41 的启动崩溃修复未实机验证**（m10014）：本机无游戏，判据是崩溃栈字符串 `resource deadlock would occur` + 自写 PE 解析的帧对位（`MessageHandler` → `Golden::LoadFromDisk` → `Golden::ImportText` → 计数 getter）+ 源码核对；不是实机复现。若实机仍闪退，按 §3.49 的 A1/A3 分流。
 - **1.5.40 的两处修复未实机验证**（m09740）：ESP 列表是否非空、金件页是否还崩、`PluginScan` 四类跳过计数在你环境（890 插件 / 13,909 条槽位护甲）上的分布，全部没在游戏里看过。崩溃点由自写 PE 解析对位到 `RenderGolden` 内的 `snprintf`（读 `0x8`），非实机复现。
 - **1.5.40 的服装判据仍可能漏件**：模型判据现在看男女两人的三/一人称 `bipedModels[sex]` / `bipedModel1stPersons[sex]`，但模型靠运行时附加数据、不用 `TESModel` 的护甲仍会被判「without a model」；是否放宽等实机 `PluginScan:` 统计。

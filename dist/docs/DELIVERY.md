@@ -1,6 +1,21 @@
 # 交付说明（DELIVERY）
 
-## 1.5.41 最新交付准备（2026-11-21）
+## 1.5.42 最新交付准备（2026-11-21）
+
+**验证状态（1.5.42）**：**尚未实机验证**。1.5.41 的启动闪退已在用户实机确认修好（m10183 原话「1.5.41启动游戏时的ctd修复了」），同一版又报出新的崩溃：**删除幻化套装预设时闪退**（m10183）。本版只修这一处越界切片，其余逻辑一行未改。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log`，留档 `build/build_1_5_42.log`）；守卫测试 16 项 PASS（新增 `tests/menu_page_slice.ps1`），另 2 项是已知环境失败（`hair_tint_read_only.ps1` 的锚点已随代码迁移消失、`skse_listener_replay.ps1` 需要现场 `bug/skse64.log`）。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 2,037,760 字节；`b80e5a5348461faf85803c150142f8be4e5225b4a494b07bc94094854f947a73`；`1.5.42.0`（build/Release 与 dist 逐字节一致） |
+| 安装包与复核记录 | SkyrimOutfitSystemNG-1.5.42.zip：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；测试包 SkyrimOutfitSystemNG-1.5.42-test.zip：2 条目（只含 DLL + 说明文本），可直接用 MO2 装；最终 zip 大小/哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256`，包内不自引用 |
+
+- **崩溃：删除幻化套装预设时闪退（m10183）**。崩溃日志 `crash-2026-11-21-05-13-54.log` 的栈顶是 `KERNELBASE.dll+00C933A`，但 `[RSP+188]` 是字符串 `vector too long`、`[RSP+48]` 是 `std::length_error*`、`[RSP+2B0]` / `[RSP+2C0]` 是源文件名与函数名 `SOS::Menu::`anonymous-namespace'::RenderOutfits(void)`，前 6 帧全在 `OutfitSystemNG.dll` ⇒ 是菜单渲染回调里抛出的 `std::length_error` 没有被接住。
+- **真因：删除后列表清空，但分页下标还按删除前的页算**：`RenderOutfits()` 的删除按钮先 `delete_outfit()` 再 `g_filtered.clear();`，随后用 `begin = (g_page - 1) * pageSize`、`end = min(g_filtered.size(), begin + pageSize)` 算本页区间。列表清空后 `end = 0` 而 `begin` 仍大于 0（`g_page` 是按删除前的页数夹的），`end - begin` 以 `size_t` 下溢成接近 `SIZE_MAX`，紧接着 `pageFavorites.assign(end - begin, 0)` / `pageArmorCounts.assign(end - begin, 0)` 抛 `vector too long`。所以只在第 2 页及以后删除才会崩，第 1 页 `begin = 0` 不触发。
+- **修法一：把下标夹进总数**：先把 `const std::size_t total = g_filtered.size();` 取出来，`begin = min(total, max(0, (g_page - 1) * pageSize))`、`end = min(total, begin + pageSize)` ⇒ 任何时刻 `begin <= end <= total` 恒成立，`end - begin` 不可能下溢。
+- **修法二：加守卫测试**：新增 `tests/menu_page_slice.ps1`，断言三行夹紧式存在、旧的不夹紧写法不存在、`g_filtered.clear();` 出现在夹紧之前、翻页循环用 `begin < end`，防止以后被改回去。
+- **本版不动引擎侧**：注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装切换、钩子安装、菜单功能（逐槽策略 / ESP 生成 / 金件）、金件存库锁一行未改（1.5.25 实测正常的基础幻化、1.5.34 已验收的场景切换、1.5.40 的两处修复、1.5.41 的启动崩溃修复都不受影响）。
+
+## 1.5.41 交付准备（历史，启动闪退已由 1.5.42 修）
 
 **验证状态（1.5.41）**：**尚未实机验证**。1.5.40 实机报「启动游戏时直接闪退」（m10014）；本版修这一处崩溃，并加两道兜底，让同类问题以后只会让金件列表变空、不会再关掉游戏。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log`，留档 `build/build_1_5_41.log`）；守卫测试 16 项 PASS（新增 `tests/golden_lock_guards.ps1`），另 2 项是已知环境失败（`hair_tint_read_only.ps1` 锚点已随代码迁移消失、`skse_listener_replay.ps1` 需要 `bug/skse64.log`），不是本版回归。
 
@@ -248,6 +263,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | 「按 ESP 自动生成套装……扫描服装时必须是正常服装，FX 特效，没有 EditorID，各种不算在内。不过金件就不一样了，可以放开按金件的规则来」（m09191③④、m09426） | 生成套装与金件都要按加载顺序列出 ESP 并扫描护甲，但两者对「能不能收」的要求相反：套装只该收能穿的东西，金件是用户自愿指定的任何件。见 §4.63 | 1.5.39 新增 `PluginScan::IsOutfitArmor()`（有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型）用于套装生成，并把 FX 位从分桶剔除；金件路径不调用它，保持全量扫描 |
 | 「"幻化"根据ESP自动生成，点击后压根没有esp列表数据，列表为空」（m09740） | 服装判据只看男性模型，女性服装包全被判成非服装 ⇒ `EspOutfits::PluginsWithArmor()` 的 `outfitArmors == 0` 把列表清空。改为男女都看 + 名字放宽到 `GetEditorID()`/`GetFullName()` 任一，列表按 `entry.armors` 过滤。见 §4.64 |
 | 「"金件"里点击"从ESP自动生成金件"点击后就闪退，金件左侧列表选不中，右侧菜单也不显示」（m09740） | 中文译文占位符顺序与英文相反，`I18n::T()` 结果被当 printf 格式串 ⇒ `%s` 吃到 `size_t` ⇒ AV。改中文串为同序，并在 `I18n::Apply()` 加占位符校验护栏（不一致就回退英文）。见 §4.64 |
+| 「1.5.41启动游戏时的ctd修复了，又出现新的ctd：在删除幻化套装预设时出现了ctd」（m10183） | 删除按钮先清空过滤列表再用删除前的页码算本页区间，`end - begin` 以 `size_t` 下溢 ⇒ `std::vector::assign` 抛 `std::length_error("vector too long")`，异常从菜单渲染回调逃出直接终止游戏；第 1 页删除不触发，只在第 2 页及以后崩。见 §4.66 | 1.5.42 取 `total` 后把 `begin` / `end` 都夹进总数（`begin <= end <= total` 恒成立），并加 `tests/menu_page_slice.ps1` 守卫 |
 ## 4. 本版变更
 
 ### 4.1 移除感知层（Perception）
@@ -1607,13 +1623,59 @@ if (!OnGameThread()) {
 - 崩溃栈的帧对位依赖自写 PE 解析（无 .pdb）：函数区间由 `.pdata` 给出，字符串与调用目标由函数体内 `lea`/`call` 反推，不是符号级调试。
 - 若实机仍闪退，请看新崩溃日志的 `[RSP+…]` 是否还有 `std::system_error`：有 → 还有别的重入锁（把行号发回）；没有 → 是另一条崩溃，另开取证。
 
+## 4.66 1.5.42：删除幻化套装预设时闪退——清空列表后仍用旧页码切片（m10183）
+
+### 症状
+
+- 1.5.41 的启动闪退已经好了（用户实机确认）；同一版**在菜单里删除一套幻化套装预设时闪退**。
+- 只在套装列表**第 2 页及以后**删除才崩；第 1 页删不掉（`begin = 0` 时不会越界）—— 用户表现就是「删预设就崩」。
+
+### 崩溃证据（crash-2026-11-21-05-13-54.log）
+
+- `Unhandled exception at 0x7FF88FC3933A KERNELBASE.dll+00C933A`（`nop [rax+rax*1], eax`），`Exception Flags 0x00000081`，`Exception Thread ID 16272`，`Process Uptime 00:08:39`，Skyrim SSE v1.5.97。
+- `PROBABLE CALL STACK` 前 6 帧全在 `OutfitSystemNG.dll`（`+011678F` ← `+0111422` ← `+0002BA0` ← `+0091885` ← `+008C164`），第 7 帧才进 `SKSEMenuFramework.dll+0110402 UI.cpp:1585 UI::RenderMenuWindow`。
+- **关键**：`[RSP+188]` = `(char*) "vector too long"`、`[RSP+48]` = `(std::length_error*)`、`[RSP+2B0]` = `D:\Skyrim-dev\src\SkyrimOutfitSystemSE-NG\src\cpp\MenuUI.cpp`、`[RSP+2C0]` = `void __cdecl SOS::Menu::`anonymous-namespace'::RenderOutfits(void)`。异常来自 C++ 标准库的 `std::_Xlength_error`，不是引擎访问违例。
+- 没有 .pdb，用自写 PE 解析对位：`.pdata` 4,738 个 `RUNTIME_FUNCTION`；`0x8C164` 落在函数 `0x8B640..0x8DA34`（`+0xB24`）= `RenderOutfits`；`0x11678F` 落在 `0x1166F8..0x11679F`（`+0x97`）；`0x2BA0` 所在小函数里存着字面量 `vector too long`（即 `std::_Xlength_error` 的抛出点）；`0x8C15F` 处是 `call 0x91740`（`std::vector` 的 assign 实现）。
+- 游戏日志末行正是 `13:13:54.409827 MenuUI.cpp:962: Outfits: deleted 'xxOK-Aniimo-Leisurely time': yes.` —— 删除成功、紧接着就崩在同一个渲染函数里。
+
+### 真因
+
+1. `src/cpp/MenuUI.cpp` 的 `RenderOutfits()` 删除按钮（第 958–977 行）先 `delete_outfit(...)`、打日志，然后第 968 行 `g_filtered.clear();` 把过滤结果就地清空。
+2. 紧接着的翻页切片仍按**删除前**的页码算：`begin = (g_page - 1) * pageSize`，`end = min(g_filtered.size(), begin + pageSize)`。`g_page` 是删除前按删除前的页数夹过的，列表清空后 `g_filtered.size() == 0` ⇒ `end = 0` 而 `begin > 0`。
+3. `end - begin` 是无符号减法，`0 - begin` 下溢成接近 `SIZE_MAX`，紧接着 `pageFavorites.assign(end - begin, 0)` / `pageArmorCounts.assign(end - begin, 0)` 抛 `std::length_error("vector too long")`。
+4. 这个异常从菜单渲染回调里展开到 SKSE 菜单框架 → 游戏主循环，CrashLogger 记录在 `KERNELBASE` 终止。
+
+### 修法
+
+1. **切片先夹进总数**（`src/cpp/MenuUI.cpp`）：取出 `const std::size_t total = g_filtered.size();`，然后 `begin = std::min(total, static_cast<std::size_t>(std::max(0, (g_page - 1) * pageSize)))`、`end = std::min(total, begin + static_cast<std::size_t>(pageSize))` ⇒ `begin <= end <= total` 恒成立，`end - begin` 永不下溢。注释写明 m10183 / `crash-2026-11-21-05-13-54` 的来历。
+2. **不放宽 `assign` 本身**：`pageFavorites.assign(...)` / `pageArmorCounts.assign(...)` 保持原样 —— 夹紧后 `begin <= end` 是硬前提，谁把夹紧去掉谁就要自己保证这一点，所以用测试把这层锁住。
+3. **守卫测试**（新增 `tests/menu_page_slice.ps1`）：静态断言「取 `total` 三行夹紧」存在、旧的 `end = std::min(g_filtered.size(), begin + ...)` 写法不存在、`g_filtered.clear();` 出现在夹紧之前、本页循环是 `for (std::size_t i = begin; i < end; ++i)`，输出 `MENU_PAGE_SLICE_OK`。
+
+### 新日志
+
+| 日志 | 含义 |
+| --- | --- |
+| `Outfits: deleted '<名字>': yes.`（info，删除后立即出现） | 删除已经成功；这行之后应当**继续正常渲染**，不再闪退。若后面仍有崩溃日志，说明不是这一处切片。 |
+| `Menu: sections registered` / 正常的 `Outfits: N outfit(s)` 行 | 删完页面要能继续画：本页条数会随着删除立即变化（不会再停在一个空页）。 |
+| 崩溃日志里再出现 `vector too long` + `RenderOutfits` | 说明还有别的 `x - y` 直接喂给 `assign` / `resize`。把这条与栈发回，按同样思路夹紧。 |
+
+### 兼容性
+
+- 只改 `MenuUI.cpp` 里的三行切片算式，另加一个测试文件；`delete_outfit()` 的语义、套装数据、JSON 格式、存档、菜单布局都没变。
+- 引擎侧（注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装切换、钩子安装）与金件存库（1.5.41 的递归锁 + 兜底）一行未改。
+
+### 未验证
+
+- 本机没有 Skyrim：崩溃点是用自写 PE 解析把栈帧对位到 `RenderOutfits` 里的 `assign`，再用源码复核 `begin` / `end` 的下溢路径，**不是实机复现验证**。
+- 请在第 2 页及以后删除一套预设验证；同时建议在第 1 页也删一次，确认没有别的路径碰同一段代码。
+
 ## 5. 静态验证
 
 
 | 项 | 结果 |
 | --- | --- |
-| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.41 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_41.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
-| 版本资源 | `FileVersion = 1.5.41.0` / `ProductVersion = 1.5.41.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
+| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.42 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_42.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
+| 版本资源 | `FileVersion = 1.5.42.0` / `ProductVersion = 1.5.42.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
 | 导入表 | 仅 KERNEL32 / USER32 / ole32 / VERSION / SHELL32 |
 | 延迟导入 | 目录 RVA = 0、size = 0（无延迟导入项） |
 | 导出 | SKSEPlugin_Load / SKSEPlugin_Query / SKSEPlugin_Version 均存在 |
@@ -1633,6 +1695,7 @@ if (!OnGameThread()) {
 | 1.5.34 关键字符串 | `handed to the game thread` / `came from thread` / `there is no task interface` / `scene started;` / `scene ended;` / `setOutfitByName` / `1.5.34` 可检索；1.5.33 的丢弃行 `arrived off the game thread` **已从 DLL 中消失**，1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 仍全部不存在；`FileVersion = 1.5.34.0`、`ProductVersion = 1.5.34.0`（PowerShell `VersionInfo` 实测）；DLL 1,937,408 字节，sha256 `e1cdb9518149d0e1f7a23d1835317620b8258c1e030d6d987b658e4718283782`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist || 1.5.40 关键字符串 | `count as clothing` / `does not use the placeholders` / `were ignored because their placeholders` / `已添加 %zu 件，来自 %s。` / `已导入 %zu 件，来源 %s` 可检索；旧错串 `已添加 %s 的 %zu 件` / `已从 %s 导入 %zu 件` 已 **0 命中**；`FileVersion = 1.5.40.0`、`ProductVersion = 1.5.40.0`（PowerShell `VersionInfo` 实测）；DLL 2,036,224 字节，sha256 `95c2b38848bf3d3f2a0577f2b611b8cbc06c7ad76f653674eb89fbcb5a5618bf`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.39 关键字符串 | `OutfitSystemGoldenItems.json` / `ESP outfits: ` / `wearable clothing` / `FX effects and other non clothing records were left out` / `skipped as not clothing` / `Golden items: ` / `PluginScan: ` / `1.5.39` 可检索；`FileVersion = 1.5.39.0`、`ProductVersion = 1.5.39.0`（PowerShell `VersionInfo` 实测）；DLL 2,030,592 字节，sha256 `c72a60a6f4a400bbb4cf06a9b2e1c81a86baca487fbf901119e264421aee83da`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增（只多用 `GetFormArray` / `GetLoadedLightMods` 等 SKSE+引擎既有接口）；1.5.34 的 `handed to the game thread` / `scene started;` 与 1.5.30/31 已删机件仍保持原状态 |
 | 1.5.41 关键字符串 | `the golden list stays empty for this session` / `an exception escaped` / `count as clothing` / `does not use the placeholders` / `resource deadlock would occur`（MSVC 运行库串） / `1.5.41` 可检索；`TotalCountLocked` 因 Release 内联不出现在字符串表（属正常）；`FileVersion = 1.5.41.0`、`ProductVersion = 1.5.41.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,037,760 字节，sha256 `39f6b65e…fd967ad0`；导入依赖未新增 |
+| 1.5.42 关键字符串 | `Outfits: deleted ` / `Menu: sections registered` 可检索；本版是算式修正，DLL 内不新增独特日志串，判据是「删除后不再崩」；`FileVersion = 1.5.42.0`、`ProductVersion = 1.5.42.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,037,760 字节，sha256 `b80e5a53…4f947a73`；导入依赖未新增 |
 | 1.5.40 关键字符串 | `count as clothing` / `does not use the placeholders` / `were ignored because their placeholders` / `已添加 %zu 件，来自 %s` / `已导入 %zu 件，来源 %s` / `1.5.40` 可检索；1.5.39 的两条错序中文串（`已添加 %s 的 %zu 件。` / `已从 %s 导入 %zu 件`）**已从 DLL 中消失**；`FileVersion = 1.5.40.0`；DLL 大小 2,036,224 字节，sha256 `95c2b388…a5618bf` |
 | 1.5.29 关键字符串 | `detached ` / `illusion clone(s) whose slot left the display set` / `lost the illusion in slot mask` / `after 3 rebuilds` / `rebuilding the actor` / `left to the engine` 可检索；`ClearBipedPart` 与 `IllusionMissingSlots` 作为内部符号不出现在字符串表（前者只剩一处调用）；FileVersion 1.5.29.0、DLL 1,936,384 B / `4f0bcae1…`、导入依赖未新增 |
 | 1.5.27 关键字符串 | `uses .tri ` / `has no .tri beside it` / `Probed: ` / `the armour addon the engine attached` / `has no armour addon yet` / `leaving the clones to the next morph pass instead of cycling` / `but the illusion carries .tri targets` / `every illusion clone whose armour model ships a .tri` / `1.5.27` 均可检索；1.5.26 的 `.tri morph targets are attached to every illusion clone` 已从 DLL 中消失；`carries a .tri morph target on` / `stay armed` / `BODYTRI` / `MorphShapeCallback` 仍在；`FileVersion = 1.5.27.0`、`ProductVersion = 1.5.27.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,875,456 字节，sha256 `22eb7794…a91af178f`；导入依赖未新增 |
@@ -1723,7 +1786,10 @@ if (!OnGameThread()) {
 
 58. **1.5.41 启动闪退（对应 m10014）**：①直接启动游戏，**不应闪退**，能进到主菜单并读到存档；②进日志搜 `Golden items:` —— 应看到 `Golden items: N entr(ies) loaded from …`（正常）或 `Golden items: the store could not be loaded (…); the golden list stays empty for this session.`（兜底，把该行进回）；③搜 `Message handler: an exception escaped`，应为 **0 条**（有则说明还有别的抛点，把整行与前 30 行发回）；④再进金件页确认 1.5.40 修的两处仍正常（ESP 列表非空、点「Add every piece of a plugin」不崩）。见 §4.65 与 TESTING §3.49。
 
+59. **1.5.42 删除幻化套装预设不再闪退（对应 m10183）**：①进菜单 → 幻化栏，把套装列表**翻到第 2 页（或更后面）**；②选中一套自己建的预设，点删除 —— **不应闪退**，页面应立即重画、条数少一条；③再去第 1 页删一次做对照。日志判定：删除后应有 `Outfits: deleted '<名字>': yes.`，且其后**继续出现正常的渲染/菜单行**（不再有崩溃日志）。若又崩，把崩溃日志里 `RenderOutfits` 那几帧与 `[RSP+188]` 的字符串发回。
+
 ## 7. 已知限制
+- **1.5.42 的删除崩溃修复未实机验证**：本机没有游戏。崩溃点是用自写 PE 解析把栈帧对位到 `MenuUI.cpp` 的 `RenderOutfits`（`0x8C164` → 函数 `0x8B640..0x8DA34`）并复核 `begin` / `end` 的 `size_t` 下溢路径得出的，不是实机复现。若仍崩，先看崩溃栈里是否还是 `vector too long` —— 是则还有别的切片，否就是另一处问题。
 - **1.5.41 的启动崩溃修复未实机验证**：本机无游戏，判据是崩溃栈字符串（`resource deadlock would occur`）+ PE 帧对位（`MessageHandler` → `Golden::LoadFromDisk` → `Golden::ImportText`）+ 源码核对（`ImportText` 持锁后调 `TotalCount()`）。若实机仍崩，按 §8 的两条 critical 行分流。
 - **1.5.40 的两处修复全部未实机验证**：本机没有游戏，静态侧只有 `BUILD_EXIT=0`（0 error / 0 warning）与 15 项守卫测试 PASS。ESP 列表内容、金件增删、崩溃是否真的消失都还没人看过；崩溃点是用自写 PE 解析对位到 `RenderGolden` 里的 `snprintf`，不是实机复现验证。
 - **服装判据仍可能漏件**：现在要求「有 EditorID 或 FullName」+「至少一个非 FX 槽位」+「至少一个 armor addon 在男性或女性的三/一人称模型里有模型名」。用脚本在运行时拼出来、模型靠附加数据而非 `bipedModels` 的护甲仍会被判成「非服装」，表现为 `X without a model` 计数偏大 —— 请把 `PluginScan:` 那行统计发回再决定是否放宽。
@@ -1912,6 +1978,8 @@ if (!OnGameThread()) {
 | `Golden items: the store could not be loaded (…); the golden list stays empty for this session.`（critical） | **1.5.41 新增兜底**：金件库读失败，本会话金件为空但游戏能进。把这行发回（多半是 JSON 坏了或文件被占用）。 |
 | `Message handler: an exception escaped (…); the rest of this message is skipped.`（critical） | **1.5.41 新增兜底**：某个 SKSE 消息阶段抛异常已被接住。应为 0 条；出现就把整行与前后 30 行发回。 |
 
+| `Outfits: deleted '<名字>': yes.`（info，1.5.42） | **1.5.42**：删除成功的权威行。这行之后页面必须继续正常渲染 —— 1.5.41 及更早会在这里紧跟着闪退（`std::length_error` / `vector too long`，栈里有 `RenderOutfits`）。 |
+| 崩溃日志出现 `vector too long` + `RenderOutfits` | 又有一处「`x - y` 直接喂 `assign` / `resize`」。把栈与 `[RSP+188]` 字符串发回；修法与 1.5.42 相同：先取 `total`，`begin` / `end` 都先 `min` 到 `total`。 |
 ## 9. 维护提示
 - **「能不能收」的规则分两条路，不许合并**（m09426）：幻化用的套装生成只收正常服装 —— 走 `PluginScan::IsOutfitArmor()`（有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型），并且分桶时用 `mask & ~kFxBit`；金件是用户自愿指定的任何记录，`Golden::AddAllFromPlugin()` / `AddLocal()` **不调用** `IsOutfitArmor()`。以后新增任何「按 ESP 批量收件」的入口，先想清楚它属于哪条路，不要图省事复用同一个过滤函数。
 - 逐槽策略编辑器的展开状态是 **UI 状态、按套装名分开存**（`MenuOutfitEditor.cpp` 的 `g_slotPolicyOpen`），不是套装数据；它不进 JSON、不能影响别的套装，也不能拿它当「这套装了逐槽策略」的判据（判据是 `slotPolicies` 非空）。
@@ -1941,3 +2009,4 @@ if (!OnGameThread()) {
 - **「能不能列出来」与「能不能收进来」是两层**（1.5.40）：ESP 列表用 `PluginScan::PluginsWithArmor()`（任何槽位护甲都列），逐件是否收进套装才用 `IsOutfitArmor()`。别再用服装计数去过滤列表 —— 1.5.39 就是那样把列表清空的。
 - **同线程重入加锁一律用 `std::recursive_mutex`，并且持锁代码不许调加锁 getter**（1.5.40→1.5.41 的教训）：MSVC 的 `std::mutex` 重入**会抛 `std::system_error("resource deadlock would occur")`**，不是死等 —— 在 SKSE 回调里没人接就是直接闪退，而且崩溃日志只有一行 `KERNELBASE.dll`，看不出是我们。写法规定：持锁路径内部一律调 `…Locked()` 系列（如 `TotalCountLocked()`），公共 getter 只给外部用。
 - **任何在 SKSE 回调里跑的代码都不许让异常逃出去**：`kDataLoaded` / 消息处理器 / 事件 sink 里调用会读文件、解析 JSON、加锁、算几何的部分，一律 `try / catch(std::exception) / catch(...)` 包住并打 critical 日志。异常逃出回调的代价是整局游戏退出，而一次兜底只是「这个功能这次不生效」。
+- **任何 `x - y` 都不许直接喂 `assign` / `resize` / 指针算术**（1.5.42 的教训）：菜单里的切片来源常是「上次算的下标 + 这次刚算的总数」，中间只要有一次删除 / 过滤 / 新建把总数改小，无符号减法就会下溢成天文数字，抛 `std::length_error` 并把游戏带走。规矩是**先取当前总数**，把上下界都 `min` 到总数（`begin <= end <= total`），再算差值；任何「我先按老状态算好区间，再改数据」的写法都要重新审一遍。

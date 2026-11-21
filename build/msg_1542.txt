@@ -1,0 +1,12 @@
+1.5.42: clamp the outfit list page slice so deleting a preset cannot crash
+
+The menu computed the page slice from the page number of the pre-delete list.
+After g_filtered.clear() the end index became 0 while begin was still above 0,
+so end - begin underflowed in size_t and std::vector::assign threw
+std::length_error("vector too long"). Nothing caught it inside the menu render
+callback, so the game was terminated (crash-2026-11-21-05-13-54). Page 1 never
+triggered it because begin was 0 there.
+
+Take the current total first, clamp begin and end into it, and guard the shape
+with tests/menu_page_slice.ps1. The engine side and the golden items store are
+untouched.

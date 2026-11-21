@@ -1,5 +1,18 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.42] - 2026-11-21
+
+### 修：删除幻化套装预设时闪退（m10183）
+
+- **用户原话**：「1.5.41启动游戏时的ctd修复了，又出现新的ctd：在删除幻化套装预设时出现了ctd。」
+- **症状**：菜单里的幻化套装列表，在第 2 页及以后删除一套预设就闪退；第 1 页删除没事。
+- **崩溃证据**（`crash-2026-11-21-05-13-54.log`）：`Unhandled exception at 0x7FF88FC3933A KERNELBASE.dll+00C933A`，线程 16272，`Process Uptime 00:08:39`；`[RSP+188]` = `(char*) "vector too long"`、`[RSP+48]` = `(std::length_error*)`、`[RSP+2B0]` = `src\cpp\MenuUI.cpp`、`[RSP+2C0]` = `void __cdecl SOS::Menu::`anonymous-namespace'::RenderOutfits(void)`；前 6 帧全在 `OutfitSystemNG.dll`，第 7 帧才是 `SKSEMenuFramework.dll+0110402 UI.cpp:1585 UI::RenderMenuWindow`。
+- **定位手法**：无 .pdb / dumpbin，用自写 PE 解析 —— `.pdata` 的 4,738 个 `RUNTIME_FUNCTION` 把 `0x8C164` 落到 `0x8B640..0x8DA34`（`+0xB24`）= `RenderOutfits`、把 `0x2BA0` 落到存有 `vector too long` 的小函数（`std::_Xlength_error` 抛出点），`0x8C15F` 处是 `call 0x91740`（`std::vector` 的 assign）。
+- **真因**：`RenderOutfits()` 删除按钮先 `delete_outfit(...)` 再 `g_filtered.clear();`（第 968 行），紧接着仍按**删除前**的页码算本页区间：`begin = (g_page - 1) * pageSize`、`end = min(g_filtered.size(), begin + pageSize)`。列表清空后 `end = 0` 而 `begin > 0`，`end - begin` 以 `size_t` 下溢成接近 `SIZE_MAX`，`pageFavorites.assign(end - begin, 0)` / `pageArmorCounts.assign(end - begin, 0)` 抛 `std::length_error("vector too long")`；异常在菜单渲染回调里没人接，展开到游戏主循环 → 闪退。第 1 页 `begin = 0` 所以不崩。
+- **修法一**：先取 `const std::size_t total = g_filtered.size();`，再 `begin = std::min(total, static_cast<std::size_t>(std::max(0, (g_page - 1) * pageSize)))`、`end = std::min(total, begin + static_cast<std::size_t>(pageSize))` ⇒ `begin <= end <= total` 恒成立。
+- **修法二**：`assign` 本身不放宽（夹紧是硬前提），新增 `tests/menu_page_slice.ps1` 静态断言三行夹紧存在、旧写法不存在、`g_filtered.clear();` 在夹紧之前、本页循环是 `begin < end`。
+- **未改动**：引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装切换 / 钩子安装）与金件存库（1.5.41 的递归锁 + 兜底）一行未改。
+- **未验证**：本机无游戏；崩溃点由 PE 帧对位 + 源码复核得出，不是实机复现。
 ## [1.5.41] - 2026-11-21
 
 ### 修：启动即闪退——金件存库锁的自死锁（m10014）

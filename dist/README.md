@@ -4,7 +4,14 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-## 1.5.41 最新说明（2026-11-21）
+## 1.5.42 最新说明（2026-11-21）
+
+- **修：删除幻化套装预设时闪退**（m10183）。1.5.41 的启动闪退已经好了；同一版在新问题上崩：菜单里把套装列表翻到第 2 页及以后、删掉一套预设就闪退（第 1 页删除不触发）。
+- **原因**：删除按钮先把套装删掉、把过滤列表清空（`g_filtered.clear();`），紧接着仍按**删除前**的页码算本页区间 —— `end` 变成 0 而 `begin` 还大于 0，`end - begin` 是无符号减法，下溢成接近 `SIZE_MAX`，`pageFavorites.assign(...)` / `pageArmorCounts.assign(...)` 抛 `std::length_error("vector too long")`，异常从菜单渲染回调逃出直接终止游戏。
+- **修法**：先取当前总数 `total`，把 `begin` / `end` 都夹进 `total`（`begin <= end <= total` 恒成立），再算区间；另加 `tests/menu_page_slice.ps1` 把这条夹紧锁住，防止以后被改回去。
+- **未改动**：引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装切换 / 钩子安装）与金件存库（1.5.41 的递归锁 + 两处兜底）一行未改；1.5.25 实测正常的基础幻化、1.5.34 已验收的场景切换都不受影响。
+- **未验证**：本机没有游戏，崩溃点由自写 PE 解析把栈帧对位到 `MenuUI.cpp` 的 `RenderOutfits` 并复核 `size_t` 下溢路径得出，不是实机复现。删除后应看到 `Outfits: deleted '<名字>': yes.` 且页面继续正常渲染。
+## 1.5.41 最新说明（2026-11-21，历史，启动闪退已由 1.5.42 修）
 
 修 1.5.40 的**启动即闪退**（m10014），**引擎侧与菜单功能一行未改**。
 
@@ -239,6 +246,7 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 49. **1.5.39**：菜单三件（m09191 / m09426）—— ①逐槽策略编辑器展开状态改按套装名保存（旧全局布尔删掉），只展开被选中的那套；②新增「从 ESP 生成套装」（`src/core/PluginScan.*` 建加载顺序视图 + `src/core/EspOutfits.*` 按 32 槽分桶生成 `<名称>` / `<名称>_1`…，槽位策略统一「需要已装备」，可选自动收藏）；③新增「金件」页（`src/core/GoldenItems.*`，独立 JSON、左组右件、可增删、支持从 ESP 全量添加与按 FormID 添加单件）。**服装过滤只用于套装生成**：`PluginScan::IsOutfitArmor()` = 有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型，分桶剔除 `kFxBit`；**金件不做这个过滤**（FX、无 EditorID 的件都能加）。引擎侧零改动。详见顶部最新说明与 `docs/DELIVERY.md` §4.63。
 50. **1.5.40**（2026-11-21）：修 1.5.39 两处回归 —— ESP 列表为空（服装判据只看男性模型 + 列表按服装计数过滤）、金件页闪退（中英占位符顺序不一致被当 printf 格式串）；新增 `I18n` 占位符运行时护栏与 `PluginScan` 统计行。
 51. **1.5.41**（2026-11-21）：修 1.5.40 的启动即闪退 —— 金件库 `std::mutex` 在同线程被重入加锁（`ImportText` 持锁后调 `TotalCount`），MSVC 抛 `std::system_error("resource deadlock would occur")` 且异常逃出 SKSE 回调；改递归锁 + `TotalCountLocked()`，并给启动加载与消息回调各加一道 try/catch 兜底。
+52. **1.5.42**（2026-11-21）：修 1.5.41 报出的新崩溃 —— 删除幻化套装预设时闪退（m10183）。菜单分页切片在删除后仍用旧页码：`g_filtered.clear()` 后 `end = 0` 而 `begin > 0`，`end - begin` 的 `size_t` 下溢让 `std::vector::assign` 抛 `std::length_error("vector too long")`，异常逃出渲染回调把游戏带走。修法是先取 `total`、把 `begin` / `end` 都 `min` 到 `total`，并加 `tests/menu_page_slice.ps1` 守卫。引擎侧与金件存库零改动。
 
 
 ## 常见问题

@@ -976,8 +976,15 @@ namespace SOS::Menu
 				IG::Separator();
 			}
 
-			const std::size_t begin = static_cast<std::size_t>(std::max(0, (g_page - 1) * pageSize));
-			const std::size_t end = std::min(g_filtered.size(), begin + static_cast<std::size_t>(pageSize));
+			// A delete empties g_filtered inside this same frame (the handler below
+			// calls g_filtered.clear()) while g_page still points at the page the
+			// list had before it shrank. end - begin then wraps to SIZE_MAX and
+			// vector::assign throws std::length_error("vector too long"), which
+			// escaped the menu render callback and closed the game (m10183, crash
+			// 2026-11-21-05-13-54, KERNELBASE raise from inside RenderOutfits).
+			const std::size_t total = g_filtered.size();
+			const std::size_t begin = std::min(total, static_cast<std::size_t>(std::max(0, (g_page - 1) * pageSize)));
+			const std::size_t end = std::min(total, begin + static_cast<std::size_t>(pageSize));
 
 			auto* target = TargetActor();
 			std::string wornName;

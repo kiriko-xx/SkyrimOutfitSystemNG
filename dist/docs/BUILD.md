@@ -1,6 +1,14 @@
 # 构建说明（BUILD）
 
-## 1.5.41 构建与交付复核状态
+## 1.5.42 构建与交付复核状态
+
+**验证状态（1.5.42）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_42.log`，末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。守卫测试 16 项 PASS（新增 `tests/menu_page_slice.ps1`），另 2 项是既有环境失败（`hair_tint_read_only.ps1` 锚点已随代码迁移消失、`skse_listener_replay.ps1` 需要现场 `bug/skse64.log`）。
+
+- **本版改动面（只修删除套装闪退）**：`src/cpp/MenuUI.cpp` 的 `RenderOutfits()` —— 取页切片前先 `const std::size_t total = g_filtered.size();`，`begin = min(total, max(0, (g_page - 1) * pageSize))`、`end = min(total, begin + pageSize)`；`src/cpp/include/version.h` PATCH 42；`CMakeLists.txt` VERSION 1.5.42；新增 `tests/menu_page_slice.ps1`。引擎侧（注入壳 / 贴件 / 槽清理 / `.tri` / 场景套装 / 钩子）与金件存库一行未改。
+- **构建后必查**：`git diff v1.5.41 HEAD -- src` 应只有 `MenuUI.cpp` + `version.h`（外加 `CMakeLists.txt` 与 `tests/`），`MorphRefresh.cpp` / `SceneOutfits.cpp` / `Patches.cpp` / `GoldenItems.cpp` 必须是空 diff；DLL 版本资源应为 `1.5.42.0`。
+- **守卫测试跑法**：`C:/Program Files/PowerShell/7/pwsh.exe -NoProfile -File tests/menu_page_slice.ps1`（必须 pwsh 7；PS 5.1 的 `String.Split(string)` 会退化成按字符拆分导致假失败）。
+- **交付两种包**：①全量包 `SkyrimOutfitSystemNG-1.5.42.zip`（`build/pack_1_5_42.ps1`，31 条目，dist 全量 + `SHA256SUMS.txt`）；②测试包 `SkyrimOutfitSystemNG-1.5.42-test.zip`（`build/pack_1_5_42_test.ps1`，2 条目：`SKSE/Plugins/OutfitSystemNG.dll` + 说明文本），可直接用 MO2 安装。
+## 1.5.41 构建与交付复核状态（历史，启动闪退已由 1.5.42 修）
 
 **验证状态（1.5.41）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_41.log`，末尾 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。DLL `OutfitSystemNG.dll` 2,037,760 字节 / `39f6b65e…fd967ad0` / `1.5.41.0`。
 
@@ -173,7 +181,7 @@ schtasks /run /tn SOSNG
 
 ## 8. 打包
 
-> **当前版本（1.5.39）用封装好的脚本**：`build/pack_1_5_39.ps1`（由上一版脚本改版本号），直接 `C:/Program Files/PowerShell/7/pwsh.exe -NoProfile -File build/pack_1_5_39.ps1` 即可 —— 它会重算 `dist/SHA256SUMS.txt`、用 `[IO.Compression.ZipFile]` 逐条正斜杠 `CreateEntry` 压包、回读校验条目数与逐文件哈希、最后打印 `ZipBytes` / `ZipSHA256` / `EntriesVerified` / `ManifestVerified` / `DistBytes`。下面这段是 1.5.27 的原始记录，步骤等价，仅作参考（包名按当前版本替换）。
+> **当前版本（1.5.42）用封装好的脚本**：`build/pack_1_5_42.ps1`（由上一版脚本改版本号），直接 `C:/Program Files/PowerShell/7/pwsh.exe -NoProfile -File build/pack_1_5_42.ps1` 即可 —— 它会重算 `dist/SHA256SUMS.txt`、用 `[IO.Compression.ZipFile]` 逐条正斜杠 `CreateEntry` 压包、回读校验条目数与逐文件哈希、最后打印 `ZipBytes` / `ZipSHA256` / `EntriesVerified` / `ManifestVerified` / `DistBytes`。下面这段是 1.5.27 的原始记录，步骤等价，仅作参考（包名按当前版本替换）。
 
 ```powershell
 Remove-Item SkyrimOutfitSystemNG-1.5.27.zip -ErrorAction SilentlyContinue

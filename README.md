@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.41**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只修 1.5.40 的**启动即闪退**（m10014）：金件存库锁是普通 `std::mutex`，而导入路径持锁后又调用了会再次加锁的 `TotalCount()`，同线程二次加锁时 MSVC 抛 `std::system_error("resource deadlock would occur")`，异常在 SKSE 消息回调里没人接 ⇒ 每次启动必崩（1.5.39 崩溃前已写出 `OutfitSystemGoldenItems.json`）。修法：锁改 `std::recursive_mutex`、持锁路径改用不自锁的 `TotalCountLocked()`、启动加载与消息回调各加一道 try/catch 兜底（失败只让金件列表为空）。引擎侧与菜单功能一行未改。测试包 `SkyrimOutfitSystemNG-1.5.41-test.zip` 只含 DLL，可直接用 MO2 装上替换。
+- 当前版本：**1.5.42**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只修 1.5.41 报出的新崩溃 —— **删除幻化套装预设时闪退**（m10183）：菜单分页切片在删除后仍按旧页码算，`g_filtered.clear()` 之后 `end = 0` 而 `begin > 0`，`end - begin` 的 `size_t` 下溢让 `std::vector::assign` 抛 `std::length_error("vector too long")`，异常逃出菜单渲染回调直接终止游戏（第 1 页删除不触发）。修法是先取 `total`、把 `begin` / `end` 都夹进 `total`，并加 `tests/menu_page_slice.ps1` 守卫；引擎侧（1.5.25 基础幻化、1.5.34 场景套装）与金件存库（1.5.41 的递归锁与兜底）一行未改。1.5.41 的启动闪退已由用户实机确认修好。
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 
