@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.39**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只动菜单与扫描层：①逐槽策略编辑器的展开状态改按套装名保存（旧全局布尔会让所有套装的策略面板一起展开，m09191②）；②新增「从 ESP 生成套装」——按加载顺序倒序列出 ESP，扫描该 ESP 的护甲生成 `<ESP名称>` / `<ESP名称>_1`…，槽位策略统一「需要已装备」，可选自动收藏（m09191③）；③新增「金件」页——独立 `OutfitSystemGoldenItems.json`、左组右件、可从 ESP 全量添加或按 FormID 添加单件（m09191④）。**套装生成只收正常服装**（`PluginScan::IsOutfitArmor()`：有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型，分桶剔除 FX 位），**金件不做这个过滤**（m09426）。钩子层 / 贴件语义 / 槽清理 / `.tri` 推导 / `SceneOutfits` 一行未改。详见 `dist/docs/DELIVERY.md` §4.63 与 `VERSIONS.md`）
+- 当前版本：**1.5.40**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只修 1.5.39 实机报出的两处菜单回归（m09740），引擎侧一行未改：①「幻化」页点「Choose a plugin...」ESP 列表为空 —— 服装判据只查男性模型、列表又按服装计数过滤，女性服装包全被滤掉；现在判据同时看男女（`bipedModels[sex]` / `bipedModel1stPersons[sex]`），名字放宽为 `GetFormEditorID()` 或 `GetFullName()` 任一非空，列表改按 `entry.armors` 过滤；②「金件」页「Add every piece of a plugin」必闪退 —— 中文译文占位符顺序与英文相反，而 `I18n::T()` 的结果被当 printf 格式串，`%s` 吃到 `size_t` 当指针；两处中文串已改为同序，并在 `I18n::Apply()` 增加占位符校验护栏（不一致就忽略该条并回退英文）。测试包 `SkyrimOutfitSystemNG-1.5.40-test.zip` 只含 DLL，可直接用 MO2 装上替换。
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 

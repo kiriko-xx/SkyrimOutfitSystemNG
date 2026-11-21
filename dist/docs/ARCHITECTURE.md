@@ -186,6 +186,7 @@ for slot in 0..31:
 - 翻译：所有界面文案经 `IG::` 包装走 `I18n::Tr`，可被外置 txt 覆盖；左侧树节点标题在注册时生成，切语言需重启（`Register()` 里用 `I18n::Tr` 拼路径）。
 - 1000+ 套装的性能策略：只在“名字数量 / 搜索串 / 收藏过滤”签名变化时重建过滤结果；绘制只遍历当前页（默认 50 条）。
 
+24. **1.5.40：菜单两处回归的修复（不属于引擎侧）**。①`PluginScan::IsOutfitArmor()` 改为 `Verdict() == OutfitVerdict::kWearable`：名字判据 `GetFormEditorID()` 或 `GetFullName()` 任一非空，模型判据同时看 `RE::SEXES::kMale` / `kFemale` 的 `bipedModels[sex]` 与 `bipedModel1stPersons[sex]`（1.5.39 只查男性 ⇒ 女性服装包全被判非服装 ⇒ 幻化页 ESP 列表为空）；`CollectArmors` 结束时打一行 `count as clothing (… unnamed / … FX only / … without an addon / … without a model)`。②`EspOutfits::PluginsWithArmor()` 的列表过滤从 `entry.outfitArmors == 0` 改为 `entry.armors == 0` —— 「能不能列出来」与「能不能收进来」分开：列表只要求该 ESP 有槽位护甲，逐件是否收进套装仍走 `IsOutfitArmor()`。③`I18n` 增加 `PlaceholderSignature()` / `PlaceholdersMatch()`，`Apply()` 对 `kDictionary` 与翻译文件每条都校验占位符序列，不一致则忽略该条并回退英文（1.5.39 的中文译文把 `%zu`/`%s` 换了顺序，而 `I18n::T()` 的返回被当 printf 格式串，`%s` 吃到 `size_t` ⇒ `strlen(0x8)` ⇒ AV at `OutfitSystemNG.dll+0125E41`）。
 ## 8. 输入
 
 `NGHotkeys` 注册 `BSTEventSink<RE::InputEvent*>`，注意 NG 的签名是 `ProcessEvent(RE::InputEvent* const* a_event, BSTEventSource<RE::InputEvent*>*)`（二级指针）。按键用 DIK 扫描码（`BSKeyboardDevice::Key`），组合键用 `GetAsyncKeyState` 查修饰键，按下沿只触发一次（按住不会连发）。

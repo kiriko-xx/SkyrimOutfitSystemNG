@@ -1853,7 +1853,7 @@ namespace SOS::Menu
 				const bool ok = Golden::LoadFromDisk();
 				if (ok) {
 					char text[512]{};
-					std::snprintf(text, sizeof(text), I18n::T("Imported %zu piece(s) from %s", "已从 %s 导入 %zu 件"), Golden::TotalCount(), Golden::JsonPath().c_str());
+					std::snprintf(text, sizeof(text), I18n::T("Imported %zu piece(s) from %s", "已导入 %zu 件，来源 %s"), Golden::TotalCount(), Golden::JsonPath().c_str());
 					g_goldenStatus = text;
 				} else {
 					g_goldenStatus = I18n::T("The golden item file could not be read; see the log.", "金件文件读不出来，详见日志。");
@@ -1889,7 +1889,7 @@ namespace SOS::Menu
 								g_goldenSelected = it->name;
 								{
 					char text[512]{};
-					std::snprintf(text, sizeof(text), I18n::T("%zu piece(s) of %s added.", "已添加 %s 的 %zu 件。"), added, it->name.c_str());
+					std::snprintf(text, sizeof(text), I18n::T("%zu piece(s) of %s added.", "已添加 %zu 件，来自 %s。"), added, it->name.c_str());
 					g_goldenStatus = text;
 				}
 								RE::SendHUDMessage::ShowHUDMessage(g_goldenStatus.c_str(), nullptr, false);

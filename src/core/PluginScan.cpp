@@ -35,6 +35,61 @@ namespace SOS::PluginScan
 		std::mutex                   g_indexMutex;
 		std::shared_ptr<const Index> g_index;
 
+		enum class OutfitVerdict
+		{
+			kWearable,
+			kUnnamed,
+			kFxOnly,
+			kNoAddon,
+			kNoModel,
+		};
+
+		// Why a slot armour record does or does not count as ordinary clothing.
+		// Split out from IsOutfitArmor so the scan can report the reasons instead
+		// of leaving an empty list unexplained.
+		OutfitVerdict Verdict(const RE::TESObjectARMO* a_armor)
+		{
+			if (!a_armor) {
+				return OutfitVerdict::kUnnamed;
+			}
+			// A record the menu cannot name is unusable: a generated outfit built
+			// from "unnamed record" tells the user nothing. Either the editor id
+			// or the display name is enough; 1.5.39 only accepted the editor id.
+			const char* editorId = a_armor->GetFormEditorID();
+			const char* fullName = a_armor->GetFullName();
+			const bool  named = (editorId && editorId[0] != '\0') || (fullName && fullName[0] != '\0');
+			if (!named) {
+				return OutfitVerdict::kUnnamed;
+			}
+			constexpr std::uint32_t kFxBit = 1u << 31;
+			const auto              mask = a_armor->GetSlotMask().underlying();
+			if ((mask & ~kFxBit) == 0) {
+				return OutfitVerdict::kFxOnly;
+			}
+			if (a_armor->armorAddons.size() == 0) {
+				return OutfitVerdict::kNoAddon;
+			}
+			// Female only clothing packs are the norm, so both sexes count. 1.5.39
+			// only looked at the male model, judged the whole load order as "not
+			// clothing" and left the plugin picker empty.
+			for (const auto* addon : a_armor->armorAddons) {
+				if (!addon) {
+					continue;
+				}
+				for (const auto sex : { RE::SEXES::kMale, RE::SEXES::kFemale }) {
+					const char* third = addon->bipedModels[sex].GetModel();
+					if (third && third[0] != '\0') {
+						return OutfitVerdict::kWearable;
+					}
+					const char* first = addon->bipedModel1stPersons[sex].GetModel();
+					if (first && first[0] != '\0') {
+						return OutfitVerdict::kWearable;
+					}
+				}
+			}
+			return OutfitVerdict::kNoModel;
+		}
+
 		void CollectPlugins(Index& a_index, RE::TESDataHandler& a_handler)
 		{
 			std::uint32_t order = 0;
@@ -95,6 +150,27 @@ namespace SOS::PluginScan
 				a_index.armors[LowerCopy(owner)].push_back(armor);
 			}
 			SKSE::log::debug("PluginScan: {} plugins loaded, {} slot armour record(s) indexed.", a_index.plugins.size(), a_index.all.size());
+			std::size_t wearable = 0;
+			std::size_t unnamed = 0;
+			std::size_t fxOnly = 0;
+			std::size_t noAddon = 0;
+			std::size_t noModel = 0;
+			std::size_t withArmor = 0;
+			for (const auto& [key, list] : a_index.armors) {
+				if (!list.empty()) {
+					++withArmor;
+				}
+			}
+			for (const auto* armor : a_index.all) {
+				switch (Verdict(armor)) {
+				case OutfitVerdict::kWearable: ++wearable; break;
+				case OutfitVerdict::kUnnamed: ++unnamed; break;
+				case OutfitVerdict::kFxOnly: ++fxOnly; break;
+				case OutfitVerdict::kNoAddon: ++noAddon; break;
+				case OutfitVerdict::kNoModel: ++noModel; break;
+				}
+			}
+			SKSE::log::info("PluginScan: {} of {} slot armour record(s) count as clothing ({} unnamed, {} FX only, {} without an addon, {} without a model); {} plugin(s) carry slot armour.", wearable, a_index.all.size(), unnamed, fxOnly, noAddon, noModel, withArmor);
 		}
 
 		std::shared_ptr<const Index> EnsureIndex()
@@ -165,41 +241,7 @@ namespace SOS::PluginScan
 
 	bool IsOutfitArmor(const RE::TESObjectARMO* a_armor)
 	{
-		if (!a_armor) {
-			return false;
-		}
-		// Unnamed records are patch stubs or placeholders; a generated outfit
-		// full of them is unusable because nothing in the menu identifies them.
-		const char* editorId = a_armor->GetFormEditorID();
-		if (!editorId || editorId[0] == '\0') {
-			return false;
-		}
-		// The FX slot is a visual effect channel (magic shader, glow mesh); it is
-		// never clothing. A record that only covers FX is dropped, one that
-		// covers FX next to real slots stays.
-		constexpr std::uint32_t kFxBit = 1u << 31;
-		const auto mask = a_armor->GetSlotMask().underlying();
-		if ((mask & ~kFxBit) == 0) {
-			return false;
-		}
-		// No armour addon means no model, so the slot would clone an empty shape.
-		if (a_armor->armorAddons.size() == 0) {
-			return false;
-		}
-		for (const auto* addon : a_armor->armorAddons) {
-			if (!addon) {
-				continue;
-			}
-			const char* third = addon->bipedModels[RE::SEXES::kMale].GetModel();
-			if (third && third[0] != '\0') {
-				return true;
-			}
-			const char* first = addon->bipedModel1stPersons[RE::SEXES::kMale].GetModel();
-			if (first && first[0] != '\0') {
-				return true;
-			}
-		}
-		return false;
+		return Verdict(a_armor) == OutfitVerdict::kWearable;
 	}
 
 	std::vector<RE::TESObjectARMO*> ArmorsOf(std::string_view a_plugin)

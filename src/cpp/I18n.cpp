@@ -758,6 +758,47 @@ namespace SOS::I18n
 			return exists;
 		}
 
+		// A translated line is handed to printf as the format string, so its
+		// placeholders must appear in the same order and of the same kind as the
+		// English key. A line that reorders them makes printf read a size_t as a
+		// char pointer and takes the game down (1.5.39: "已添加 %s 的 %zu 件。"),
+		// so such a line is ignored and the English text is shown instead.
+		std::string PlaceholderSignature(std::string_view a_text)
+		{
+			std::string out;
+			for (std::size_t i = 0; i < a_text.size(); ++i) {
+				if (a_text[i] != '%') {
+					continue;
+				}
+				if (i + 1 < a_text.size() && a_text[i + 1] == '%') {
+					++i;
+					continue;
+				}
+				std::string token{ '%' };
+				std::size_t j = i + 1;
+				while (j < a_text.size() && std::strchr("-+ #0.*123456789", a_text[j]) != nullptr) {
+					token.push_back(a_text[j]);
+					++j;
+				}
+				while (j < a_text.size() && (a_text[j] == 'l' || a_text[j] == 'h' || a_text[j] == 'L' || a_text[j] == 'j' || a_text[j] == 'z' || a_text[j] == 't')) {
+					token.push_back(a_text[j]);
+					++j;
+				}
+				if (j < a_text.size()) {
+					token.push_back(a_text[j]);
+				}
+				i = j;
+				out += token;
+				out.push_back(' ');
+			}
+			return out;
+		}
+
+		bool PlaceholdersMatch(const std::string& a_key, const std::string& a_value)
+		{
+			return PlaceholderSignature(a_key) == PlaceholderSignature(a_value);
+		}
+
 		void Apply()
 		{
 			auto& state = Get();
@@ -798,19 +839,37 @@ namespace SOS::I18n
 			state.code = code;
 			state.chinese = code == "chinese";
 
-			Strings strings;
+			Strings     strings;
+			std::size_t rejected = 0;
 			if (state.chinese) {
 				strings.reserve(std::size(kDictionary) * 2);
 				for (const auto& entry : kDictionary) {
+					if (!PlaceholdersMatch(entry.en, entry.zh)) {
+						if (rejected < 5) {
+							SKSE::log::warn("Language: '{}' does not use the placeholders of '{}' in the same order; the English line is shown so a format string cannot take the game down.", entry.zh, entry.en);
+						}
+						++rejected;
+						continue;
+					}
 					strings.emplace(entry.en, entry.zh);
 				}
 			}
 			state.overrides = 0;
 			if (const auto it = Files().find(code); it != Files().end()) {
 				for (const auto& [key, value] : it->second) {
+					if (!PlaceholdersMatch(key, value)) {
+						if (rejected < 5) {
+							SKSE::log::warn("Language: '{}' does not use the placeholders of '{}' in the same order; the English line is shown so a format string cannot take the game down.", value, key);
+						}
+						++rejected;
+						continue;
+					}
 					strings[key] = value;
 				}
 				state.overrides = it->second.size();
+			}
+			if (rejected > 0) {
+				SKSE::log::warn("Language: {} translated line(s) were ignored because their placeholders do not match the English text.", rejected);
 			}
 			state.strings = std::move(strings);
 

@@ -1,5 +1,30 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.40] - 2026-11-21
+
+### 修：1.5.39 的两处回归（m09740）
+
+- **「幻化」页点「Choose a plugin...」后 ESP 列表为空**
+  - 真因：`PluginScan::IsOutfitArmor()` 判「有没有模型」时只看 `bipedModels[RE::SEXES::kMale]` / `bipedModel1stPersons[kMale]`；只做女性服装的包男性模型为空，全库被判成非服装；`EspOutfits::PluginsWithArmor()` 又按 `entry.outfitArmors == 0` 过滤，列表被清空。金件页用的是不带该过滤的 `PluginScan::PluginsWithArmor()`，所以它的列表正常。
+  - 修法：判据同时看男女（`for (const auto sex : { RE::SEXES::kMale, RE::SEXES::kFemale })`，三/一人称都查）；名字判据放宽为 `GetFormEditorID()` 或 `GetFullName()` 任一非空；列表过滤改 `entry.armors == 0`；新增 `OutfitVerdict` 把四类跳过原因分开计数。
+- **「金件」页点「Add every piece of a plugin」必 CTD，之后左侧组点不中、右侧编辑器空白**
+  - 真因：`I18n::T()` 的返回值被当 printf 格式串用，而中文译文占位符顺序与英文相反（`"%zu piece(s) of %s added."` ↔ `"已添加 %s 的 %zu 件。"`、`"Imported %zu piece(s) from %s"` ↔ `"已从 %s 导入 %zu 件"`）⇒ `%s` 拿到 `std::size_t` 当指针 ⇒ `strlen(0x8)` ⇒ `EXCEPTION_ACCESS_VIOLATION at OutfitSystemNG.dll+0125E41 cmp byte ptr [r8], 0x00`。崩溃栈前 7 帧全在 `RenderGolden` 的渲染路径内。
+  - 修法：两处中文串改为与英文同序；`I18n::Apply()` 新增 `PlaceholderSignature()` / `PlaceholdersMatch()`，译文占位符与英文不一致就忽略该条并回退英文（warn 明细最多 5 条 + 汇总 1 条）。
+
+### 未改动
+
+- 引擎侧零改动：注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装切换、钩子安装。1.5.25 实测正常的基础幻化与 1.5.34 已验收的场景切换不受影响。
+- 数据格式零改动：幻化 JSON、金件 JSON、`[Customization] EspOutfitAutoFavorite` 原样。
+
+### 复核
+
+- `BUILD_EXIT=0`，0 error / 0 warning（日志 `build/build_1_5_40.log`）。
+- 守卫测试 15 项 PASS（新增 `tests/golden_menu_guards.ps1`：全仓 `I18n::T` 双串占位符同序、`I18n` 护栏在位、ESP 列表按 `entry.armors` 过滤、服装判据双性别）；2 项既有环境失败不是回归。
+- `OutfitSystemNG.dll` 2,036,224 字节 / `95c2b38848bf3d3f2a0577f2b611b8cbc06c7ad76f653674eb89fbcb5a5618bf` / `1.5.40.0`。
+
+### 未验证
+
+- 本机无游戏：菜单、ESP 列表、金件增删都没实机走过；崩溃点由 PE 解析对位到 `snprintf`，非实机复现验证。
 ## [1.5.39] - 2026-11-20
 
 ### 新增：逐槽策略按套装独立 + 从 ESP 生成套装 + 金件页（m09191 / m09426）

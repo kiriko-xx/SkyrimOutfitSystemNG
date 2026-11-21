@@ -33,7 +33,12 @@ namespace SOS::EspOutfits
 	{
 		std::vector<PluginSummary> out;
 		for (const auto& entry : PluginScan::PluginsWithArmor()) {
-			if (entry.outfitArmors == 0) {
+			// The list shows every plugin that carries slot armour; a plugin whose
+			// pieces all fail the clothing test is still worth showing, because that
+			// is how the user finds out what the plugin holds. 1.5.39 dropped every
+			// plugin with outfitArmors == 0, which emptied the list completely once
+			// the clothing test was too strict.
+			if (entry.armors == 0) {
 				continue;
 			}
 			PluginSummary summary;

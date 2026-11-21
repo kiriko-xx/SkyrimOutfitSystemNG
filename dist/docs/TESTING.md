@@ -829,6 +829,23 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 - **F1 基础幻化与场景套装回归**：菜单切普通套装 / 空套装仍按 1.5.25 表现（`Armor Refresh` + `attaching N outfit-only piece(s)`，身体槽不空）；进 OStim 场景仍按 1.5.34 表现（`came from thread … handed to the game thread` + `scene started`）。
 - **G1 静态守卫**：`tests/esp_outfits_filter.ps1` 必须通过 —— 套装生成走 `PluginScan::IsOutfitArmor()` 且分桶剔除 `kFxBit`，金件路径不调用 `IsOutfitArmor()`。
 
+## 3.48 1.5.40 ESP 列表为空 / 金件页闪退（两处回归）
+
+> 目标：证明点「Choose a plugin...」能看到 ESP；点「Add every piece of a plugin」不再崩，且金件页左右两栏可用。静态侧 `tests/golden_menu_guards.ps1` 已覆盖占位符与判据，本表是实机步骤。
+
+| 编号 | 步骤 | 期望 | 失败判据 |
+| --- | --- | --- | --- |
+| A1 | 幻化页点「Choose a plugin...」 | 出现 ESP 列表，条目数与你启用的插件数同量级（不只是几个） | 列表仍为空 ⇒ 把日志里 `PluginScan: N of M … count as clothing (U …, F …, A …, X …)` 整行发回，看 `X without a model` 是否接近 M |
+| A2 | 选中一个只做女性服装的 ESP | 日志 `ESP outfits: … ; N wearable of M slot record(s)` 里 **N > 0**（1.5.39 这里是 0） | N 仍为 0 ⇒ 该 ESP 的记录名字与模型都不在判据内，附那条日志 |
+| A3 | 选中含 3 件上衣 + 2 条裤子 + 1 个 FX 特效的 ESP | 生成 `<名称>` 与 `<名称>_1` 两套；FX 那条不进任何一套 | FX 件进了套装 ⇒ `mask & ~kFxBit` 或 `kFxOnly` 判据被绕过 |
+| B1 | 金件页点「Add every piece of a plugin」→ 选一个 ESP | **不闪退**；状态行 `Golden items: N piece(s) of <plugin> added.` | 仍崩 ⇒ 抓 `crash-*.log`，看 RVA 是否还在 `RenderGolden` 内 |
+| B2 | B1 之后看左侧组列表 | 能点中刚加的组（高亮），条目带 `(N)` 计数 | 点不中 ⇒ 组名大小写/失效条目导致选中态被清，附日志 |
+| B3 | B2 之后看右侧编辑器 | 显示 `plugin:LOCALFORMID  名称`、`[slot 30/32/…]`、每件一个 Remove | 空白 ⇒ 同上，附 `Golden items: ` 行 |
+| C1 | 界面语言中文，进游戏一次 | 日志 **无** `Language: … does not use the placeholders …`，也无 `N translated line(s) were ignored` | 出现 ⇒ 那条译文占位符与英文不一致（护栏已挡住崩溃），把译文行发回 |
+| C2 | 手动改 `Data/SKSE/Plugins/SkyrimOutfitSystemNG_zh.txt`，某行把 `%zu` 与 `%s` 换序，重启 | 该行回退英文显示，日志出现护栏警告，**游戏不崩** | 崩 ⇒ 护栏没生效，附日志与那一行 |
+| D1 | 基础幻化回归 | 菜单切套装外观立即变；空套装仍是裸；场景套装（1.5.34 已验收）照旧 | 任一回归 ⇒ 本版不该动引擎侧，逐条比对 `git diff v1.5.39 HEAD -- src/cpp/hooking src/cpp/MorphRefresh.cpp src/cpp/SceneOutfits.cpp` 应为空 |
+| E1 | 加载稳定 | 进游戏 5 分钟、开合菜单 20 次无 CTD | CTD ⇒ 抓 `crash-*.log` |
+| F1 | 性能 | `PluginScan` 索引只在首次进菜单建一次，之后开合菜单无可感卡顿 | 每次开菜单都卡 ⇒ `EnsureIndex()` 的缓存被反复 `Invalidate()` |
 ## 4. 性能协议（1000+ 套装）
 
 用 Papyrus 生成 1000 个套装后测：
@@ -1116,6 +1133,9 @@ B. 回归
 - 存档往返一致。
 
 ## 6. 已知未验证项
+
+- **1.5.40 的两处修复未实机验证**（m09740）：ESP 列表是否非空、金件页是否还崩、`PluginScan` 四类跳过计数在你环境（890 插件 / 13,909 条槽位护甲）上的分布，全部没在游戏里看过。崩溃点由自写 PE 解析对位到 `RenderGolden` 内的 `snprintf`（读 `0x8`），非实机复现。
+- **1.5.40 的服装判据仍可能漏件**：模型判据现在看男女两人的三/一人称 `bipedModels[sex]` / `bipedModel1stPersons[sex]`，但模型靠运行时附加数据、不用 `TESModel` 的护甲仍会被判「without a model」；是否放宽等实机 `PluginScan:` 统计。
 - 1.5.39 的三项菜单功能全部未实机验证：逐槽策略按套装独立（`g_slotPolicyOpen`）、「从 ESP 生成套装」（`PluginScan` + `EspOutfits`）、「金件」页（`GoldenItems` + `OutfitSystemGoldenItems.json`）。静态侧只有 `BUILD_EXIT=0`（0 error / 0 warning）与 `tests/esp_outfits_filter.ps1` 等 7 项守卫测试通过；菜单交互、ESP 扫描结果、生成出的套装外观都没人看过。
 - 1.5.39 的服装过滤（`IsOutfitArmor()` 三条判据）是从引擎数据结构推出来的：至少一个 armor addon 在 `bipedModels[SEXES::kMale]` 或 `bipedModel1stPersons[SEXES::kMale]` 上给了模型才收。只挂女性模型的 addon 通常在男性槽也会给模型（否则男性穿模），但没有实机样本证明「所有正常服装都能过」；若用户发现某件正常衣服被跳过，把那件记录的 EditorID / 槽位掩码 / addon 模型发回，按样本放宽判据，**不要**直接把 `IsOutfitArmor()` 改成恒真（那样 FX 特效会重新混进套装）。
 - 1.5.39 的金件不过滤是刻意行为（m09426）：FX 件、无 EditorID 件都能加进金件列表。风险是用户可能加进「其实没有任何模型」的记录，那些件在贴件时不会产生可见几何 —— 属于用户输入错误，不做额外拦截（`AddLocal()` 仍要求记录存在且有槽位掩码）。

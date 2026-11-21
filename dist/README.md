@@ -4,7 +4,16 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-## 1.5.39 最新说明（2026-11-20）
+## 1.5.40 最新说明（2026-11-21）
+
+修 1.5.39 实机报出的两处菜单回归（m09740），**引擎侧一行未改**（钩子安装、贴件语义、槽位清理、`.tri` 推导、`SceneOutfits` 全部零改动）。
+
+- **ESP 列表不再为空**：「从 ESP 生成套装」点「Choose a plugin...」后，列表按 `entry.armors == 0` 过滤（该 ESP 只要有覆盖槽位的护甲就列出来）。旧版用服装计数 `outfitArmors` 过滤，而服装判据只查男性模型 —— 只做女性服装的包男性模型为空、全库被判「非服装」，列表就被清空了。现在判据同时看 `RE::SEXES::kMale` 与 `kFemale` 的 `bipedModels[sex]` / `bipedModel1stPersons[sex]`，名字判据放宽为 `GetFormEditorID()` 或 `GetFullName()` 任一非空。
+- **金件页不再闪退**：旧版把 `I18n::T()` 的返回值直接当 printf 格式串，而中文译文把占位符换了顺序（`"%zu piece(s) of %s added."` ↔ `"已添加 %s 的 %zu 件。"`），`%s` 位置拿到 `std::size_t` 当指针 ⇒ `EXCEPTION_ACCESS_VIOLATION at OutfitSystemNG.dll+0125E41`（读 `0x8`）。两处中文串已改为与英文同序。
+- **新增翻译护栏**：`I18n::Apply()` 现在逐条校验译文与英文的占位符序列（`PlaceholdersMatch`），不一致就忽略该条并回退英文，同时 warn `Language: '<译文>' does not use the placeholders of '<英文>' in the same order; …`。以后手改 `SkyrimOutfitSystemNG_zh.txt` 写错占位符也不会把游戏打崩。
+- **新增统计日志**：`PluginScan: N of M slot armour record(s) count as clothing (U unnamed, F FX only, A without an addon, X without a model); P plugin(s) carry slot armour.` —— 若 `X` 偏大说明服装判据仍不覆盖你环境里的某类件，把这行发回。
+- **未验证**：本机没有游戏。静态侧 `BUILD_EXIT=0`（0 error / 0 warning）+ 守卫测试 15 项 PASS（新增 `tests/golden_menu_guards.ps1`）；DLL `OutfitSystemNG.dll` 2,036,224 字节 / `95c2b38848bf3d3f2a0577f2b611b8cbc06c7ad76f653674eb89fbcb5a5618bf` / `1.5.40.0`。测试包 `SkyrimOutfitSystemNG-1.5.40-test.zip` 只含 DLL，可直接用 MO2 装上替换。
+## 1.5.39 最新说明（2026-11-20，两处回归已由 1.5.40 修）
 
 菜单层三项新功能，**引擎侧一行未改**（钩子安装、贴件语义、槽位清理、`.tri` 推导、`SceneOutfits` 全部零改动，`git diff v1.5.34 HEAD -- src/cpp/hooking src/cpp/MorphRefresh.cpp src/cpp/SceneOutfits.cpp` 为空）。
 
@@ -218,6 +227,7 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 48. **1.5.34**：修「OStim 场景开始后幻化压根没切换」（m07842）。1.5.33 的 `OnGameThread()` 门禁把工作线程送来的场景事件整条丢弃（日志：三条 `arrived off the game thread; the scene switch is skipped.`）→ 本版改为「一次 `AddTask` 交接到游戏线程 → 统一 `Dispatch()` 入口」。换装序列、钩子层、贴件语义、槽清理、`.tri` 推导、DLL 文件名一律未改。
 
 49. **1.5.39**：菜单三件（m09191 / m09426）—— ①逐槽策略编辑器展开状态改按套装名保存（旧全局布尔删掉），只展开被选中的那套；②新增「从 ESP 生成套装」（`src/core/PluginScan.*` 建加载顺序视图 + `src/core/EspOutfits.*` 按 32 槽分桶生成 `<名称>` / `<名称>_1`…，槽位策略统一「需要已装备」，可选自动收藏）；③新增「金件」页（`src/core/GoldenItems.*`，独立 JSON、左组右件、可增删、支持从 ESP 全量添加与按 FormID 添加单件）。**服装过滤只用于套装生成**：`PluginScan::IsOutfitArmor()` = 有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型，分桶剔除 `kFxBit`；**金件不做这个过滤**（FX、无 EditorID 的件都能加）。引擎侧零改动。详见顶部最新说明与 `docs/DELIVERY.md` §4.63。
+50. **1.5.40**（2026-11-21）：修 1.5.39 两处回归 —— ESP 列表为空（服装判据只看男性模型 + 列表按服装计数过滤）、金件页闪退（中英占位符顺序不一致被当 printf 格式串）；新增 `I18n` 占位符运行时护栏与 `PluginScan` 统计行。
 
 
 ## 常见问题

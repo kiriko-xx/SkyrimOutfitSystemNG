@@ -1,6 +1,15 @@
 # 构建说明（BUILD）
 
-## 1.5.39 构建与交付复核状态
+## 1.5.40 构建与交付复核状态
+
+**验证状态（1.5.40）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_40.log`，末尾 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。DLL `OutfitSystemNG.dll` 2,036,224 字节，SHA256 `95c2b38848bf3d3f2a0577f2b611b8cbc06c7ad76f653674eb89fbcb5a5618bf`，FileVersion/ProductVersion `1.5.40.0`，`build/Release` 与 `dist` 两份逐字节一致。
+
+- **本版改动面（只修 1.5.39 的两处回归）**：`src/cpp/MenuUI.cpp`（两处金件中文串改为与英文占位符同序）、`src/cpp/I18n.cpp`（新增 `PlaceholderSignature()` / `PlaceholdersMatch()`，`Apply()` 里对字典与翻译文件逐条校验，不一致回退英文）、`src/core/PluginScan.cpp`（新增 `enum class OutfitVerdict` + `Verdict()`，模型判据看男女、名字判据放宽、`CollectArmors` 末尾加统计行）、`src/core/EspOutfits.cpp`（列表过滤改 `entry.armors`）、`src/cpp/include/version.h`（PATCH 40）、`CMakeLists.txt`（VERSION 1.5.40），新增守卫测试 `tests/golden_menu_guards.ps1`。**钩子层、注入壳、贴件语义、槽清理、`.tri` 推导、`SceneOutfits`、模块文件名零改动**。
+- **构建陷阱（本版踩过）**：`Verdict()` 与其 enum 必须定义在 `CollectArmors()` **之前**，否则 MSVC 报 `error C3861: 'Verdict': 找不到标识符` + 一串 `C2653 / C2051`（22 个 error）。匿名命名空间里的定义顺序就是可见性顺序。
+- **构建后必查**：DLL 里必须能搜到 `count as clothing` / `does not use the placeholders` / `were ignored because their placeholders` / `已添加 %zu 件，来自 %s。` / `已导入 %zu 件，来源 %s` / `1.5.40`；旧错串 `已添加 %s 的 %zu 件` / `已从 %s 导入 %zu 件` 必须 **0 命中**（用 utf8 读 DLL 再比对，latin1 读中文会假阴性）。
+- **静态守卫**：`tests/golden_menu_guards.ps1` 必须通过（全仓 `I18n::T(en, zh)` 双串占位符同序、`I18n` 护栏在位、`EspOutfits` 用 `entry.armors` 过滤且**不得**出现 `entry.outfitArmors == 0`、`PluginScan` 双性别判据、金件两行中文串同序）；当前 15 项 PASS，另 2 项既有环境失败（`hair_tint_read_only.ps1` 锚点已随代码迁移消失、`skse_listener_replay.ps1` 需要 `bug/skse64.log`）不是回归。
+- **交付两种包**：①全量包 `SkyrimOutfitSystemNG-1.5.40.zip`（`build/pack_1_5_40.ps1`，31 条目，dist 全量 + `SHA256SUMS.txt`）；②测试包 `SkyrimOutfitSystemNG-1.5.40-test.zip`（`build/pack_1_5_40_test.ps1`，2 条目：`SKSE/Plugins/OutfitSystemNG.dll` + `1.5.40-test-notes.txt`），可直接用 MO2 装、替换已有 DLL 后重启即可测。
+## 1.5.39 构建与交付复核状态（历史，两处回归已由 1.5.40 修）
 
 **验证状态（1.5.39）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_39.log`，末尾 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。DLL `OutfitSystemNG.dll` 2,030,592 字节，SHA256 `c72a60a6f4a400bbb4cf06a9b2e1c81a86baca487fbf901119e264421aee83da`，FileVersion/ProductVersion `1.5.39.0`，`build/Release` 与 `dist` 两份逐字节一致。
 
