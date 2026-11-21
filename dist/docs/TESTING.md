@@ -846,6 +846,24 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | D1 | 基础幻化回归 | 菜单切套装外观立即变；空套装仍是裸；场景套装（1.5.34 已验收）照旧 | 任一回归 ⇒ 本版不该动引擎侧，逐条比对 `git diff v1.5.39 HEAD -- src/cpp/hooking src/cpp/MorphRefresh.cpp src/cpp/SceneOutfits.cpp` 应为空 |
 | E1 | 加载稳定 | 进游戏 5 分钟、开合菜单 20 次无 CTD | CTD ⇒ 抓 `crash-*.log` |
 | F1 | 性能 | `PluginScan` 索引只在首次进菜单建一次，之后开合菜单无可感卡顿 | 每次开菜单都卡 ⇒ `EnsureIndex()` 的缓存被反复 `Invalidate()` |
+## 3.49 1.5.41 启动即闪退（金件存库锁自死锁）
+
+> 目标：装 1.5.41 后**能进游戏**；即便金件库文件坏了，也只是金件列表为空，不再关掉游戏。静态侧 `tests/golden_lock_guards.ps1` 已覆盖锁类型、`TotalCountLocked` 用法、启动加载 try、消息壳；本表是实机步骤。
+
+| 编号 | 步骤 | 期望 | 失败判据 |
+| --- | --- | --- | --- |
+| A1 | 直接启动游戏（保留 1.5.40 那次写出的 `Data/SKSE/Plugins/OutfitSystemGoldenItems.json`） | **不闪退**，进到主菜单、能读档 | 仍闪退 ⇒ 抓 `crash-*.log`，看 `[RSP+…]` 是否还有 `std::system_error` / `resource deadlock would occur` |
+| A2 | 同一次启动看日志 | 出现 `Golden items: N entr(ies) loaded from …`（info） | 没这行也没崩 ⇒ 金件库文件不存在（首次运行属正常），不算失败 |
+| A3 | 把 `OutfitSystemGoldenItems.json` 故意改成非法 JSON，重启 | 出现 critical `Golden items: the store could not be loaded (…); the golden list stays empty for this session.`，**游戏能进**，金件列表为空 | 崩 ⇒ 兜底 try 没生效，附 `crash-*.log` |
+| B1 | 全日志搜 `Message handler: an exception escaped` | **0 条** | 有 ⇒ 还有别的抛点在消息阶段，把整行与前后 30 行发回 |
+| B2 | 进金件页（1.5.40 的两处修复回归） | ESP 列表非空；点「Add every piece of a plugin」不崩，状态行 `Golden items: N piece(s) of <plugin> added.` | 崩或列表空 ⇒ 回退到 §3.48 排查 |
+| B3 | 幻化页点「Choose a plugin...」 | 列表非空，日志 `ESP outfits: … ; N wearable of M slot record(s)` 且 N > 0 | N=0 ⇒ 附 `PluginScan: … count as clothing (…) ` 整行 |
+| C1 | 菜单切普通套装 / 空套装（1.5.25 基线） | `Armor Refresh` + `Custom: attaching N outfit-only piece(s)`；身体槽不空；空套装仍是裸 | 任一回归 ⇒ 本版不该动引擎侧，比对 `git diff v1.5.40 HEAD -- src/cpp/hooking src/cpp/MorphRefresh.cpp src/cpp/SceneOutfits.cpp` 应为空 |
+| C2 | 进 OStim / SexLab 场景（1.5.34 已验收） | `came from thread … handed to the game thread` → `scene started` → `Armor Refresh` | 不切换 ⇒ 附那 20 行 |
+| D1 | 连续开合菜单 20 次 + 金件增删 10 次 | 无 CTD、无卡顿 | CTD ⇒ `crash-*.log` |
+| E1 | 启动耗时 | 与 1.5.40 无明显差异（金件库解析在 `kDataLoaded`，只解析一次） | 启动显著变慢 ⇒ 看金件库条目数是否异常膨胀 |
+| F1 | 静态守卫 | `tests/golden_lock_guards.ps1` 打印 `GOLDEN_LOCK_GUARDS_OK` | 失败 ⇒ 有人把锁改回 `std::mutex`，或在持锁路径加了加锁 getter |
+
 ## 4. 性能协议（1000+ 套装）
 
 用 Papyrus 生成 1000 个套装后测：
@@ -1134,6 +1152,7 @@ B. 回归
 
 ## 6. 已知未验证项
 
+- **1.5.41 的启动崩溃修复未实机验证**（m10014）：本机无游戏，判据是崩溃栈字符串 `resource deadlock would occur` + 自写 PE 解析的帧对位（`MessageHandler` → `Golden::LoadFromDisk` → `Golden::ImportText` → 计数 getter）+ 源码核对；不是实机复现。若实机仍闪退，按 §3.49 的 A1/A3 分流。
 - **1.5.40 的两处修复未实机验证**（m09740）：ESP 列表是否非空、金件页是否还崩、`PluginScan` 四类跳过计数在你环境（890 插件 / 13,909 条槽位护甲）上的分布，全部没在游戏里看过。崩溃点由自写 PE 解析对位到 `RenderGolden` 内的 `snprintf`（读 `0x8`），非实机复现。
 - **1.5.40 的服装判据仍可能漏件**：模型判据现在看男女两人的三/一人称 `bipedModels[sex]` / `bipedModel1stPersons[sex]`，但模型靠运行时附加数据、不用 `TESModel` 的护甲仍会被判「without a model」；是否放宽等实机 `PluginScan:` 统计。
 - 1.5.39 的三项菜单功能全部未实机验证：逐槽策略按套装独立（`g_slotPolicyOpen`）、「从 ESP 生成套装」（`PluginScan` + `EspOutfits`）、「金件」页（`GoldenItems` + `OutfitSystemGoldenItems.json`）。静态侧只有 `BUILD_EXIT=0`（0 error / 0 warning）与 `tests/esp_outfits_filter.ps1` 等 7 项守卫测试通过；菜单交互、ESP 扫描结果、生成出的套装外观都没人看过。

@@ -1,6 +1,14 @@
 # 构建说明（BUILD）
 
-## 1.5.40 构建与交付复核状态
+## 1.5.41 构建与交付复核状态
+
+**验证状态（1.5.41）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_41.log`，末尾 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。DLL `OutfitSystemNG.dll` 2,037,760 字节 / `39f6b65e…fd967ad0` / `1.5.41.0`。
+
+- **本版改动面（只修启动闪退 + 两道兜底）**：`src/core/GoldenItems.cpp`（`std::mutex`→`std::recursive_mutex`、新增 `TotalCountLocked()`、三条持锁路径改用它）、`src/cpp/main.cpp`（`kDataLoaded` 金件块包 try/catch、`MessageHandler` 拆成 `HandleMessage` + try/catch 壳、加 `#include <exception>`）、`src/cpp/include/version.h`（`_VERSION_PATCH 41`）、`CMakeLists.txt`（`VERSION 1.5.41`）、新增 `tests/golden_lock_guards.ps1`。**引擎侧与菜单功能零改动。**
+- **构建后必查**：DLL 里必须能搜到 `the golden list stays empty for this session` / `an exception escaped` / `1.5.41`；`TotalCountLocked` 因 Release 内联通常**搜不到**（属正常，别当成没改）。
+- **静态守卫**：`tests/golden_lock_guards.ps1` 必须打印 `GOLDEN_LOCK_GUARDS_OK`（锁是递归、无 `std::to_string(TotalCount())`、启动加载在 `try {` 内、`HandleMessage` / `MessageHandler` 壳与 `an exception escaped` 都在）；当前 16 项 PASS，另 2 项既有环境失败（`hair_tint_read_only` 锚点消失、`skse_listener_replay` 缺 `bug/skse64.log`）。
+- **交付两种包**：①全量包 `SkyrimOutfitSystemNG-1.5.41.zip`（`build/pack_1_5_41.ps1`，31 条目，dist 全量 + `SHA256SUMS.txt`）；②测试包 `SkyrimOutfitSystemNG-1.5.41-test.zip`（`build/pack_1_5_41_test.ps1`，2 条目：`SKSE/Plugins/OutfitSystemNG.dll` + `1.5.41-test-notes.txt`），可直接用 MO2 装。
+## 1.5.40 构建与交付复核状态（历史，启动闪退已由 1.5.41 修）
 
 **验证状态（1.5.40）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_40.log`，末尾 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。DLL `OutfitSystemNG.dll` 2,036,224 字节，SHA256 `95c2b38848bf3d3f2a0577f2b611b8cbc06c7ad76f653674eb89fbcb5a5618bf`，FileVersion/ProductVersion `1.5.40.0`，`build/Release` 与 `dist` 两份逐字节一致。
 

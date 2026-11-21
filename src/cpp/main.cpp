@@ -16,6 +16,7 @@
 
 #include <string>
 #include <cstring>
+#include <exception>
 #include <Windows.h>
 
 extern "C" {
@@ -306,7 +307,7 @@ namespace {
         (void)started;
     }
 
-    void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
+    void HandleMessage(SKSE::MessagingInterface::Message* a_msg) {
         if (!a_msg) {
             return;
         }
@@ -323,15 +324,25 @@ namespace {
             // Golden items: the list has a file of its own now. The legacy ini
             // list is lifted into it once (the ini key is marked as migrated and
             // is ignored from then on) so an existing setup keeps its pieces.
-            SOS::Golden::LoadFromDisk();
-            if (!SOS::Settings::Get().goldenIniMigrated) {
-                SOS::Golden::ApplyLegacyEntries(SOS::Settings::Get().goldenItems);
-                SOS::Golden::SaveToDisk();
-                SOS::Settings::Get().goldenItems.clear();
-                SOS::Settings::Get().goldenIniMigrated = true;
-                SOS::Settings::Get().Save();
+            // A broken or half-written golden items store must never take the game
+            // down while it is starting: the list is optional, the game is not.
+            // Any exception raised in here is reported and the session continues
+            // with an empty golden list.
+            try {
+                SOS::Golden::LoadFromDisk();
+                if (!SOS::Settings::Get().goldenIniMigrated) {
+                    SOS::Golden::ApplyLegacyEntries(SOS::Settings::Get().goldenItems);
+                    SOS::Golden::SaveToDisk();
+                    SOS::Settings::Get().goldenItems.clear();
+                    SOS::Settings::Get().goldenIniMigrated = true;
+                    SOS::Settings::Get().Save();
+                }
+                SOS::Golden::WarmUp();
+            } catch (const std::exception& e) {
+                LOG(critical, "Golden items: the store could not be loaded ({}); the golden list stays empty for this session.", e.what());
+            } catch (...) {
+                LOG(critical, "Golden items: the store could not be loaded; the golden list stays empty for this session.");
             }
-            SOS::Golden::WarmUp();
             ApplySkinningHooks();
             SetupEvents();
             SOS::AutoSwitch::Install();
@@ -389,6 +400,19 @@ namespace {
             break;
         default:
             break;
+        }
+    }
+
+    // An exception must never escape an SKSE callback: the game treats it as an
+    // unhandled exception and closes. Every phase is reported here and the rest
+    // of that message is skipped instead.
+    void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
+        try {
+            HandleMessage(a_msg);
+        } catch (const std::exception& e) {
+            LOG(critical, "Message handler: an exception escaped ({}); the rest of this message is skipped.", e.what());
+        } catch (...) {
+            LOG(critical, "Message handler: an exception escaped; the rest of this message is skipped.");
         }
     }
 }

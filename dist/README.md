@@ -4,7 +4,17 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-## 1.5.40 最新说明（2026-11-21）
+## 1.5.41 最新说明（2026-11-21）
+
+修 1.5.40 的**启动即闪退**（m10014），**引擎侧与菜单功能一行未改**。
+
+- **崩溃原因**：金件库的锁是普通 `std::mutex`，而导入路径持锁后又调用了会再次加锁的 `TotalCount()` —— 同线程二次加锁时 MSVC 不是死等，而是抛 `std::system_error("resource deadlock would occur")`；这个异常在 SKSE 的消息回调里没人接，直接关掉游戏。1.5.39 那次金件页崩溃前已经把 `Data/SKSE/Plugins/OutfitSystemGoldenItems.json` 写出来了，所以从 1.5.40 起只要启动就崩。
+- **修法**：①锁改 `std::recursive_mutex`；②持锁代码改用不自锁的 `TotalCountLocked()`；③`kDataLoaded` 的金件加载整体包 `try/catch` —— 读失败只打 critical `Golden items: the store could not be loaded (…); the golden list stays empty for this session.`，游戏照常进；④消息回调拆成 `HandleMessage` + try/catch 壳，异常只打 `Message handler: an exception escaped (…); …`，绝不再逃出 SKSE。
+- **没动什么**：注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装切换、钩子安装、逐槽策略 / ESP 生成 / 金件功能、JSON 格式、Papyrus 函数全部原样。1.5.25 实测正常的基础幻化、1.5.34 已验收的场景切换、1.5.40 的两处修复都不受影响。
+- **未实机验证**：本机无游戏，判据是崩溃栈字符串（`resource deadlock would occur`）+ 自写 PE 解析的帧对位（`MessageHandler` → `Golden::LoadFromDisk` → `Golden::ImportText`）+ 源码核对。
+- **装完看这三行**：`Golden items: N entr(ies) loaded from …`（正常）、`Golden items: the store could not be loaded …`（兜底，把该行发回）、`Message handler: an exception escaped …`（应为 0 条）。
+
+## 1.5.40 说明（历史，启动闪退已由 1.5.41 修）
 
 修 1.5.39 实机报出的两处菜单回归（m09740），**引擎侧一行未改**（钩子安装、贴件语义、槽位清理、`.tri` 推导、`SceneOutfits` 全部零改动）。
 
@@ -228,6 +238,7 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 
 49. **1.5.39**：菜单三件（m09191 / m09426）—— ①逐槽策略编辑器展开状态改按套装名保存（旧全局布尔删掉），只展开被选中的那套；②新增「从 ESP 生成套装」（`src/core/PluginScan.*` 建加载顺序视图 + `src/core/EspOutfits.*` 按 32 槽分桶生成 `<名称>` / `<名称>_1`…，槽位策略统一「需要已装备」，可选自动收藏）；③新增「金件」页（`src/core/GoldenItems.*`，独立 JSON、左组右件、可增删、支持从 ESP 全量添加与按 FormID 添加单件）。**服装过滤只用于套装生成**：`PluginScan::IsOutfitArmor()` = 有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型，分桶剔除 `kFxBit`；**金件不做这个过滤**（FX、无 EditorID 的件都能加）。引擎侧零改动。详见顶部最新说明与 `docs/DELIVERY.md` §4.63。
 50. **1.5.40**（2026-11-21）：修 1.5.39 两处回归 —— ESP 列表为空（服装判据只看男性模型 + 列表按服装计数过滤）、金件页闪退（中英占位符顺序不一致被当 printf 格式串）；新增 `I18n` 占位符运行时护栏与 `PluginScan` 统计行。
+51. **1.5.41**（2026-11-21）：修 1.5.40 的启动即闪退 —— 金件库 `std::mutex` 在同线程被重入加锁（`ImportText` 持锁后调 `TotalCount`），MSVC 抛 `std::system_error("resource deadlock would occur")` 且异常逃出 SKSE 回调；改递归锁 + `TotalCountLocked()`，并给启动加载与消息回调各加一道 try/catch 兜底。
 
 
 ## 常见问题

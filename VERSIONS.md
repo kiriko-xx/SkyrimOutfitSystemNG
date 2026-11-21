@@ -27,7 +27,8 @@
 | 1.5.32 | 2026-11-18 | 1,185,452 | `065f0ad79fdd31c17116901d3bee74a7cfe15c385d4660d61e3238d29378a8f1` | **已被 1.5.33 取代**（实机 m07666：场景切换后仍要按键；该版把场景入口改成 `Features::AssignOutfit()`，与用户「参照按地点/状态切换」的指示不符）；场景套装回到「找对名字 → 切套装」（m07382 / m07424）：删除 1.5.30 的三次补跑装备 pass 与 1.5.31 的 `rebuildActorModel()`，场景开始/结束只调 `Features::AssignOutfit()`，事件改游戏线程同步执行，名字查找支持忽略大小写；DLL 1,937,920 B / `da9ec899…` / 1.5.32.0 |
 | 1.5.33 | 2026-11-18 | 1,191,778 | `3166bb3db3f7afb958300edc50e0e52d6183d28ca1e032c0353b3e7d2102c405` | **已被 1.5.34 取代**（实机 m07842：场景事件被 `OnGameThread()` 门禁整条丢弃，OStim 场景开始后压根没切换）；按 m07666 回退源码到 `v1.5.29` 后重做场景套装：删掉场景专用的 SKSE 任务队列 / `Tick()` 心跳 / 补跑 / 重建，新增 `OutfitSystem::setOutfitByName()`，场景开始/结束走「锁内指派 → 锁外 `refreshArmorFor()`」，与 `AutoSwitch::Evaluate()`（按地点/状态切换，本版一行未改）同构；基础幻化钩子 / 注入壳 / 贴件语义  / 槽清理 / `.tri` 推导未动；DLL 1,934,848 B / `8c23e5ee…` / 1.5.33.0 |
 | 1.5.34 | 2026-11-18 | 1,200,086 | `98fd0cff7b7a10bc2b9cae32bb7c3eacbfa6545c5374e099867bad66c8ba6c8b` | **当前 main 发布版，已验收**（m08008：OStim 场景套装自动切换实机正常）；修 m07842 —— 1.5.33 的 `OnGameThread()` 门禁把工作线程送来的场景事件整条丢弃，本版改为「离线程事件用一次 `SKSE::GetTaskInterface()->AddTask` 交接到游戏线程 → 统一 `Dispatch()` 入口」；不建队列、不加 `Tick()`，换装序列仍 `setOutfitByName()` + `refreshArmorFor()`；DLL `OutfitSystemNG.dll` 1,937,408 B / `e1cdb951…` / `1.5.34.0` 
-| 1.5.40 | 2026-11-21 | 1,272,548 | `1fcca7f372aaaab38a285431bca366da57d6ab0096c0ef3ef62c163d51296c50` | **未发布候选（分支 `feature/slot-policy-esp-outfits-golden`）**；只修 1.5.39 实机报出的两处回归（m09740）—— ①「幻化」页 ESP 列表为空（服装判据只查男性模型 + 列表按 `outfitArmors` 过滤 ⇒ 女性服装包全被滤掉；改为男女都看、名字放宽、列表按 `entry.armors` 过滤）；②「金件」页「Add every piece of a plugin」必闪退（中英占位符顺序不一致，`I18n::T()` 结果被当 printf 格式串 ⇒ `%s` 吃到 `size_t` ⇒ AV at `OutfitSystemNG.dll+0125E41`；改中文串同序 + `I18n::Apply()` 加占位符校验护栏）。另出只含 DLL 的测试包 `SkyrimOutfitSystemNG-1.5.40-test.zip`（913,780 B / `26544231d6015489675564e4f320b97b1ecda84ef5a4a823fa3281b18c4e2dd5`） |
+| 1.5.41 | 2026-11-21 | 1,283,083 | `c640d60299b98c3d33b786a581bc95026a507322849d89cbaec739ca499cc7d3` | **未发布候选（分支 `feature/slot-policy-esp-outfits-golden`）**；只修 1.5.40 的**启动即闪退**（m10014）—— 金件存库锁 `g_mutex` 是普通 `std::mutex`，而 `Golden::ImportText()` 持锁后又调公共 `TotalCount()`（再 lock 一次）⇒ 同线程重入；MSVC 对此抛 `std::system_error("resource deadlock would occur")`，异常在 SKSE 消息回调里没人接 ⇒ 启动即退。触发点是 `kDataLoaded` 无条件的 `Golden::LoadFromDisk()`，而 1.5.39 崩溃前已写出 `OutfitSystemGoldenItems.json`。修法：①锁改 `std::recursive_mutex`；②新增 `TotalCountLocked()`，三条持锁路径改用它；③`kDataLoaded` 金件块包 try/catch（失败只打 `the golden list stays empty for this session`）；④`MessageHandler` 拆 `HandleMessage` + try/catch 壳。引擎侧与菜单功能零改动。另出只含 DLL 的测试包 `SkyrimOutfitSystemNG-1.5.41-test.zip`（914,574 B / `798989d7ed22270a46c732a6bfb89643488fe0de176853d35c9ca6fcb1147e57`） |
+| 1.5.40 | 2026-11-21 | 1,272,548 | `1fcca7f372aaaab38a285431bca366da57d6ab0096c0ef3ef62c163d51296c50` | **已被 1.5.41 取代（实机 m10014：启动即闪退，金件存库锁自死锁）；仍为未发布候选（分支 `feature/slot-policy-esp-outfits-golden`）**；只修 1.5.39 实机报出的两处回归（m09740）—— ①「幻化」页 ESP 列表为空（服装判据只查男性模型 + 列表按 `outfitArmors` 过滤 ⇒ 女性服装包全被滤掉；改为男女都看、名字放宽、列表按 `entry.armors` 过滤）；②「金件」页「Add every piece of a plugin」必闪退（中英占位符顺序不一致，`I18n::T()` 结果被当 printf 格式串 ⇒ `%s` 吃到 `size_t` ⇒ AV at `OutfitSystemNG.dll+0125E41`；改中文串同序 + `I18n::Apply()` 加占位符校验护栏）。另出只含 DLL 的测试包 `SkyrimOutfitSystemNG-1.5.40-test.zip`（913,780 B / `26544231d6015489675564e4f320b97b1ecda84ef5a4a823fa3281b18c4e2dd5`） |
 | 1.5.39 | 2026-11-20 | 1,258,672 | `4765a0568207829e5247033296587cec4cfb21d8d0eb4d1b6b96293c1ec934c1` | **已被 1.5.40 取代（实机 m09740 报两处回归：ESP 列表为空、金件页闪退）；仍为未发布候选（分支 `feature/slot-policy-esp-outfits-golden`）**；菜单三件 m09191 / m09426 —— ①逐槽策略编辑器展开状态改按套装名保存（`g_slotPolicyOpen`），只展开被选中的那套，JSON 仍 `slotPolicy` / `slotPolicies`；②「从 ESP 生成套装」（`PluginScan` + `EspOutfits`，按 32 槽分桶生成 `<名称>` / `<名称>_1`…，槽位策略「需要已装备」，可选自动收藏）；③「金件」页（`GoldenItems`，独立 `OutfitSystemGoldenItems.json`，可增删、可从 ESP 全量添加、可按 FormID 添加单件）；**服装过滤只用于套装生成**（`IsOutfitArmor()` = 有 EditorID + 非 FX 槽位 + addon 有模型，分桶剔除 `kFxBit`），**金件不过滤**；引擎侧零改动；DLL `OutfitSystemNG.dll` 2,030,592 B / `c72a60a6…` / `1.5.39.0`；**未实机验证** |
 
 各包旁的 `.zip.sha256` 内容为「哈希 + 两个空格 + 包名」+ CRLF，可直接 `certutil -hashfile` 复核。
@@ -50,15 +51,16 @@
 | 1.5.32 | git tag `v1.5.32` |
 | 1.5.33 | git tag `v1.5.33` |
 | 1.5.34 | git tag `v1.5.34` |
+| 1.5.41 | git tag `v1.5.41`（同一分支 `feature/slot-policy-esp-outfits-golden`；`main` 仍是 1.5.34） |
 | 1.5.40 | git tag `v1.5.40`（同一分支 `feature/slot-policy-esp-outfits-golden`；`main` 仍是 1.5.34） |
 | 1.5.39 | git tag `v1.5.39`（打在分支 `feature/slot-policy-esp-outfits-golden` 上；`main` 仍是 1.5.34，实机通过后快进合并） |
-| 当前 dist | 1.5.40 的候选交付（工作分支 `feature/slot-policy-esp-outfits-golden`，总共 31 文件 / 2,925,894 B；`SKSE/Plugins/OutfitSystemNG.dll` 2,036,224 B / 1.5.40.0 / `95c2b388…`；旧名 `SkyrimOutfitSystemNG.dll` 不在包内；zip 1,272,548 B / `1fcca7f3…`） |
+| 当前 dist | 1.5.41 的候选交付（工作分支 `feature/slot-policy-esp-outfits-golden`，总共 31 文件 / 2,953,020 B；`SKSE/Plugins/OutfitSystemNG.dll` 2,037,760 B / 1.5.41.0 / `39f6b65e…`；旧名 `SkyrimOutfitSystemNG.dll` 不在包内；zip 1,283,083 B / `c640d602…`） |
 
 1.5.22 的交付目录存档在 `build/dist_1_5_22/`（build/ 不入库）。
 
 ## 版本管理规则
 
-- **分支布局（2026-11-18 起）**：`main` = 最新发布线（当前 `1.5.34`，tag `v1.5.34`；`1.5.35`–`1.5.38` 的实时形变候选已按用户要求废弃为 tag `abandoned/menu-morph-live-1.5.38`，`1.5.39` / `1.5.40` 在分支 `feature/slot-policy-esp-outfits-golden` 上开发）；发布一律在 `main` 上按 tag 推进。历史上的实验性提交（2026-11-17 晚 `fix: gate scene and morph tasks…` 那一串）不在发布线上，已封存为分支 `archive/main-experiments-20261117` 与同名 tag，需要时 `git diff main archive/main-experiments-20261117 -- src/` 对照取舍。
+- **分支布局（2026-11-18 起）**：`main` = 最新发布线（当前 `1.5.34`，tag `v1.5.34`；`1.5.35`–`1.5.38` 的实时形变候选已按用户要求废弃为 tag `abandoned/menu-morph-live-1.5.38`，`1.5.39`–`1.5.41` 在分支 `feature/slot-policy-esp-outfits-golden` 上开发）；发布一律在 `main` 上按 tag 推进。历史上的实验性提交（2026-11-17 晚 `fix: gate scene and morph tasks…` 那一串）不在发布线上，已封存为分支 `archive/main-experiments-20261117` 与同名 tag，需要时 `git diff main archive/main-experiments-20261117 -- src/` 对照取舍。
 - 仓库根的 `.gitignore` 忽略 `dist/`、`build/`、`*.dll`、`*.pex`、`*.log`：git 只跟踪源码与文档，交付目录每次由构建生成。
 - 每次定稿一个交付版本：先把 `dist/` 收尾，再 `git tag vX.Y.Z`（tag 打在当时那份源码上），随后打包 zip 并更新本文件。
 - 回退 = 直接装对应版本的 zip；**不要**在没有源码快照的版本之间做“源码回退”，只能以二进制为准。
@@ -66,7 +68,7 @@
 
 ## 回退与合并（用户 m06712 要求：随时可回退、可合并有用版本）
 
-**回退（推荐、唯一安全途径）**：装对应版本的成品包即可 —— 仓库根有 1.5.17–1.5.40 的 `SkyrimOutfitSystemNG-<版本>.zip`，每个包旁有 `.zip.sha256`（内容为 `hash + 两空格 + 文件名`）。想完全干净地回退：删掉 `Data/SKSE/Plugins/` 下的 `OutfitSystemNG.dll` **和** `SkyrimOutfitSystemNG.dll`，再解压目标包覆盖。
+**回退（推荐、唯一安全途径）**：装对应版本的成品包即可 —— 仓库根有 1.5.17–1.5.41 的 `SkyrimOutfitSystemNG-<版本>.zip`，每个包旁有 `.zip.sha256`（内容为 `hash + 两空格 + 文件名`）。想完全干净地回退：删掉 `Data/SKSE/Plugins/` 下的 `OutfitSystemNG.dll` **和** `SkyrimOutfitSystemNG.dll`，再解压目标包覆盖。
 
 **源码级回退**：`git tag` 逐版对应（见上表）。`git checkout v1.5.29` 可回到那一版源码，`git diff v1.5.29 v1.5.30 -- src/` 可看单版差异。注意 1.5.17–1.5.21 **没有源码快照**，只能以二进制回退。
 

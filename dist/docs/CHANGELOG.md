@@ -1,5 +1,34 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.41] - 2026-11-21
+
+### 修：启动即闪退——金件存库锁的自死锁（m10014）
+
+- **症状**：装 1.5.40 后直接启动游戏即闪退（崩溃日志 `Process Uptime 00:00:39`，连第一帧都没到）。
+- **崩溃证据**（`crash-2026-11-21-04-06-07.log`）：栈顶是 `KERNELBASE.dll+00C933A`，但 `[RSP+18]` / `[RSP+188]` 是字符串 `resource deadlock would occur`、`[RSP+48]` 是 `std::system_error*`，`PROBABLE CALL STACK` 前 7 帧全在 `OutfitSystemNG.dll`。异常来自 C++ 标准库：`std::system_error(errc::resource_deadlock_would_occur)`，不是引擎访问违例。
+- **真因**：`src/core/GoldenItems.cpp` 第 37 行的 `g_mutex` 是普通 `std::mutex`，而 `ImportText()` 持锁后又调公共 `TotalCount()`（自己再 `lock_guard` 一次）⇒ 同线程重入。MSVC 对这种重入**抛异常而不是死等**，异常在 SKSE 消息回调里没人接，直接展开到游戏主循环 → 闪退。触发点是 `kDataLoaded` 里无条件的 `Golden::LoadFromDisk()`；1.5.39 那次金件页崩溃**之前** `SaveToDisk()` 已写出 `Data/SKSE/Plugins/OutfitSystemGoldenItems.json`，所以 1.5.40 起每次启动必崩。该缺陷自 1.5.39 引入（`git diff v1.5.39 HEAD -- src/core/GoldenItems.cpp` 为空）。
+- **定位手法**：本机无 dumpbin / .pdb，用自写 PE 解析 —— `.pdata` 的 4,738 个 `RUNTIME_FUNCTION` 把 6 个返回地址对到函数区间（`0xDE131`→`0xDE0C0+0x71`、`0x19AAF`→`0x19630+0x47F`、`0x11651F`→`0x116488+0x97` 等），再扫函数体内的 `lea rip-rel` 取字符串、`call` 取调用目标 ⇒ `MessageHandler(kDataLoaded)` → `Golden::LoadFromDisk` → `Golden::ImportText` → 计数 getter → `std::mutex::lock`。
+- **修法一**：`g_mutex` 改 `std::recursive_mutex`（同线程重入以后合法）。
+- **修法二**：新增 `TotalCountLocked()`（不自锁），`ImportText()` / `LoadFromDisk()` / `SaveToDisk()` 的计数全改用它；公共 `TotalCount()` 留外部。
+- **修法三（兜底）**：`kDataLoaded` 的金件块整体包进 `try / catch(std::exception) / catch(...)`，失败打 critical `Golden items: the store could not be loaded (…); the golden list stays empty for this session.`，游戏照常进。
+- **修法四（兜底）**：`MessageHandler()` 拆成 `HandleMessage()` + 只做 try/catch 的壳，日志 `Message handler: an exception escaped (…); the rest of this message is skipped.` —— 异常再也出不了 SKSE 回调。
+- 新增静态守卫 `tests/golden_lock_guards.ps1`（锁递归、无 `std::to_string(TotalCount())`、启动加载在 try 内、消息壳在位）。
+
+### 未改动
+
+- 引擎侧零改动：注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装切换、钩子安装、菜单 / ESP 生成 / 金件功能一行未改。1.5.25 实测正常的基础幻化、1.5.34 已验收的场景切换、1.5.40 的两处修复均不受影响。
+- 数据格式零改动：`OutfitSystemGoldenItems.json` 的 `{"version":1,"groups":[…]}` 原样，1.5.39 / 1.5.40 写出的文件照读。
+
+### 复核
+
+- `BUILD_EXIT=0`，0 error / 0 warning（日志 `build/build_task.log`，留档 `build/build_1_5_41.log`）。
+- 守卫测试 16 项 PASS（新增 `golden_lock_guards.ps1`）；2 项既有环境失败（`hair_tint_read_only.ps1` 锚点消失、`skse_listener_replay.ps1` 缺 `bug/skse64.log`），不是回归。
+- `OutfitSystemNG.dll` 2,037,760 字节 / `39f6b65eb45a6ba671c5cf2f88f192caf25019b78a91be0f86a53265fd967ad0` / `1.5.41.0`。
+
+### 未验证
+
+- 本机无游戏：没有实机确认「装完能进游戏」。判据是崩溃栈字符串 + PE 帧对位 + 源码核对，不是实机复现。
+
 ## [1.5.40] - 2026-11-21
 
 ### 修：1.5.39 的两处回归（m09740）

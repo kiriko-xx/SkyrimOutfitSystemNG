@@ -4,7 +4,7 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-- 当前版本：**1.5.40**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只修 1.5.39 实机报出的两处菜单回归（m09740），引擎侧一行未改：①「幻化」页点「Choose a plugin...」ESP 列表为空 —— 服装判据只查男性模型、列表又按服装计数过滤，女性服装包全被滤掉；现在判据同时看男女（`bipedModels[sex]` / `bipedModel1stPersons[sex]`），名字放宽为 `GetFormEditorID()` 或 `GetFullName()` 任一非空，列表改按 `entry.armors` 过滤；②「金件」页「Add every piece of a plugin」必闪退 —— 中文译文占位符顺序与英文相反，而 `I18n::T()` 的结果被当 printf 格式串，`%s` 吃到 `size_t` 当指针；两处中文串已改为同序，并在 `I18n::Apply()` 增加占位符校验护栏（不一致就忽略该条并回退英文）。测试包 `SkyrimOutfitSystemNG-1.5.40-test.zip` 只含 DLL，可直接用 MO2 装上替换。
+- 当前版本：**1.5.41**（未实机验证；工作分支 `feature/slot-policy-esp-outfits-golden`，`main` 仍是已验收的 1.5.34）。本版只修 1.5.40 的**启动即闪退**（m10014）：金件存库锁是普通 `std::mutex`，而导入路径持锁后又调用了会再次加锁的 `TotalCount()`，同线程二次加锁时 MSVC 抛 `std::system_error("resource deadlock would occur")`，异常在 SKSE 消息回调里没人接 ⇒ 每次启动必崩（1.5.39 崩溃前已写出 `OutfitSystemGoldenItems.json`）。修法：锁改 `std::recursive_mutex`、持锁路径改用不自锁的 `TotalCountLocked()`、启动加载与消息回调各加一道 try/catch 兜底（失败只让金件列表为空）。引擎侧与菜单功能一行未改。测试包 `SkyrimOutfitSystemNG-1.5.41-test.zip` 只含 DLL，可直接用 MO2 装上替换。
 - 支持：Skyrim SE 1.5.97 / AE 1.6.1130+（含 1.6.1170、1.6.1179、1.6.640）；VR 不支持
 - 前置：Address Library for SKSE Plugins；SKSE Menu Framework 3.x 可选（没有它插件照常工作，只是没有菜单）
 

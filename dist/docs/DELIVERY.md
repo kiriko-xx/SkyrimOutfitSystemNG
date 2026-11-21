@@ -1,6 +1,22 @@
 # 交付说明（DELIVERY）
 
-## 1.5.40 最新交付准备（2026-11-21）
+## 1.5.41 最新交付准备（2026-11-21）
+
+**验证状态（1.5.41）**：**尚未实机验证**。1.5.40 实机报「启动游戏时直接闪退」（m10014）；本版修这一处崩溃，并加两道兜底，让同类问题以后只会让金件列表变空、不会再关掉游戏。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log`，留档 `build/build_1_5_41.log`）；守卫测试 16 项 PASS（新增 `tests/golden_lock_guards.ps1`），另 2 项是已知环境失败（`hair_tint_read_only.ps1` 锚点已随代码迁移消失、`skse_listener_replay.ps1` 需要 `bug/skse64.log`），不是本版回归。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 2,037,760 字节；`39f6b65eb45a6ba671c5cf2f88f192caf25019b78a91be0f86a53265fd967ad0`；`1.5.41.0`（build/Release 与 dist 逐字节一致） |
+| 安装包与复核记录 | SkyrimOutfitSystemNG-1.5.41.zip：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；测试包 SkyrimOutfitSystemNG-1.5.41-test.zip：2 条目（只含 DLL + 说明文本），可直接用 MO2 装；最终 zip 大小/哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256`，包内不自引用 |
+
+- **崩溃：进游戏即闪退（m10014）**。崩溃日志的栈顶是 `KERNELBASE.dll+00C933A`，但 `[RSP+18]` 与 `[RSP+188]` 都是字符串 `resource deadlock would occur`、`[RSP+48]` 是 `std::system_error*`，前 7 帧全在 `OutfitSystemNG.dll` ⇒ 这是 C++ 运行时抛出的 `std::system_error(errc::resource_deadlock_would_occur)` 一路逃到游戏主循环。真因在 `src/core/GoldenItems.cpp`：存库锁 `g_mutex` 是普通 `std::mutex`，而 `ImportText()` 持锁后又调公共 `TotalCount()`（自己再 `lock_guard` 一次）⇒ 同线程二次加锁。MSVC 对这种重入不是死等，而是直接抛异常；异常没人接 → 闪退。触发点是 `kDataLoaded` 里无条件的 `SOS::Golden::LoadFromDisk()`，而 1.5.39 那次金件页崩溃前已经把 `Data/SKSE/Plugins/OutfitSystemGoldenItems.json` 写出来了，所以从 1.5.40 起每次启动必崩。这个 bug 自 1.5.39 起就在，`git diff v1.5.39 HEAD -- src/core/GoldenItems.cpp` 为空可证。
+- **修法一：锁改递归**：`g_mutex` 换成 `std::recursive_mutex`，同一条重入路径以后合法。
+- **修法二：持锁代码不再调加锁 getter**：新增 `TotalCountLocked()`（不自锁），`ImportText()` / `LoadFromDisk()` / `SaveToDisk()` 的计数全改用它；对外的 `TotalCount()` 保持不变。
+- **修法三（兜底）：启动加载失败不再关掉游戏**：`kDataLoaded` 的金件块整体包进 `try / catch(std::exception) / catch(...)`，失败时打 critical `Golden items: the store could not be loaded (…); the golden list stays empty for this session.`，本会话金件为空，游戏照常进。
+- **修法四（兜底）：SKSE 回调不许把异常抛出去**：`MessageHandler()` 拆成「真正的 `HandleMessage()` + 只做 try/catch 的壳」，任何消息阶段抛异常都只打 critical `Message handler: an exception escaped (…); the rest of this message is skipped.`。
+- **本版不动引擎侧**：注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装切换、钩子安装、菜单 / ESP 生成 / 金件功能一行未改（1.5.25 实测正常的基础幻化、1.5.34 已验收的场景切换、1.5.40 的两处修复都不受影响）。
+
+## 1.5.40 交付准备（历史，启动闪退已由 1.5.41 修）
 
 **验证状态（1.5.40）**：**尚未实机验证**。1.5.39 实机报了两处故障（m09740），本版只修这两处 + 加一道防同类崩溃的运行时护栏。静态侧：Release 全量重编 `BUILD_EXIT=0`（0 error / 0 warning，日志 `build/build_task.log`，留档 `build/build_1_5_40.log`）；守卫测试 15 项 PASS（新增 `tests/golden_menu_guards.ps1`），另 2 项是已知环境失败（`hair_tint_read_only.ps1` 锚点已随代码迁移消失、`skse_listener_replay.ps1` 需要 `bug/skse64.log`），不是本版回归。
 
@@ -1541,13 +1557,63 @@ if (!OnGameThread()) {
 
 - 本机无游戏：菜单点击、ESP 列表内容、金件增删都没有实机走过。**特别未验证**：`PluginScan` 的 `N of M` 统计在你那 890 个插件 / 13,909 条槽位护甲上的实际分布。
 - 崩溃点已由 PE 解码与源码对位（`RenderGolden` 内 `snprintf`），但没有实机复现确认「改完就不崩」——需要你在同一路径再点一次「Add every piece of a plugin」。
+## 4.65 1.5.41：启动即闪退——金件存库锁的自死锁（m10014）
+
+### 症状
+
+- 装 1.5.40 后**进游戏直接闪退**，连主菜单之后的第一帧都到不了（崩溃日志 `Process Uptime 00:00:39`）。
+- 1.5.39 时代是「打开金件页点添加全部装备」才崩；1.5.40 修掉了那处，但只要 `Data/SKSE/Plugins/OutfitSystemGoldenItems.json` 存在，启动就崩。
+
+### 崩溃证据（crash-2026-11-21-04-06-07.log）
+
+- `Unhandled exception at 0x7FF88FC3933A KERNELBASE.dll+00C933A`，`Exception Flags 0x00000081`，`Exception Thread ID 2728`，`Process Uptime 00:00:39`，游戏 `D:\Games\iniRePather-Skyrim-v6.1\StockGame`，SkyrimSE 1.5.97。
+- `PROBABLE CALL STACK` 前 7 帧全在 `OutfitSystemNG.dll`（`+011651F` ← `+0112BC6` ← `+001B7D7` ← `+0018255` ← `+0019AAF` ← `+00DE131`），第 8 帧才进 `skse64_1_5_97.dll+0081182` / `+000A598`，再往上 `SkyrimSE.exe+05B050D`（`35554+0x3ED`）/ `+05B85FC`（`35631+0x1C`）/ `+0C0D6BD`（`67147+0x3D`）。
+- **关键**：`[RSP+18]` = 字符串 `resource deadlock would occur`、`[RSP+48]` = `std::system_error*`、`[RSP+188]` = `resource deadlock would occur: resource deadlock would occur`。异常来自 C++ 标准库，不是引擎访问违例。
+- 没有 .pdb，用自写 PE 解析把 6 个返回地址对上函数：`.pdata` 有 4,738 个 `RUNTIME_FUNCTION`，`0xDE131` 落在函数 `0xDE0C0..0xDE777` 内（`+0x71`），该函数引用的字符串是 `src\cpp\main.cpp`、`anonymous-namespace'::MessageHandler`、`RaceMenu interface probe phase: DataLoaded.`，并且 `call` 到 `0x19630`；`0x19630` 那个函数引用 `src\core\GoldenItems.cpp` 与 `bool __cdecl SOS::Golden::LoadFromDisk(void)`；`0x17930` 引用 `bool __cdecl SOS::Golden::ImportText(...)` 与 `Golden items: {} entr(ies) imported.`，并 5 次 `call` 到 `0x116488`；最深那帧 `0x11651F` 就在 `0x116488` 函数尾（`+0x97`）。⇒ 栈 = `MessageHandler(kDataLoaded)` → `Golden::LoadFromDisk` → `Golden::ImportText` → 计数 getter → `std::mutex::lock` 抛异常。
+
+### 真因
+
+1. `src/core/GoldenItems.cpp` 第 37 行 `std::mutex g_mutex;` 是**非递归**锁。
+2. `ImportText()`（第 456 行）在 521 行先 `std::lock_guard lock(g_mutex);`，随后 523/524 行为了写日志调用**公共** `TotalCount()`（第 236 行），而它自己又 `std::lock_guard lock(g_mutex);` ⇒ 同线程二次加锁。
+3. MSVC 的 `std::mutex` 对同线程重入**不阻塞**，而是抛 `std::system_error(errc::resource_deadlock_would_occur)`；这个异常在 SKSE 消息回调里没人捕获，直接展开到游戏主循环 → 闪退。
+4. 为什么现在才炸：`src/cpp/main.cpp` 的 `kDataLoaded` 无条件调 `SOS::Golden::LoadFromDisk()`，只有文件存在时才会走到 `ImportText`；1.5.39 那次金件页崩溃**之前** `SaveToDisk()` 已经把 JSON 写出来了，所以升级到 1.5.40 后每次启动必崩。`git diff v1.5.39 HEAD -- src/core/GoldenItems.cpp` 为空 ⇒ 该缺陷自 1.5.39 引入，1.5.40 只是把它暴露出来。
+
+### 修法
+
+1. **锁改递归**（`src/core/GoldenItems.cpp`）：`std::mutex g_mutex;` → `std::recursive_mutex g_mutex;`，并在声明上方写清这半行改动的来历（1.5.40 启动崩溃）。
+2. **持锁路径只调不自锁的 getter**：新增匿名 namespace 里的 `std::size_t TotalCountLocked() { return Current()->entries.size(); }`；`LoadFromDisk()` / `SaveToDisk()` / `ImportText()` 里的 `TotalCount()` 全部换成它；公共 `TotalCount()` 保留给外部调用方。
+3. **启动加载加兜底**（`src/cpp/main.cpp`）：`kDataLoaded` 的金件块（迁移旧 ini / `LoadFromDisk` / `SaveToDisk` / `WarmUp`）整体包进 `try`，两个 `catch` 只打 critical `Golden items: the store could not be loaded ({}); the golden list stays empty for this session.`。
+4. **消息回调加兜底**（`src/cpp/main.cpp`）：原 `MessageHandler` 改名 `HandleMessage`，新的 `MessageHandler` 只做 `try { HandleMessage(a_msg); } catch (const std::exception&) { … } catch (...) { … }`，日志 `Message handler: an exception escaped (…); the rest of this message is skipped.`。异常再也出不了 SKSE 回调。
+5. **守卫测试**（新增 `tests/golden_lock_guards.ps1`）：静态断言锁是递归的、旧的非递归声明不存在、`TotalCountLocked()` 存在、`std::to_string(TotalCount())` 不存在、两条计数日志用 `TotalCountLocked`、启动加载位于 `try {` 内且有兜底日志、`HandleMessage` / `MessageHandler` 壳与 `an exception escaped` 都在。
+
+### 新日志
+
+| 日志 | 含义 |
+| --- | --- |
+| `Golden items: N entr(ies) loaded from <path>.`（info） | 启动时正常读到金件库（这就是崩溃前会走到的那一步，现在能走过去）。 |
+| `Golden items: the store could not be loaded (<错误>); the golden list stays empty for this session.`（critical） | **新增兜底**：金件库读失败（文件损坏、权限、JSON 语法错）。游戏照常进，本会话金件为空；把这行发回。 |
+| `Message handler: an exception escaped (<错误>); the rest of this message is skipped.`（critical） | **新增兜底**：某个 SKSE 消息阶段抛了异常，已被接住。看到它说明还有别的抛点，把整行与前后 30 行发回。 |
+| `resource deadlock would occur`（崩溃日志里的字符串，不是本插件日志） | 出现它 = 又有同线程重入加锁。这版之后应只剩 MSVC 运行库的字符常量，不再出现在崩溃栈上。 |
+
+### 兼容性
+
+- 不动数据格式：`OutfitSystemGoldenItems.json` 的 `{"version":1,"groups":[…]}` 原样，1.5.39/1.5.40 写出的文件照读。
+- 不动引擎侧：注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装、钩子安装、菜单与 ESP 生成一行未改。
+- 不改公开 API：Papyrus 66 个原生函数、INI 键、日志文件名 `SkyrimOutfitSystemNG.log` 均原样。
+
+### 未验证
+
+- 本机无游戏，**没有实机确认「装完能进游戏」**；判断依据是源码路径与崩溃栈对位（`ImportText` → `TotalCount` → `lock`）。
+- 崩溃栈的帧对位依赖自写 PE 解析（无 .pdb）：函数区间由 `.pdata` 给出，字符串与调用目标由函数体内 `lea`/`call` 反推，不是符号级调试。
+- 若实机仍闪退，请看新崩溃日志的 `[RSP+…]` 是否还有 `std::system_error`：有 → 还有别的重入锁（把行号发回）；没有 → 是另一条崩溃，另开取证。
+
 ## 5. 静态验证
 
 
 | 项 | 结果 |
 | --- | --- |
-| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.40 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_40.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
-| 版本资源 | `FileVersion = 1.5.40.0` / `ProductVersion = 1.5.40.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
+| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.41 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_41.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
+| 版本资源 | `FileVersion = 1.5.41.0` / `ProductVersion = 1.5.41.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
 | 导入表 | 仅 KERNEL32 / USER32 / ole32 / VERSION / SHELL32 |
 | 延迟导入 | 目录 RVA = 0、size = 0（无延迟导入项） |
 | 导出 | SKSEPlugin_Load / SKSEPlugin_Query / SKSEPlugin_Version 均存在 |
@@ -1566,6 +1632,8 @@ if (!OnGameThread()) {
 | 1.5.33 关键字符串 | `setOutfitByName` / `SceneOutfits: ` / `scene started;` / `scene ended;` / `create an outfit with exactly that name` / `the scene switch is skipped` / `1.5.33` 可检索；1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 以及 1.5.32 队列相关的 `scene event dropped` **已全部从 DLL 中消失**；`FileVersion = 1.5.33.0`、`ProductVersion = 1.5.33.0`（PowerShell `VersionInfo` 实测）；DLL 1,934,848 字节，sha256 `8c23e5eec3ae0f4561125ab2cabb71e63ef7c21d01e6a8b85755687454716aaf`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist |
 | 1.5.34 关键字符串 | `handed to the game thread` / `came from thread` / `there is no task interface` / `scene started;` / `scene ended;` / `setOutfitByName` / `1.5.34` 可检索；1.5.33 的丢弃行 `arrived off the game thread` **已从 DLL 中消失**，1.5.30/1.5.31 的 `repeating the equip pass for` / `follow-up` / `Model Rebuild` / `rebuild the model of` / `RequestOutfitPasses` 仍全部不存在；`FileVersion = 1.5.34.0`、`ProductVersion = 1.5.34.0`（PowerShell `VersionInfo` 实测）；DLL 1,937,408 字节，sha256 `e1cdb9518149d0e1f7a23d1835317620b8258c1e030d6d987b658e4718283782`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增；旧名 `SkyrimOutfitSystemNG.dll` 不在 dist || 1.5.40 关键字符串 | `count as clothing` / `does not use the placeholders` / `were ignored because their placeholders` / `已添加 %zu 件，来自 %s。` / `已导入 %zu 件，来源 %s` 可检索；旧错串 `已添加 %s 的 %zu 件` / `已从 %s 导入 %zu 件` 已 **0 命中**；`FileVersion = 1.5.40.0`、`ProductVersion = 1.5.40.0`（PowerShell `VersionInfo` 实测）；DLL 2,036,224 字节，sha256 `95c2b38848bf3d3f2a0577f2b611b8cbc06c7ad76f653674eb89fbcb5a5618bf`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.39 关键字符串 | `OutfitSystemGoldenItems.json` / `ESP outfits: ` / `wearable clothing` / `FX effects and other non clothing records were left out` / `skipped as not clothing` / `Golden items: ` / `PluginScan: ` / `1.5.39` 可检索；`FileVersion = 1.5.39.0`、`ProductVersion = 1.5.39.0`（PowerShell `VersionInfo` 实测）；DLL 2,030,592 字节，sha256 `c72a60a6f4a400bbb4cf06a9b2e1c81a86baca487fbf901119e264421aee83da`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增（只多用 `GetFormArray` / `GetLoadedLightMods` 等 SKSE+引擎既有接口）；1.5.34 的 `handed to the game thread` / `scene started;` 与 1.5.30/31 已删机件仍保持原状态 |
+| 1.5.41 关键字符串 | `the golden list stays empty for this session` / `an exception escaped` / `count as clothing` / `does not use the placeholders` / `resource deadlock would occur`（MSVC 运行库串） / `1.5.41` 可检索；`TotalCountLocked` 因 Release 内联不出现在字符串表（属正常）；`FileVersion = 1.5.41.0`、`ProductVersion = 1.5.41.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,037,760 字节，sha256 `39f6b65e…fd967ad0`；导入依赖未新增 |
+| 1.5.40 关键字符串 | `count as clothing` / `does not use the placeholders` / `were ignored because their placeholders` / `已添加 %zu 件，来自 %s` / `已导入 %zu 件，来源 %s` / `1.5.40` 可检索；1.5.39 的两条错序中文串（`已添加 %s 的 %zu 件。` / `已从 %s 导入 %zu 件`）**已从 DLL 中消失**；`FileVersion = 1.5.40.0`；DLL 大小 2,036,224 字节，sha256 `95c2b388…a5618bf` |
 | 1.5.29 关键字符串 | `detached ` / `illusion clone(s) whose slot left the display set` / `lost the illusion in slot mask` / `after 3 rebuilds` / `rebuilding the actor` / `left to the engine` 可检索；`ClearBipedPart` 与 `IllusionMissingSlots` 作为内部符号不出现在字符串表（前者只剩一处调用）；FileVersion 1.5.29.0、DLL 1,936,384 B / `4f0bcae1…`、导入依赖未新增 |
 | 1.5.27 关键字符串 | `uses .tri ` / `has no .tri beside it` / `Probed: ` / `the armour addon the engine attached` / `has no armour addon yet` / `leaving the clones to the next morph pass instead of cycling` / `but the illusion carries .tri targets` / `every illusion clone whose armour model ships a .tri` / `1.5.27` 均可检索；1.5.26 的 `.tri morph targets are attached to every illusion clone` 已从 DLL 中消失；`carries a .tri morph target on` / `stay armed` / `BODYTRI` / `MorphShapeCallback` 仍在；`FileVersion = 1.5.27.0`、`ProductVersion = 1.5.27.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,875,456 字节，sha256 `22eb7794…a91af178f`；导入依赖未新增 |
 | 1.5.25 关键字符串 | `left to the engine` / `slot {:02} item {:08X} addon {:08X} part {} clone {}` / `1.5.25` 均可检索；1.5.24 的 `cleared for` 与 `ClearBipedPart` / `ClearSlots` 已从 DLL 中消失；`FileVersion = 1.5.25.0`、`ProductVersion = 1.5.25.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,866,240 字节，sha256 `ae797d9d…efc3936b5`；导入依赖未新增 |
@@ -1653,7 +1721,10 @@ if (!OnGameThread()) {
 
 55. **1.5.34 场景事件不再被线程门禁丢掉（对应 m07842）**：①确认装的是 `Data/SKSE/Plugins/OutfitSystemNG.dll`（1.5.34.0），旧名 `SkyrimOutfitSystemNG.dll` 已删；②进 OStim / SexLab 场景，**不要按 Tab / Z**，看 `<当前套装>_sex` 是否切过去；③场景结束，同样不按键，看是否切回普通幻化。日志判定（要开 Verbose 才看得到交接行）：应先见 `SceneOutfits: 'ostim_start' came from thread <工作线程> (game thread <主线程>); the switch is handed to the game thread.`，紧跟（下一任务周期）`SceneOutfits: OStim scene started; 'A' -> 'A_sex'.` → `Armor Refresh for …` → `Custom: attaching N outfit-only piece(s) …`。**不应再出现** 1.5.33 的 `arrived off the game thread; the scene switch is skipped.`（出现即说明装的不是 1.5.34）。若 `scene started` 有了但模型还不出现，把那 20 行发回 —— 那是「切了但 3D 不刷新」另一层问题，不在本版范围内。见 §4.62 与 TESTING §3.46。56. **1.5.39 菜单三件（逐槽策略按套装独立 / 从 ESP 生成套装 / 金件页，对应 m09191、m09426）**：①幻化栏放几套不同套装，选中 A 勾「逐槽策略编辑器」，再选中 B —— **B 的策略编辑器应是收起的**（旧版会一起展开）；把 A 勾上后打 JSON，`slotPolicy` 只应出现在 A 的记录里。②幻化页底部「Choose a plugin...」→ 列表应按加载顺序倒序排列（最后加载的在最上面）、右侧显示 `%s  (%zu piece(s), %zu skipped as not clothing)`；选一个含 3 件上衣 + 2 条裤子 + 1 个 FX 特效的 ESP，应生成 `<ESP名称>` 与 `<ESP名称>_1` 两套，**FX 那条不进任何一套**，日志 `ESP outfits: …; N wearable of M slot record(s)` 里 M > N。③金件页：同一 ESP 里那条 FX 记录**可以**被「Add every piece of a plugin」加进来（金件不做服装过滤），但「Add piece」手输不存在的 FormID 应提示 `That is not a hexadecimal form id.` 或找不到记录。④设置页「套装生成」段的「生成的套装自动收藏」勾上后生成的套装应带收藏星标。若 ESP 列表为空，说明该 ESP 没有通过 `IsOutfitArmor()` 三条判据的记录（没有 EditorID / 只有 FX 槽 / armor addon 没模型），把 `PluginScan:` 那行发回。见 §4.63 与 TESTING §3.47。57. **1.5.40 两处修复（ESP 列表为空 / 金件页闪退，对应 m09740）**：①幻化页点「Choose a plugin...」—— 列表**必须非空**（你环境里 890 个插件，之前是 0）；选中一个纯女性服装包，日志应出现 `ESP outfits: … ; N wearable of M slot record(s)` 且 **N > 0**（旧版这里是 0）。②金件页点「Add every piece of a plugin」→ 选中一个 ESP → **不应闪退**，状态行应显示 `Golden items: N piece(s) of <plugin> added.`，左侧组列表可点、右侧能看到 `plugin:LOCALFORMID  名称` 与 `[slot 30/32/…]`，每件有 Remove。③若你的界面语言是中文，`Language:` 那两条护栏警告应为 **0 条**（若出现，把那行译文发回）。④重启后进日志搜 `PluginScan:` 的 `count as clothing` 行，把 `(U unnamed, F FX only, A without an addon, X without a model)` 四个数发回 —— 这决定要不要再放宽模型判据。见 §4.64 与 TESTING §3.48。
 
+58. **1.5.41 启动闪退（对应 m10014）**：①直接启动游戏，**不应闪退**，能进到主菜单并读到存档；②进日志搜 `Golden items:` —— 应看到 `Golden items: N entr(ies) loaded from …`（正常）或 `Golden items: the store could not be loaded (…); the golden list stays empty for this session.`（兜底，把该行进回）；③搜 `Message handler: an exception escaped`，应为 **0 条**（有则说明还有别的抛点，把整行与前 30 行发回）；④再进金件页确认 1.5.40 修的两处仍正常（ESP 列表非空、点「Add every piece of a plugin」不崩）。见 §4.65 与 TESTING §3.49。
+
 ## 7. 已知限制
+- **1.5.41 的启动崩溃修复未实机验证**：本机无游戏，判据是崩溃栈字符串（`resource deadlock would occur`）+ PE 帧对位（`MessageHandler` → `Golden::LoadFromDisk` → `Golden::ImportText`）+ 源码核对（`ImportText` 持锁后调 `TotalCount()`）。若实机仍崩，按 §8 的两条 critical 行分流。
 - **1.5.40 的两处修复全部未实机验证**：本机没有游戏，静态侧只有 `BUILD_EXIT=0`（0 error / 0 warning）与 15 项守卫测试 PASS。ESP 列表内容、金件增删、崩溃是否真的消失都还没人看过；崩溃点是用自写 PE 解析对位到 `RenderGolden` 里的 `snprintf`，不是实机复现验证。
 - **服装判据仍可能漏件**：现在要求「有 EditorID 或 FullName」+「至少一个非 FX 槽位」+「至少一个 armor addon 在男性或女性的三/一人称模型里有模型名」。用脚本在运行时拼出来、模型靠附加数据而非 `bipedModels` 的护甲仍会被判成「非服装」，表现为 `X without a model` 计数偏大 —— 请把 `PluginScan:` 那行统计发回再决定是否放宽。
 - **金件页「点不中／右侧空」是崩溃后的连带状态**：崩溃发生在渲染函数里，框架那一帧没画完，组选中态与列表可能停在半截。修好后若仍出现，请附新日志（`Golden items: ` 与 `PluginScan: ` 两行）单独排查。
@@ -1837,6 +1908,9 @@ if (!OnGameThread()) {
 | `Language: '<译文>' does not use the placeholders of '<英文>' in the same order; the English line is shown …`（warn） | **1.5.40 新增护栏**：某条译文占位符顺序与英文不一致，已被忽略并回退英文。修那条译文，或删掉 `Data/SKSE/Plugins/SkyrimOutfitSystemNG_zh.txt` 里那一行。 |
 | `Language: N translated line(s) were ignored because their placeholders do not match the English text.`（warn） | 上面那条的汇总（明细最多 5 条）。N 应为 0。 |
 | `Golden items: N piece(s) of <plugin> added.`（info） | 金件批量添加的结果。1.5.39 在这行之后的格式化里崩溃，1.5.40 不该再崩。 |
+| `Golden items: N entr(ies) loaded from <path>.`（info） | **1.5.41**：启动时金件库正常读到。没有这一行也没崩溃，说明金件库文件不存在（首次运行属正常）。 |
+| `Golden items: the store could not be loaded (…); the golden list stays empty for this session.`（critical） | **1.5.41 新增兜底**：金件库读失败，本会话金件为空但游戏能进。把这行发回（多半是 JSON 坏了或文件被占用）。 |
+| `Message handler: an exception escaped (…); the rest of this message is skipped.`（critical） | **1.5.41 新增兜底**：某个 SKSE 消息阶段抛异常已被接住。应为 0 条；出现就把整行与前后 30 行发回。 |
 
 ## 9. 维护提示
 - **「能不能收」的规则分两条路，不许合并**（m09426）：幻化用的套装生成只收正常服装 —— 走 `PluginScan::IsOutfitArmor()`（有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型），并且分桶时用 `mask & ~kFxBit`；金件是用户自愿指定的任何记录，`Golden::AddAllFromPlugin()` / `AddLocal()` **不调用** `IsOutfitArmor()`。以后新增任何「按 ESP 批量收件」的入口，先想清楚它属于哪条路，不要图省事复用同一个过滤函数。
@@ -1865,3 +1939,5 @@ if (!OnGameThread()) {
 
 - **给 I18n 的译文永远按 printf 格式串对待**（1.5.39→1.5.40 的教训）：`I18n::T(en, zh)` 的返回可能直接进 `snprintf`，所以英文与译文**必须**占位符同序同类型。新增/修改任何一条双串调用前先数占位符；`I18n::Apply()` 的 `PlaceholdersMatch()` 只是兜底，不是许你把顺序写反的许可。翻译文件同理。
 - **「能不能列出来」与「能不能收进来」是两层**（1.5.40）：ESP 列表用 `PluginScan::PluginsWithArmor()`（任何槽位护甲都列），逐件是否收进套装才用 `IsOutfitArmor()`。别再用服装计数去过滤列表 —— 1.5.39 就是那样把列表清空的。
+- **同线程重入加锁一律用 `std::recursive_mutex`，并且持锁代码不许调加锁 getter**（1.5.40→1.5.41 的教训）：MSVC 的 `std::mutex` 重入**会抛 `std::system_error("resource deadlock would occur")`**，不是死等 —— 在 SKSE 回调里没人接就是直接闪退，而且崩溃日志只有一行 `KERNELBASE.dll`，看不出是我们。写法规定：持锁路径内部一律调 `…Locked()` 系列（如 `TotalCountLocked()`），公共 getter 只给外部用。
+- **任何在 SKSE 回调里跑的代码都不许让异常逃出去**：`kDataLoaded` / 消息处理器 / 事件 sink 里调用会读文件、解析 JSON、加锁、算几何的部分，一律 `try / catch(std::exception) / catch(...)` 包住并打 critical 日志。异常逃出回调的代价是整局游戏退出，而一次兜底只是「这个功能这次不生效」。

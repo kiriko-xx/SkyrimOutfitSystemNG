@@ -34,7 +34,13 @@ namespace SOS::Golden
 			std::shared_ptr<const std::unordered_set<RE::FormID>> resolved;
 		};
 
-		std::mutex                  g_mutex;
+		// Recursive on purpose: every public entry point of this file takes this
+		// lock, and some of them call one another (ImportText -> counts,
+		// SaveToDisk / LoadFromDisk -> counts). On MSVC a plain std::mutex throws
+		// std::system_error("resource deadlock would occur") for that re-entry, and
+		// an exception escaping the SKSE message handler takes the game down:
+		// 1.5.40 crashed on start-up in LoadFromDisk -> ImportText for exactly this.
+		std::recursive_mutex        g_mutex;
 		std::shared_ptr<const Snapshot> g_snapshot;
 
 		std::string LowerCopy(std::string_view a_text)
@@ -107,6 +113,14 @@ namespace SOS::Golden
 				Publish({});
 			}
 			return g_snapshot;
+		}
+
+		// Counts read without taking g_mutex again. Use these from any code path
+		// that already holds the lock; the public TotalCount()/GroupCount() stay
+		// for callers outside this file.
+		std::size_t TotalCountLocked()
+		{
+			return Current()->entries.size();
 		}
 
 		std::string FormatEntry(const Entry& a_entry)
@@ -419,7 +433,7 @@ namespace SOS::Golden
 			SKSE::log::warn("Golden items: {} could not be read: {}", path, message);
 			return false;
 		}
-		SKSE::log::info("Golden items: {} entr(ies) loaded from {}.", TotalCount(), path);
+		SKSE::log::info("Golden items: {} entr(ies) loaded from {}.", TotalCountLocked(), path);
 		return true;
 	}
 
@@ -443,7 +457,7 @@ namespace SOS::Golden
 		}
 		out << text;
 		out.close();
-		SKSE::log::debug("Golden items: {} entr(ies) saved to {}.", TotalCount(), path);
+		SKSE::log::debug("Golden items: {} entr(ies) saved to {}.", TotalCountLocked(), path);
 		return true;
 	}
 
@@ -520,8 +534,8 @@ namespace SOS::Golden
 		}
 		std::lock_guard lock(g_mutex);
 		Publish(std::move(imported));
-		a_message = "Imported " + std::to_string(TotalCount()) + " piece(s).";
-		SKSE::log::info("Golden items: {} entr(ies) imported.", TotalCount());
+		a_message = "Imported " + std::to_string(TotalCountLocked()) + " piece(s).";
+		SKSE::log::info("Golden items: {} entr(ies) imported.", TotalCountLocked());
 		return true;
 	}
 }
