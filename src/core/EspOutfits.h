@@ -36,6 +36,10 @@ namespace SOS::EspOutfits
 		std::vector<PreviewPiece> pieces;
 		std::vector<PreviewOutfit> outfits;
 		std::vector<std::size_t> unresolved;
+		// One entry per piece: why it is not part of a preset. Shown in the menu.
+		std::vector<std::string> reasons;
+		// One entry per piece: the name prefix of the style it was sorted into.
+		std::vector<std::string> families;
 		std::size_t notClothing{};
 		bool truncated{};
 	};

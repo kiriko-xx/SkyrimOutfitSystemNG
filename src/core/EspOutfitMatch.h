@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -31,13 +32,14 @@ namespace SOS::EspOutfits::Match
 		std::vector<IndexList> variants;
 		const char* issue{};
 		std::uint32_t coverage{};
+		// Pieces this family could not place, with the reason the menu shows.
+		std::vector<std::pair<std::size_t, const char*>> pending;
 	};
 
 	struct Node
 	{
 		std::map<char32_t, std::size_t> children;
 		IndexList members;
-		std::uint32_t coverage{};
 		bool complementary{};
 	};
 
@@ -49,133 +51,188 @@ namespace SOS::EspOutfits::Match
 		return node.complementary && prefix.size() >= (ascii ? 3u : 2u);
 	}
 
-	inline void FindFamilies(const std::vector<Node>& trie, std::size_t index, Key& prefix, std::vector<Group>& groups)
-	{
-		const auto& node = trie[index];
-		const auto before = groups.size();
-		for (const auto& [ch, child] : node.children) {
-			if (!trie[child].complementary) {
-				continue;
-			}
-			prefix.push_back(ch);
-			FindFamilies(trie, child, prefix, groups);
-			prefix.pop_back();
-		}
-		if (!FamilyEvidence(node, prefix)) {
-			return;
-		}
-		if (groups.size() == before) {
-			groups.push_back({ prefix, node.members, {}, nullptr, node.coverage });
-			return;
-		}
-		if (groups.size() == before + 1) {
-			const auto& deeper = groups.back();
-			if (deeper.coverage != node.coverage) {
-				// A deeper family covers fewer slots. The remaining pieces might be
-				// shared accessories or a different style; never silently drop them
-				// and write an apparently complete outfit.
-				groups.back() = { prefix, node.members, {}, "uncertain-family-coverage", node.coverage };
-			}
-		}
-		// Multiple independently supported branches stay separate. No orphan bucket.
-	}
-
+	// Turns one family into presets. Every preset holds at most one piece per slot,
+	// and several pieces on one slot become variants only when their difference
+	// marks line up. Nothing is paired by position and nothing is invented, yet one
+	// unreadable slot no longer sinks the whole outfit.
 	inline void MatchVariants(Group& group, const std::vector<Piece>& pieces, const Aliases& aliases)
 	{
 		std::map<std::uint32_t, IndexList> buckets;
-		std::uint32_t occupied = 0;
 		for (const auto i : group.members) {
-			const auto mask = pieces[i].mask;
-			if (!buckets.contains(mask) && (occupied & mask) != 0) {
-				group.issue = "overlapping-slot-masks";
-				return;
+			buckets[pieces[i].mask].push_back(i);
+		}
+		std::vector<std::uint32_t> order;
+		order.reserve(buckets.size());
+		for (const auto& [mask, list] : buckets) {
+			order.push_back(mask);
+		}
+		// Narrow pieces first: a piece that covers several slots must never push
+		// aside the ordinary parts of the outfit.
+		std::sort(order.begin(), order.end(), [](std::uint32_t lhs, std::uint32_t rhs) {
+			const auto left = std::popcount(lhs);
+			const auto right = std::popcount(rhs);
+			return left != right ? left < right : lhs < rhs;
+		});
+		IndexList                                         shared;
+		std::vector<std::map<Key, std::size_t>>            choices;
+		std::uint32_t                                      occupied = 0;
+		for (const auto mask : order) {
+			auto& bucket = buckets.at(mask);
+			if ((occupied & mask) != 0) {
+				for (const auto i : bucket) {
+					group.pending.push_back({ i, "overlapping-slot-masks" });
+				}
+				continue;
 			}
 			occupied |= mask;
-			buckets[mask].push_back(i);
-		}
-
-		IndexList shared;
-		std::vector<std::map<Key, std::size_t>> choices;
-		for (const auto& [mask, bucket] : buckets) {
 			if (bucket.size() == 1) {
 				shared.push_back(bucket.front());
 				continue;
 			}
+			std::sort(bucket.begin(), bucket.end(), [&](auto lhs, auto rhs) { return pieces[lhs].key < pieces[rhs].key; });
+			for (std::size_t i = kMaxVariants; i < bucket.size(); ++i) {
+				group.pending.push_back({ bucket[i], "variant-limit" });
+			}
 			if (bucket.size() > kMaxVariants) {
-				group.issue = "variant-limit";
-				return;
+				bucket.resize(kMaxVariants);
 			}
 			const std::u32string_view first = pieces[bucket.front()].key;
-			std::size_t common = first.size();
+			std::size_t               common = first.size();
 			for (const auto i : bucket) {
 				const std::u32string_view other = pieces[i].key;
-				common = static_cast<std::size_t>(std::mismatch(first.begin(), first.begin() + common,
-					other.begin(), other.end()).first - first.begin());
+				common = static_cast<std::size_t>(
+					std::mismatch(first.begin(), first.begin() + common, other.begin(), other.end()).first - first.begin());
 			}
-			auto& tags = choices.emplace_back();
+			std::map<Key, std::size_t> tags;
+			std::map<Key, std::size_t> counts;
+			std::map<std::size_t, Key> tagOf;
 			for (const auto i : bucket) {
 				Key tag = pieces[i].key.substr(common);
-				if (const auto alias = aliases.find(tag); alias != aliases.end() && !tag.empty()) {
-					tag = alias->second;
+				if (!tag.empty()) {
+					if (const auto alias = aliases.find(tag); alias != aliases.end()) {
+						tag = alias->second;
+					}
 				}
-				if (tag.empty() || !tags.emplace(std::move(tag), i).second) {
-					group.issue = "non-unique-difference";
-					return;
+				++counts[tag];
+				tagOf.emplace(i, tag);
+			}
+			// A single empty mark is the base variant ("Panty" next to "Panty (Trans)");
+			// only an actually repeated mark is unprovable, and only those pieces drop.
+			for (const auto& [i, tag] : tagOf) {
+				if (counts[tag] == 1) {
+					tags.emplace(tag, i);
+				} else {
+					group.pending.push_back({ i, "non-unique-difference" });
 				}
 			}
+			if (tags.empty()) {
+				continue;
+			}
+			choices.push_back(std::move(tags));
 		}
 		if (choices.empty()) {
 			std::sort(shared.begin(), shared.end());
+			if (shared.size() < 2) {
+				group.issue = !group.pending.empty() ? group.pending.front().second : "no-complete-outfit";
+				return;
+			}
 			group.variants.push_back(std::move(shared));
 			return;
 		}
-		// Equality of the complete key sets proves one unique selection per
-		// bucket for every variant. No Cartesian search or partial writes.
-		const auto& tags = choices.front();
-		for (const auto& choice : choices) {
-			if (choice.size() != tags.size() || !std::equal(tags.begin(), tags.end(), choice.begin(),
-					[](const auto& lhs, const auto& rhs) { return lhs.first == rhs.first; })) {
-				group.issue = "unmatched-difference";
-				return;
+		// Slots whose difference marks agree form one variant series; a wider series
+		// (more slots, then more marks) names the presets, and the other slots join
+		// whenever their mark matches exactly. Marks that match nothing stay listed.
+		std::map<std::vector<Key>, std::vector<std::size_t>> classes;
+		for (std::size_t i = 0; i < choices.size(); ++i) {
+			std::vector<Key> tags;
+			tags.reserve(choices[i].size());
+			for (const auto& [tag, index] : choices[i]) {
+				tags.push_back(tag);
+			}
+			classes[tags].push_back(i);
+		}
+		struct Series
+		{
+			std::vector<Key>         tags;
+			std::vector<std::size_t> slots;
+		};
+		std::vector<Series> series;
+		series.reserve(classes.size());
+		for (auto& [tags, slots] : classes) {
+			series.push_back({ std::move(tags), std::move(slots) });
+		}
+		std::sort(series.begin(), series.end(), [](const Series& lhs, const Series& rhs) {
+			if (lhs.slots.size() != rhs.slots.size()) {
+				return lhs.slots.size() > rhs.slots.size();
+			}
+			if (lhs.tags.size() != rhs.tags.size()) {
+				return lhs.tags.size() > rhs.tags.size();
+			}
+			return lhs.tags < rhs.tags;
+		});
+		const auto& primary = series.front();
+		std::map<std::pair<Key, std::size_t>, std::size_t> optional;
+		for (std::size_t s = 1; s < series.size(); ++s) {
+			for (const auto slot : series[s].slots) {
+				for (const auto& [tag, index] : choices[slot]) {
+					if (std::binary_search(primary.tags.begin(), primary.tags.end(), tag)) {
+						optional.emplace(std::make_pair(tag, slot), index);
+					} else {
+						group.pending.push_back({ index, "unmatched-difference" });
+					}
+				}
 			}
 		}
-		for (const auto& [tag, index] : tags) {
-			auto variant = shared;
-			for (const auto& choice : choices) {
-				variant.push_back(choice.at(tag));
+		std::vector<IndexList> built;
+		IndexList              lost;
+		for (const auto& tag : primary.tags) {
+			IndexList variant = shared;
+			for (const auto slot : primary.slots) {
+				variant.push_back(choices[slot].at(tag));
+			}
+			for (std::size_t s = 1; s < series.size(); ++s) {
+				for (const auto slot : series[s].slots) {
+					if (const auto found = optional.find(std::make_pair(tag, slot)); found != optional.end()) {
+						variant.push_back(found->second);
+					}
+				}
 			}
 			std::sort(variant.begin(), variant.end());
-			group.variants.push_back(std::move(variant));
+			if (variant.size() >= 2) {
+				built.push_back(std::move(variant));
+			} else {
+				lost.insert(lost.end(), variant.begin(), variant.end());
+			}
+		}
+		for (const auto i : lost) {
+			const bool used = std::any_of(built.begin(), built.end(), [i](const auto& variant) {
+				return std::binary_search(variant.begin(), variant.end(), i);
+			});
+			if (!used) {
+				group.pending.push_back({ i, "no-complete-outfit" });
+			}
+		}
+		group.variants = std::move(built);
+		if (group.variants.empty()) {
+			group.issue = !group.pending.empty() ? group.pending.front().second : "no-complete-outfit";
 		}
 	}
 
-	inline std::vector<Group> Plan(const std::vector<Piece>& pieces, const Aliases& aliases = {}, bool useLabels = true)
+	// Every closed name prefix that could name a family, widest first is not assumed:
+	// the planner below scores them. A prefix is evidence when its pieces cover
+	// complementary slots; the length floor keeps accidental short fragments out
+	// (three characters for ASCII, two code points elsewhere).
+	template <class KeyOf>
+	inline std::vector<std::pair<Key, IndexList>> CandidateFamilies(const std::vector<Piece>& pieces, const IndexList& avail, KeyOf keyOf)
 	{
-		if (pieces.size() == 1 && !pieces.front().key.empty() && pieces.front().mask) {
-			return { Group{ {}, { 0 }, { { 0 } }, nullptr } };
-		}
 		std::vector<Node> trie(1);
-		std::map<Key, Group> labelled;
-		for (std::size_t i = 0; i < pieces.size(); ++i) {
-			const auto& [key, mask] = pieces[i];
-			if (key.empty() || !mask) {
+		for (const auto i : avail) {
+			const auto key = keyOf(i);
+			const auto mask = pieces[i].mask;
+			if (key.empty() || !mask || key.size() > 256) {
 				continue;
 			}
 			std::size_t node = 0;
-			if (key.size() > 256) {
-				continue;
-			}
-			// A closed leading label is an explicit boundary, not an arbitrary
-			// character-prefix cut. Never merge pieces across different labels.
-			if (useLabels && key.front() == U'[') {
-				const auto end = key.find_first_of(U"[]", 1);
-				if (end > 1 && end < key.size() - 1 && key[end] == U']') {
-					auto& group = labelled[key.substr(0, end + 1)];
-					group.members.push_back(i);
-					group.coverage |= mask;
-					continue;
-				}
-			}
 			for (const auto ch : key) {
 				auto [entry, inserted] = trie[node].children.try_emplace(ch, trie.size());
 				node = entry->second;
@@ -183,7 +240,6 @@ namespace SOS::EspOutfits::Match
 					trie.emplace_back();
 				}
 				auto& current = trie[node];
-				current.coverage |= mask;
 				if (!current.complementary) {
 					current.complementary = std::any_of(current.members.begin(), current.members.end(), [&](auto j) {
 						return (pieces[j].mask & mask) == 0;
@@ -192,17 +248,151 @@ namespace SOS::EspOutfits::Match
 				current.members.push_back(i);
 			}
 		}
+		std::vector<std::pair<Key, IndexList>> out;
+		Key                                    prefix;
+		const auto                             walk = [&](auto&& self, std::size_t index) -> void {
+			const auto& node = trie[index];
+			if (FamilyEvidence(node, prefix)) {
+				out.emplace_back(prefix, node.members);
+			}
+			for (const auto& [ch, child] : node.children) {
+				prefix.push_back(ch);
+				self(self, child);
+				prefix.pop_back();
+			}
+		};
+		walk(walk, 0);
+		return out;
+	}
+
+	inline std::size_t PlacedPieces(const Group& group)
+	{
+		IndexList all;
+		for (const auto& variant : group.variants) {
+			all.insert(all.end(), variant.begin(), variant.end());
+		}
+		std::sort(all.begin(), all.end());
+		all.erase(std::unique(all.begin(), all.end()), all.end());
+		return all.size();
+	}
+
+	// A family is only worth taking when it actually pairs pieces, it explains as
+	// many pieces as possible, and it leaves as few as possible unexplained.
+	inline bool Better(const Group& lhs, std::size_t lhsPlaced, const Group& rhs, std::size_t rhsPlaced)
+	{
+		if (lhsPlaced != rhsPlaced) {
+			return lhsPlaced > rhsPlaced;
+		}
+		if (lhs.members.size() != rhs.members.size()) {
+			return lhs.members.size() > rhs.members.size();
+		}
+		if (lhs.pending.size() != rhs.pending.size()) {
+			return lhs.pending.size() < rhs.pending.size();
+		}
+		return lhs.prefix.size() > rhs.prefix.size();
+	}
+
+	// Splits one set of pieces into families. The widest usable name prefix wins on
+	// even standing, but a wider prefix that pairs fewer pieces loses: two styles
+	// under a shared prefix ("星夜礼服" and "星夜晚礼服" under "星夜") stay apart
+	// instead of being matched across styles.
+	template <class KeyOf>
+	inline std::vector<Group> FamiliesOf(const std::vector<Piece>& pieces, const Aliases& aliases, IndexList avail, KeyOf keyOf, IndexList& leftover, bool a_report)
+	{
+		std::vector<Group> families;
+		while (avail.size() >= 2) {
+			Group      best;
+			std::size_t bestPlaced = 0;
+			bool        found = false;
+			for (const auto& [prefix, members] : CandidateFamilies(pieces, avail, keyOf)) {
+				Group group;
+				group.prefix = prefix;
+				group.members = members;
+				MatchVariants(group, pieces, aliases);
+				const auto placed = PlacedPieces(group);
+				if (!found || Better(group, placed, best, bestPlaced)) {
+					best = std::move(group);
+					bestPlaced = placed;
+					found = true;
+				}
+			}
+			if (!found || (bestPlaced == 0 && !a_report)) {
+				break;
+			}
+			IndexList gone = best.members;
+			std::sort(gone.begin(), gone.end());
+			IndexList rest;
+			rest.reserve(avail.size());
+			for (const auto i : avail) {
+				if (!std::binary_search(gone.begin(), gone.end(), i)) {
+					rest.push_back(i);
+				}
+			}
+			families.push_back(std::move(best));
+			avail = std::move(rest);
+		}
+		leftover = std::move(avail);
+		return families;
+	}
+
+	// Pieces that share no supported name still conflict over slots; saying so beats
+	// claiming they have nothing in common.
+	inline void ReportLeftovers(std::vector<Group>& groups, const std::vector<Piece>& pieces, const IndexList& rest)
+	{
+		if (rest.size() < 2) {
+			return;
+		}
+		bool collides = false;
+		for (std::size_t i = 0; i < rest.size() && !collides; ++i) {
+			for (std::size_t j = i + 1; j < rest.size(); ++j) {
+				if ((pieces[rest[i]].mask & pieces[rest[j]].mask) != 0) {
+					collides = true;
+					break;
+				}
+			}
+		}
+		if (!collides) {
+			return;
+		}
+		Group group;
+		group.members = rest;
+		group.issue = "overlapping-slot-masks";
+		groups.push_back(std::move(group));
+	}
+
+	inline std::vector<Group> Plan(const std::vector<Piece>& pieces, const Aliases& aliases = {}, bool useLabels = true)
+	{
+		if (pieces.size() == 1 && !pieces.front().key.empty() && pieces.front().mask) {
+			return { Group{ {}, { 0 }, { { 0 } }, nullptr } };
+		}
+		IndexList              plain;
+		std::map<Key, Group>   labelled;
+		for (std::size_t i = 0; i < pieces.size(); ++i) {
+			const auto& piece = pieces[i];
+			if (piece.key.empty() || !piece.mask || piece.key.size() > 256) {
+				continue;
+			}
+			// A closed leading label is an explicit boundary, not an arbitrary
+			// character-prefix cut. Never merge pieces across different labels.
+			if (useLabels && piece.key.front() == U'[') {
+				const auto end = piece.key.find_first_of(U"[]", 1);
+				if (end > 1 && end < piece.key.size() - 1 && piece.key[end] == U']') {
+					auto& group = labelled[piece.key.substr(0, end + 1)];
+					group.members.push_back(i);
+					continue;
+				}
+			}
+			plain.push_back(i);
+		}
+		const auto       fullKeys = [&pieces](std::size_t i) -> std::u32string_view { return pieces[i].key; };
 		std::vector<Group> groups;
-		Key prefix;
-		FindFamilies(trie, 0, prefix, groups);
 		for (auto& [label, group] : labelled) {
-			// The label identifies a family, not a compatible variant. If the
-			// full label is shared by several independently supported families,
-			// preserve those subfamilies instead of gluing them together.
+			// The label names a style, not a compatible variant. If the text after
+			// it splits into independently supported styles, keep them apart.
 			std::vector<Piece> suffixes;
 			suffixes.reserve(group.members.size());
 			bool complementary = false;
-			for (auto i : group.members) {
+			for (const auto i : group.members) {
 				const auto mask = pieces[i].mask;
 				complementary |= std::any_of(suffixes.begin(), suffixes.end(), [mask](const auto& part) {
 					return (mask & part.mask) == 0;
@@ -216,7 +406,14 @@ namespace SOS::EspOutfits::Match
 					for (auto& i : child.members) {
 						i = group.members[i];
 					}
-					child.variants.clear();  // match again using the original names
+					for (auto& entry : child.pending) {
+						entry.first = group.members[entry.first];
+					}
+					for (auto& variant : child.variants) {
+						for (auto& i : variant) {
+							i = group.members[i];
+						}
+					}
 					groups.push_back(std::move(child));
 				}
 				continue;
@@ -224,13 +421,21 @@ namespace SOS::EspOutfits::Match
 			group.prefix = label;
 			if (!complementary && group.members.size() > 1) {
 				group.issue = "no-complementary-slots";
+			} else {
+				MatchVariants(group, pieces, aliases);
 			}
 			groups.push_back(std::move(group));
 		}
-		for (auto& group : groups) {
-			if (!group.issue) {
-				MatchVariants(group, pieces, aliases);
+		IndexList leftover;
+		for (auto& family : FamiliesOf(pieces, aliases, plain, fullKeys, leftover, false)) {
+			groups.push_back(std::move(family));
+		}
+		if (!leftover.empty()) {
+			IndexList rest;
+			for (auto& family : FamiliesOf(pieces, aliases, leftover, fullKeys, rest, true)) {
+				groups.push_back(std::move(family));
 			}
+			ReportLeftovers(groups, pieces, rest);
 		}
 		return groups;
 	}

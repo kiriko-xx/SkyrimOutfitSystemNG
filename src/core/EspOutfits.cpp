@@ -95,15 +95,35 @@ namespace SOS::EspOutfits
 		const auto maxName = static_cast<std::size_t>(outfit_service_get_singleton_ptr()->inner().max_outfit_name_len());
 		std::vector<bool> included(preview.pieces.size(), false);
 		std::vector<const char*> reasons(preview.pieces.size(), "no-supported-family");
+		std::vector<std::string> families(preview.pieces.size());
 		std::set<Match::Key> usedNames;
+		// Only styles that really produce a preset name a preset; the pending groups
+		// must not push the numbering into "one of several styles".
+		std::size_t styleCount = 0;
+		for (const auto& group : groups) {
+			if (!group.issue && !group.variants.empty()) {
+				++styleCount;
+			}
+		}
 		for (const auto& group : groups) {
 			const auto label = Names::OriginalPrefix(preview.pieces[group.members.front()].name, group.prefix);
+			for (const auto index : group.members) {
+				if (families[index].empty()) {
+					families[index] = label;
+				}
+			}
 			if (group.issue) {
 				for (const auto i : group.members) {
 					reasons[i] = group.issue;
 				}
 				SKSE::log::warn("ESP outfits: pending [{}] family='{}' pieces={} reason={}", a_plugin, label, group.members.size(), group.issue);
 				continue;
+			}
+			for (const auto& [index, why] : group.pending) {
+				reasons[index] = why;
+				const auto& piece = preview.pieces[index];
+				SKSE::log::warn("ESP outfits: pending piece [{}] family='{}' id={:08X} mask={:08X} name='{}' reason={}",
+					a_plugin, label, piece.formId, piece.mask, piece.name, why);
 			}
 			if (group.variants.size() > Match::kMaxOutfits - preview.outfits.size()) {
 				preview.truncated = true;
@@ -113,7 +133,7 @@ namespace SOS::EspOutfits
 				continue;
 			}
 			for (std::size_t i = 0; i < group.variants.size(); ++i) {
-				auto name = Names::PresetName(base, label, groups.size(), group.variants.size(), i);
+				auto name = Names::PresetName(base, label, styleCount, group.variants.size(), i);
 				if (usedNames.contains(Names::ComparisonKey(name))) {
 					for (const auto index : group.variants[i]) {
 						reasons[index] = "duplicate-preset-name";
@@ -139,6 +159,8 @@ namespace SOS::EspOutfits
 				preview.outfits.push_back({ std::move(name), variant });
 			}
 		}
+		preview.reasons.assign(reasons.begin(), reasons.end());
+		preview.families.assign(families.begin(), families.end());
 		for (std::size_t i = 0; i < included.size(); ++i) {
 			if (!included[i]) {
 				preview.unresolved.push_back(i);

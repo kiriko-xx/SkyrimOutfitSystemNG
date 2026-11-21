@@ -1195,7 +1195,7 @@ namespace SOS::Menu
 			}
 
 			IG::Separator();
-			IG::SeparatorText(I18n::T("Generate outfits from a plugin", "从 ESP 生成套装"));
+			IG::SeparatorText(I18n::T("Generate outfits from a plugin", "从 ESP 生成幻化"));
 			IG::TextWrapped("%s", I18n::T("Select a plugin to preview its outfits. Uncertain matches are not created.", "选择 ESP 后先预览幻化预设，无法确定的搭配不会生成。"));
 			IG::TextDisabled(I18n::T("Only ordinary clothing is taken: FX-only records, records with no readable name, and records with no model are left out.", "只收录正常服装：纯 FX 特效、无可读名称或无模型的记录不算在内。"));
 			if (IG::Button(I18n::T("Choose a plugin...", "选择 ESP..."))) {
@@ -1250,11 +1250,36 @@ namespace SOS::Menu
 					IG::TextWrapped("%s", I18n::T("The preset limit was reached; some groups were left pending.", "已达到预设数量上限，部分款式留待判断。"));
 				}
 				if (IG::BeginChild("##espoutfitpreview", ImVec2(0.0f, 220.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
-					const auto drawPiece = [&preview](std::size_t index) {
+					// The rule that left a piece out is printed next to it, so one screenshot
+					// is enough to see why an outfit was not generated.
+					const auto reasonLabel = [](const std::string& why) -> const char* {
+						if (why == "no-supported-family") return I18n::T("no shared style name", "没有同款式的名称前缀");
+						if (why == "overlapping-slot-masks") return I18n::T("shares a slot with another piece", "与其他件占用同一槽位");
+						if (why == "non-unique-difference") return I18n::T("several pieces on one slot look the same", "同槽多件无法区分");
+						if (why == "unmatched-difference") return I18n::T("the variant marks do not line up", "同款各槽的差目标号对不上");
+						if (why == "no-complementary-slots") return I18n::T("every piece covers the same slot", "所有件都占同一槽位");
+						if (why == "no-complete-outfit") return I18n::T("not enough pieces for a full outfit", "凑不成成套件");
+						if (why == "variant-limit") return I18n::T("too many variants on one slot", "同一槽位的变体过多");
+						if (why == "preset-limit") return I18n::T("preset limit reached", "已达预设数量上限");
+						if (why == "duplicate-preset-name") return I18n::T("a preset with that name already exists", "已有同名预设");
+						if (why == "unsupported-preset-name") return I18n::T("the name cannot be used for a preset", "名称不能用作预设名");
+						return I18n::T("not enough evidence", "证据不足");
+					};
+					const auto drawPiece = [&preview, &reasonLabel](std::size_t index, bool withReason) {
 						const auto& piece = preview.pieces[index];
 						const auto slots = EspOutfits::SlotNumbers(piece.mask);
 						IG::Text(I18n::T("%s (slots %s) [%08X]", "%s（槽位 %s）[%08X]"),
 							(piece.name.empty() ? piece.editorId : piece.name).c_str(), slots.c_str(), piece.formId);
+						if (withReason && index < preview.reasons.size()) {
+							IG::SameLine();
+							const bool named = index < preview.families.size() && !preview.families[index].empty();
+							if (named) {
+								IG::TextDisabled(I18n::T("in '%s' (%s)", "属于「%s」：%s"), preview.families[index].c_str(),
+									reasonLabel(preview.reasons[index]));
+							} else {
+								IG::TextDisabled("(%s)", reasonLabel(preview.reasons[index]));
+							}
+						}
 					};
 					for (std::size_t i = 0; i < preview.outfits.size(); ++i) {
 						IG::PushID(static_cast<int>(i));
@@ -1262,7 +1287,7 @@ namespace SOS::Menu
 						const auto label = outfit.existing ? outfit.name + I18n::T(" (already exists; will skip)", "（已存在，将跳过）") : outfit.name;
 						if (IG::TreeNode(label.c_str())) {
 							for (const auto index : preview.outfits[i].pieces) {
-								drawPiece(index);
+								drawPiece(index, false);
 							}
 							IG::TreePop();
 						}
@@ -1270,7 +1295,7 @@ namespace SOS::Menu
 					}
 					if (!preview.unresolved.empty() && IG::TreeNode(I18n::T("Pending pieces (will not be created)", "待判断的装备（不会生成）"))) {
 						for (const auto index : preview.unresolved) {
-							drawPiece(index);
+							drawPiece(index, true);
 						}
 						IG::TreePop();
 					}
