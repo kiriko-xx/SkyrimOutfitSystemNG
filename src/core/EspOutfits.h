@@ -8,18 +8,30 @@
 // "Generate outfits from a plugin": one click turns the armour records of a
 // chosen plugin into switchable outfits instead of one unusable pile.
 //
-// 1.5.45 groups the records by the words their names start with, because one
-// plugin often ships several costumes ("Sailor Top"/"Sailor Skirt" is one
-// costume, "School Top" is another). Inside one costume the pieces are split by
-// slot conflicts: two alternatives for the same slot become <name> and
-// <name>_1, and the second one keeps the base pieces on the slots it does not
-// cover. Records whose names share nothing with the rest form one "rest"
-// costume that keeps the plain plugin name.
+// 1.5.46 follows the "prefix tree + longest common prefix + slot constraint"
+// design:
+//   1. every name gets a comparison copy (code points in order, ASCII lower
+//      case, separators dropped, a bracketed pack label removed); the original
+//      spelling is what the outfit is named after, so no separator has to be
+//      assumed and no character is ever cut in half;
+//   2. costume detection walks a character level prefix tree. A branch is one
+//      costume while the pieces under it do not each cover several slots of
+//      their own; two costumes that only share a short prefix split, a costume
+//      whose pieces differ on the last characters does not. Records that cannot
+//      form a costume (single slot, single record) keep the plain plugin name;
+//   3. inside one costume the pieces are bucketed by slot;
+//   4. inside one bucket the part all candidates share is removed, and what is
+//      left is the differential identifier ("A", "B", "red");
+//   5. presets are generated per identifier: a slot with a single candidate is
+//      shared by every preset, a slot with several has to hold the piece that
+//      carries the current identifier. When the identifiers of two slots do not
+//      correspond ("top A/B" next to "skirt red/black") nothing is generated for
+//      that costume, because a guessed combination would look complete and be
+//      wrong. Every preset is checked for slot uniqueness before it is written.
 //
 // Slot policies are always set to "require equipped" (XXXO): a generated
 // outfit only draws on a slot the actor actually wears something on, which is
 // what the old hand written scene outfits relied on.
-
 namespace SOS::EspOutfits
 {
 	struct PluginSummary

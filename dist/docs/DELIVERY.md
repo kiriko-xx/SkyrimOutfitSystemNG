@@ -1,6 +1,22 @@
 # 交付说明（DELIVERY）
 
-## 1.5.45 最新交付准备（2026-11-21）
+## 1.5.46 最新交付准备（2026-11-21）
+
+**验证状态（1.5.46）**：**尚未实机验证**。用户 m11058 给出取代 1.5.45 的算法：**前缀树（Trie）+ 字符级最长公共前缀（LCP）+ 槽位约束组合**，不假定名称里有下划线、连字符、空格等分隔符，也不固定某个槽位当组合入口。本版只重写 `src/core/EspOutfits.cpp` 的「从 ESP 生成套装」实现（连带 `.h` 注释、`I18n.cpp` 一句说明文案、`version.h` 与 `CMakeLists.txt` 版本号），金件页、菜单布局、引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装 / 钩子安装）一行未改。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 2,097,664 字节；`220994b5b2eeb1d8bbe7c4735fd1ee23c115982110daac8bc51574c7b9957015`；`1.5.46.0`（build/Release 与 dist 逐字节一致） |
+| 安装包与复核记录 | SkyrimOutfitSystemNG-1.5.46.zip：31 条目、0 个反斜杠条目名、解包逐文件哈希与 dist 全等；测试包 SkyrimOutfitSystemNG-1.5.46-test.zip：2 条目（只含 DLL + 说明文本），可直接用 MO2 装；最终 zip 的大小与哈希只写包外 `VERSIONS.md` 与同名 `.zip.sha256` |
+
+- **名称标准化（阶段 1）**：`Decode()` 把名字按 UTF-8 拆成 code point 单元并记住每个字符在原始字节里的位置；`Normalize()` 生成「比较副本」—— ASCII 小写、丢掉一切分隔符（空格、下划线、连字符、点等）、剔除 `[]` 与 `()` 包住的标签词（如 `[Caenarvon]`）；`LabelRange()` 用原始字节取原拼写，套装名永远是用户看到的名字，不会被小写化或拆词。**因为分隔符在比较副本里全部消失，代码根本不需要猜 mod 用的是什么分隔符。**
+- **款式识别（阶段 2）**：所有件按比较副本建前缀树（`BuildTrie()`）；`Classify()` 从根递归：一个节点下的件数少于 2 或覆盖槽位少于 2 → 不成套，落进「其余」组；分支多于 1 时**只有当每个分支自身都已形成「至少 2 件且至少 2 个不同槽位」的独立组**才向下拆分，否则整支算一套。这条规则正是为了挡住「星夜礼服」与「星夜晚礼服」共享短前缀却被误并。
+- **槽位分桶与差分标识（阶段 3、4）**：一套服装内部按**主槽位**（`mask` 最低位，`Piece::slot`）分桶，一视同仁，不假定「上衣」是入口；桶内只有一件 → 该件是**共享候选**（可以被多个预设复用）；桶内多件 → 先算同桶候选的最长公共前缀（`CommonEnd()`）当共同部分，剩下的字符（`KeyOf()`）就是**差分标识**，A、B、红色、黑色都一视同仁。
+- **约束组合（阶段 5）**：`PlanCostume()` 取各槽位标识的并集逐个生成组合：单候选槽位直接复用、多候选槽位必须找到**同名标识**的那一件；找不到唯一匹配 → 计入 `unmatched` 并 warn，**这一套整个不生成**（避免生成看似完整实则错配的预设，正是用户 m11058 第 6 节要求的边界）；同一槽位两件同时被选 → 计入 `clashes` 丢弃并 warn；同名同槽重复 → 取第一件并 info 提示。
+- **命名与上限沿用 1.5.45**：一个 ESP 只有一套服装时名字与以前完全一致（`<ESP名称>` 与 `<ESP名称>_1` 等）；多套时是 `<ESP名称> <服装名>`，重名再加 `_2`、`_3`；总上限 96 套（`kMaxOutfits`），超了在消息尾缀写明；每套仍 `set_blanket_slot_policy_c("XXXO")`（需要已装备才显示幻化）。
+- **服装过滤不讲价**：仍走 `PluginScan::IsOutfitArmor()`（有 EditorID 或全名 + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型，双性别都查）；金件路径不调用它。
+- **本版不动引擎侧与金件页**：注入壳、贴件语义、槽位清理、`.tri` 推导、场景套装切换、钩子安装、金件两级列表与写盘规则一行未改（1.5.25 的基础幻化、1.5.34 的场景切换、1.5.42 的删除崩溃、1.5.44 的组行点击、1.5.45 的金件列表都不受影响）。
+## 1.5.45 交付准备（历史，已被 1.5.46 取代：其按名分组只比前 4 个词、不按槽位识别款式，同一 ESP 的多套服装会串组）
 
 **验证状态（1.5.45）**：**尚未实机验证**。用户 m10869 提两件事：①「金件」页的「按 FormID 添加单件」改成「按 ESP 添加单件」—— 先选该单件所属 ESP，再弹出该 ESP 里所有符合条件的装备，点一件就加入；左侧金件组被选中时，右侧的「添加单件」同样改成这个操作。②「幻化」页的「从 ESP 生成套装」要能兼容同一个 ESP 里有多套服装：按服装名字判断，同一套服装前面几个字段通常相同。本版只动这两处（`src/core/EspOutfits.cpp` 重写分组逻辑、`src/cpp/MenuUI.cpp` 金件页两处添加入口改成装备列表、`src/cpp/I18n.cpp` 补译文），引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装 / 钩子安装）一行未改。
 
@@ -1861,13 +1877,43 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 
 本机没有游戏。分组口径（「最长共享前缀 ≥2 件」）是从用户那句「一般同一套服装前面的几个字段都是相同的」推出来的启发式，**没有在真实 ESP 上跑过** —— 可能出现两种偏差：①某个 ESP 里两套服装的前缀恰好相同（如都以 `Outfit` 开头）会被并成一组；②同一套衣服里有一件的名字前缀与众不同（如 `Shoes_...`）会掉进「其余」组。两者都只影响**命名与分组**，不影响「生成的套装能不能用」。判定方法见 §6 第 62 条的 `K name group(s)` 计数。
 
+## 4.70 1.5.46：从 ESP 生成套装改成 Trie + LCP + 槽位约束组合
+
+### 4.70.1 用户诉求原话（m11058）
+「前缀树（Trie）+ 最长公共前缀（LCP）+ 槽位约束组合算法。这样不需要假定名称中存在 `_`、`-`、空格等分隔符，也不需要固定某个槽位作为组合入口。」
+
+用户给的样例：`星夜礼服假发A / 上衣A / 上衣B / 裙子A / 裙子B / 鞋子A` 应当识别为**一套款式**，槽位 32 与 48 各有 A、B 两个变体，31 与 37 各只有一件 —— 生成两个预设，31 与 37 的件被两个预设共享；而 `上衣A / 上衣B` 与 `裙子红色 / 裙子黑色` 虽然同款式，**标识对不上就不能自动组合**。
+
+### 4.70.2 上一版为什么不够（1.5.45）
+1.5.45 把名字切成**词**（以非字母数字为界），再取「至少两件共享的最长词前缀」当服装组名。这条规则假设了「词边界」有意义：中文名里没有分隔符时整串算一个词；`星夜礼服_假发A` 与 `星夜礼服上衣A` 分隔符不同、切出的词就不同；`星夜晚礼服` 与 `星夜礼服` 共享的短词前缀又会把两套并成一套。更根本的是它只用名字分组、**完全没有看槽位**，所以同槽位的 A、B 两个变体只会被 `BuildVariants()` 当成重复件拆成 `<名称>_1`、`<名称>_2`，而不是按标识跨槽位配对。
+
+### 4.70.3 1.5.46 的实现（`src/core/EspOutfits.cpp`，782 行）
+| 阶段 | 函数 | 做法 |
+| --- | --- | --- |
+| 1 名称标准化 | `Decode` / `Normalize` / `LabelRange` / `KeyOf` | 拆 code point 并保留原字节偏移；比较副本丢一切分隔符、剔 `[]` 与 `()` 标签、ASCII 小写；命名用原拼写 |
+| 2 款式识别 | `BuildTrie` / `SubtreePieces` / `Classify` / `DistinctSlots` | 字符级前缀树；节点下件数少于 2 或槽位少于 2 → 不成套；分支多于 1 且每支自身至少 2 件、至少 2 槽才拆 |
+| 3 槽位分桶 | `PlanCostume`（前半） | 按主槽位（`LowestBit(mask)`）分桶，一视同仁 |
+| 4 差分标识 | `CommonEnd` / `KeyOf` | 桶内多件先剥同桶最长公共前缀，余下即标识（A、B、红色、黑色） |
+| 5 约束组合 | `PlanCostume`（后半） | 各桶标识并集逐个组合；单候选复用、多候选必须唯一匹配；歧义 → `unmatched` 不生成 |
+
+- **哨兵注释**：`// --- stage 1 begin` 与 `// --- stage 1 end` 把阶段 1 的纯函数框起来，`tests/esp_outfits_trie.ps1` 直接把这整块文本取出来用 `cl` 编译，断言「分隔符无关 / 标签忽略 / 原拼写保留 / 三字节字符算一个单元 / 公共前缀在名字分歧处停」，是**真实编译执行**的守卫，不是正则匹配。
+- **新增日志**：见 §8 五行（costume 明细 debug、同名同槽 info、两类 warn、unmatched warn）。
+
+### 4.70.4 兼容性
+- 只有「从 ESP 生成套装」这一条路径变了；生成出来的套装仍是普通预设（同样的 JSON 字段、同样的 `XXXO` 策略、同样的收藏开关）。
+- 单套服装的 ESP 命名与 1.5.45 完全相同，已有套装会被原地覆盖（`erase_all_armors` 后重新 `insert_armor`）。
+- 不生成的情形**是刻意的**：标识对不上就一套都不写，宁可少生成，也不生成错配的预设（用户 m11058 第 6 节）。
+
+### 4.70.5 未验证
+- 本机没有游戏，生成结果只在守卫测试里用小样例验证过（阶段 1 真实编译执行，阶段 2 至 5 静态断言结构），**没有在真实 ESP 上跑过**。
+- 中文名不切词、只按字符比较，对「同一套衣服里中文前缀完全相同、差异在末尾」的情况有效；若某个包把款式名放在末尾（如 `上衣A_星夜礼服`），本算法识别不出（落进「其余」组或按共享前缀分组）—— 这属于命名口径问题，不许为此加白名单关键词。
 ## 5. 静态验证
 
 
 | 项 | 结果 |
 | --- | --- |
-| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.45 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_45.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
-| 版本资源 | `FileVersion = 1.5.45.0` / `ProductVersion = 1.5.45.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
+| 编译 | BUILD_EXIT=0，0 error / 0 warning（1.5.46 Release x64 重编，MSBuild + `/p:BuildProjectReferences=false`；日志 `build/build_task.log`，旁路留档 `build/build_1_5_46.log`；末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`） |
+| 版本资源 | `FileVersion = 1.5.46.0` / `ProductVersion = 1.5.46.0` / `FileDescription` / `ProductName` = `Skyrim Outfit System NG` / `LegalCopyright` = `MIT License`（`src/cpp/include/version.h` + `src/cpp/version.rc`，1.4.2 起把 .rc 显式加入 target_sources；此前 glob 只收 .cpp，资源从未编入）。PowerShell `(Get-Item <dll>).VersionInfo` 实测四项均有值 |
 | 导入表 | 仅 KERNEL32 / USER32 / ole32 / VERSION / SHELL32 |
 | 延迟导入 | 目录 RVA = 0、size = 0（无延迟导入项） |
 | 导出 | SKSEPlugin_Load / SKSEPlugin_Query / SKSEPlugin_Version 均存在 |
@@ -1891,6 +1937,7 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 | 1.5.43 关键字符串 | `Menu: golden group ` / `selected.` / `[not saved] The changes live in memory only` / `Changes reach the file only when you press Export.` / `No armour with that id was found` / `OutfitSystemGoldenItems.json` / `count as clothing` / `1.5.43` 可检索；1.5.40 的旧串 `No slot armour with that id was found` 已 **0 命中**；`LocalIdFor` / `IsLightPlugin` / `ResolveForm` 是内部符号，Release 内联后不出现在字符串表（属正常）；`FileVersion = 1.5.43.0`、`ProductVersion = 1.5.43.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,041,856 字节，sha256 `349a3e0f83c3871b67534f8ee02859e881d2855d9ef503165a8f2adce679ee99`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.44 关键字符串 | `Menu: golden group ` / `selected ({} of {}).` / `[not saved] The changes live in memory only` / `Changes reach the file only when you press Export.` / `No armour with that id was found` / `count as clothing` / `1.5.44` 可检索；组行不再用指针当 id（源码层面 `PushID(group.plugin.c_str())` 已 0 处，`PushID` 是内部调用点、不出现在字符串表）；`FileVersion = 1.5.44.0`、`ProductVersion = 1.5.44.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,042,368 字节，sha256 `859d81d55db6de8b91224a96f998f03f32caf34dd96d8344f9d4134d0640914f`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.45 关键字符串 | `Add one piece from a plugin` / `Search pieces...` / `slot armour record(s) in this plugin; click a piece to add it.` / `No piece of this plugin matches that search.` / `Close the piece list` / `[in the list] %s  %s` / `Menu: golden piece ` / `name group(s)` / `1.5.45` 可检索；1.5.44 的 `Add one piece by id...` 与 `##goldenlocalid` 已 **0 命中**（手输 FormID 的路径已整体删除）；`RenderGoldenPieceList` / `BuildVariants` / `WordKey` 是内部符号，Release 内联后不出现在字符串表（属正常）；`FileVersion = 1.5.45.0`、`ProductVersion = 1.5.45.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,074,112 字节，sha256 `075e211e59f1b6ad87b949eb8747bdcfeff73a231cf900ecf089625f34d4928f`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
+| 1.5.46 关键字符串 | `costume(s); ` / `cannot be matched by name across slots` / `would wear two pieces on one slot` / `with the same name and slot; the first one is used.` / `holds more alternatives than fit in one run` / `1.5.46` 可检索；1.5.45 的 `name group(s)` 已 **0 命中**（词前缀分组已整体删除）；`PlanCostume` / `BuildTrie` / `Classify` / `CommonEnd` 是内部符号，Release 内联后不出现在字符串表（属正常）；`FileVersion = 1.5.46.0`、`ProductVersion = 1.5.46.0`（PowerShell `VersionInfo` 实测）；DLL 大小 2,097,664 字节，sha256 `220994b5b2eeb1d8bbe7c4735fd1ee23c115982110daac8bc51574c7b9957015`；模块文件名仍 `OutfitSystemNG.dll`；导入依赖未新增 |
 | 1.5.40 关键字符串 | `count as clothing` / `does not use the placeholders` / `were ignored because their placeholders` / `已添加 %zu 件，来自 %s` / `已导入 %zu 件，来源 %s` / `1.5.40` 可检索；1.5.39 的两条错序中文串（`已添加 %s 的 %zu 件。` / `已从 %s 导入 %zu 件`）**已从 DLL 中消失**；`FileVersion = 1.5.40.0`；DLL 大小 2,036,224 字节，sha256 `95c2b388…a5618bf` |
 | 1.5.29 关键字符串 | `detached ` / `illusion clone(s) whose slot left the display set` / `lost the illusion in slot mask` / `after 3 rebuilds` / `rebuilding the actor` / `left to the engine` 可检索；`ClearBipedPart` 与 `IllusionMissingSlots` 作为内部符号不出现在字符串表（前者只剩一处调用）；FileVersion 1.5.29.0、DLL 1,936,384 B / `4f0bcae1…`、导入依赖未新增 |
 | 1.5.27 关键字符串 | `uses .tri ` / `has no .tri beside it` / `Probed: ` / `the armour addon the engine attached` / `has no armour addon yet` / `leaving the clones to the next morph pass instead of cycling` / `but the illusion carries .tri targets` / `every illusion clone whose armour model ships a .tri` / `1.5.27` 均可检索；1.5.26 的 `.tri morph targets are attached to every illusion clone` 已从 DLL 中消失；`carries a .tri morph target on` / `stay armed` / `BODYTRI` / `MorphShapeCallback` 仍在；`FileVersion = 1.5.27.0`、`ProductVersion = 1.5.27.0`（PowerShell `VersionInfo` 实测）；DLL 大小 1,875,456 字节，sha256 `22eb7794…a91af178f`；导入依赖未新增 |
@@ -1987,10 +2034,13 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 61. **1.5.44 金件组行终于点得中（对应 m10689）**：①进菜单 →「金件」栏，左栏随便点一个插件组行 —— 应当**一点就选中**，右侧编辑区立刻切到该组，日志出现 `Menu: golden group <名字> selected (N of M).`（info，无需 Verbose）；②连点不同的组来回切几次，每次都应变；③再验一遍 1.5.43 的两条（增删一件后**不点导出**应显示 `[not saved] …`，重启后那件不该被保存；light(ESL) 插件的金件应显示真名与 `[slot …]`，日志 `Golden items: N entr(ies) resolved, 0 missing.`）。若仍点不动，把那行日志的有无、菜单窗口大小与分辨率发回（§4.68 的未验证段已写明分流）。
 
 62. **1.5.45 金件「按 ESP 添加单件」+ 套装按服装名分组（对应 m10869）**：①进菜单 →「金件」栏，点 `Add one piece from a plugin... / 按 ESP 添加单件...` → 出现插件列表（倒序、有搜索框）→ 点一个 ESP → 下方展开该 ESP 的全部槽位护甲，每行有名称、FormID 与 `[槽位 …]`；点一行即加入该组，行首变 `[已加入]`，日志出现 `Menu: golden piece <plugin>:<id> <名称>`（info）。②选中左侧某个金件组 → 右侧编辑器底部应是**同一个列表**（只含该组所属 ESP 的装备），**不应再有任何 FormID 输入框**。③先不点导出：数据路径下应显示 `[not saved] …`；退出再进确认那件没被保存。④进「幻化」栏 → `Choose a plugin...` → 选一个**含多套服装**的 ESP → 日志里 `ESP outfits: … in K name group(s); …` 的 K 应等于你数出来的套数（K=1 说明这些装备的名字前缀不共享，把几条名字发回）；左栏应出现 `<ESP名称> <服装名>` 这样的套装，每套只含同一套衣服的件。⑤再选一个**只有一套服装**的 ESP 做对照 —— 生成的名字应与 1.5.44 完全一样（`<ESP名称>` / `<ESP名称>_1`），件数不变。见 §4.69 与 TESTING §3.53。
-- **1.5.44 的金件组行修复未实机验证**：本机没有游戏。结论来自 ImGui 的点击语义（`ActiveId` 必须与松开时的控件 id 一致）+ 同一函数里「指针 id 坏、整数 id 好」的对照事实，不是实机复现。判据只有一行日志：`Menu: golden group <名字> selected (N of M).` —— 有则点击已通，无则仍未通（见 §4.68 未验证段）。
+
+63. **1.5.46 从 ESP 生成套装改成 Trie + 字符级 LCP + 槽位约束组合（对应 m11058）**：①进「幻化」栏 → `Choose a plugin...` → 选一个**同一 ESP 里含两套只差一两个字的服装**（如 `星夜礼服上衣A/裙子A/假发A` 与 `星夜晚礼服上衣A/裙子A/假发A`）→ 左栏应生成**两套**、名字分别是 `<ESP名称> 星夜礼服` 与 `<ESP名称> 星夜晚礼服`，而不是被并成一套。②再选一个**同一套衣服里某槽有两件**（上衣 A/B、裙子 A/B、假发与鞋子各一件）的 ESP → 应生成两套：`… A` 组合（假发A + 上衣A + 裙子A + 鞋子A）与 `… B` 组合（假发A + 上衣B + 裙子B + 鞋子A）—— 单件槽位被两套共享，多件槽位按标识一一对应。③再选一个**标识对不上**的（上衣只有 A/B、裙子只有「红」「黑」，没有共同标识）→ 这类不该被硬拼：日志出现 `ESP outfits: the alternatives of costume '<款式>' cannot be matched by name across slots (N unmatched); no preset was written for it so no wrong outfit appears in the list.`（warn），**该款式整套不生成**（不是生成一半）。④日志 `ESP outfits: N outfit(s) from M piece(s) in K costume(s); C created, U updated…` 里的 K 应等于你数出来的套数；`Menu: outfits from <plugin>: <消息>` 与之同源。⑤再选一个**只有一套服装**的 ESP 做对照 —— 名字应仍是 `<ESP名称>` / `<ESP名称>_1`，与 1.5.45 一致。见 §4.70 与 TESTING §3.54。
+- **1.5.44 的金件组行修复未实机验证**- **1.5.44 的金件组行修复未实机验证**：本机没有游戏。结论来自 ImGui 的点击语义（`ActiveId` 必须与松开时的控件 id 一致）+ 同一函数里「指针 id 坏、整数 id 好」的对照事实，不是实机复现。判据只有一行日志：`Menu: golden group <名字> selected (N of M).` —— 有则点击已通，无则仍未通（见 §4.68 未验证段）。
 - **金件组行的 id 取行号**：`Golden::Groups()` 按插件名排序，行号跨帧稳定；但如果将来给这一栏加排序切换或过滤，行号会随视图变化，届时同一行在滑动前后的 id 会不同（不影响点击，ImGui 每次按下-松开都在一个视图里，只是不要拿行号当「这组的身份」——身份仍用插件名）。
 
 ## 7. 已知限制
+- **1.5.46 的生成规则未实机验证**：本机没有游戏。五阶段（标准化 / 款式识别 / 槽位分桶 / 差分标识 / 约束组合）是按 m11058 的文字规格实现的，测试只证明纯函数行为（`tests/esp_outfits_trie.ps1` 用真实编译跑分隔符无关、`[]`/`()` 标签忽略、中文按 code point 计一个单元、LCP 四种情形），**没有在真实 ESP 名称上跑过**。已知会掉进「其余」组或不被生成的情形：①两套服装的名字只在很靠后的字符上不同，且它们的分支各自都不满两件（会被当成同一套）；②某槽位两件的名字里没有可供区分的剩余字符（剥掉共同前缀后标识相同）→ 计为 duplicates，只取第一件；③标识跨槽位对不上（上衣 A/B 对裙子红/黑）→ 计为 unmatched，该组合不生成。日志里 `costume(s)` 与 created/updated 数是唯一权威判据。## 7. 已知限制
 - **1.5.45 的两处改动未实机验证**：本机没有游戏。金件两级列表是按 `PluginScan` 已有的索引能力 + ImGui 列表语义推的（1.5.44 的 id 教训已照做：行号 id、`PushID(scopeId)` 分栈）；分组口径是「最长共享前缀 ≥ 2 件」的启发式，只影响命名与分桶，不在真实 ESP 上跑过。
 - **套装分组的两种已知偏差**：同一 ESP 里两套服装的前缀恰好相同 → 会被并成一组；同一套衣服里有一件的第一个词不一样（`Shoes_xxx`）→ 会掉进「其余」组。两者都能通过把装备名或 ESP 拆开重试绕过，但本版没有提供手动分组的 UI。
 - **最多 96 套 / 每组最多 32 个变体**：超上限抛 `truncated` 尾缀，多出来的件不会进任何套装（不会崩，也不会写坏已有预设）。
@@ -2056,7 +2106,12 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 | --- | --- |
 | `PluginScan: N plugins loaded, M slot armour record(s) indexed.`（debug） | 加载顺序视图建好。N 应≈你启用的插件数；插件列表为空或数量异常说明 esm/esp/esl 都没读到。 |
 | `ESP outfits: … ; N wearable of M slot record(s)).` | 生成套装的权威行：M 是该 ESP 的槽位护甲总数、N 是通过服装过滤的数量。N=0 时会改打 `ESP outfits: That plugin holds no wearable clothing: …`。 |
-| `ESP outfits: N outfit(s) from M piece(s) in K name group(s); C created, U updated…`（info，1.5.45） | **1.5.45 的权威分组行**：K = 按名字分出来的服装组数。K 与你自己数的套数不符时，把该 ESP 里几件的名字发回（判据见 §4.69.6）。 |
+| `ESP outfits: N outfit(s) from M piece(s) in K costume(s); C created, U updated…`（info，1.5.46） | **1.5.46 的权威分组行**：K = 用前缀树识别出来的服装款数（不是按词分组）。K 与你数的套数不符时把该 ESP 里几件的名字发回（判据见 §4.70.5）。
+| `ESP outfits: the alternatives of costume '<款式>' cannot be matched by name across slots (N unmatched); no preset was written for it so no wrong outfit appears in the list.`（warn，1.5.46） | 同一款式里某两个多件槽位的差分标识对不上（上衣 A/B 对裙子红/黑）：**整套不生成**，绝不硬拼出看似完整的错配预设。 |
+| `ESP outfits: costume '<款式>' holds N combination(s) that would wear two pieces on one slot; they were left out.`（warn，1.5.46） | 生成的组合里有两件占同一槽位，该组合被丢弃。 |
+| `ESP outfits: costume '<款式>' holds N record(s) with the same name and slot; the first one is used.`（info，1.5.46） | 同一款式同槽位出现同名重复件，只取第一件。 |
+| 消息尾缀 `; the plugin holds more alternatives than fit in one run`（1.5.46） | 该 ESP 能拼出的组合超过上限（`kMaxOutfits = 96`），只处理前若干套。 |
+| `ESP outfits: N outfit(s) from M piece(s) in K name group(s); C created, U updated…`（info，1.5.45，历史） | 1.5.45 的分组行（按前 4 个词分组），1.5.46 起已被 `in K costume(s)` 取代；看到这行说明装的还是 1.5.45。 |
 | `Menu: golden piece <plugin>:<id> <名称>`（info，1.5.45） | 在金件的装备列表里点了一件并已加入。没有这行 = 点击没到代码；有但列表没变 = 该件本来就在组里（行首 `[已加入]`）。 |
 | `ESP outfits: That plugin holds no wearable clothing: every slot record is an FX effect, has no editor id or has no model.` | 这个 ESP 一件正常服装都没有：没有 EditorID、只覆盖 FX 槽（CK 槽 61 / 掩码第 31 位）、或 armor addon 没模型。换一个 ESP，或直接做成金件。 |
 | `Golden items: N piece(s) of <plugin> added.` | 金件「添加某个 ESP 的全部装备」的结果 —— 这条**不过滤**，FX 件与无 EditorID 的件都会进来。 |
@@ -2196,6 +2251,8 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 | `Changes reach the file only when you press Export.`（1.5.43） | 金件当前没有未保存改动（刚导入 / 刚导出 / 首次进页面）。 |
 | `Golden items: N entr(ies) resolved, 0 missing.`（info） | 金件库全部解析成功（1.5.43 的期望值）。若仍是 `0 resolved, M missing` 且插件是 light(ESL) 文件，说明 id 宽度还没归一化 —— 把这行与一条 `was not found in this load order` 发回。 |
 ## 9. 维护提示
+- **按名字识别款式只能修判据，不许加白名单关键词、不许假定分隔符**（m11058 / 1.5.46）：1.5.45 的「前 4 个词」写法假定了 `_`、`-`、空格，且把 `星夜礼服` 与 `星夜晚礼服` 并成一组。1.5.46 改成字符级比较（`Normalize()` 丢掉一切分隔符、剔除 `[]`/`()` 标签），原始拼写只用于命名。以后若出现误并/误拆，**改的是 `Classify()` 的拆分条件与 `PlanCostume()` 的标识规则**，不允许引入「某几个词代表同一套」的白名单，也不允许把生成结果做成写死的对照表。
+- **差分标识对不上就不许生成**（m11058 / 1.5.46）：`PlanCostume()` 里 unmatched / clashes / duplicates 三条计数对应「不强行组合」的硬要求。任何让它们静默通过的改动都会生成看似完整、实际错配的预设 —— 比不生成更糟。## 9. 维护提示
 - **金件「添加单件」只许走列表，不许恢复手输 FormID**（m10869 / 1.5.45）：手输 `000800` 这条路 1.5.39–1.5.44 一直在产生 `was not found in this load order`，用户根本无从得知本地 FormID。入口只能是「选 ESP → 点该 ESP 的装备」（`RenderGoldenPieceList()`），行 id 用行号、两个列表用 `PushID(scopeId)` 分栈。
 - **按名字分组只用于命名与分桶，不许变成白名单**（m10869 / 1.5.45）：判断「哪些件属于同一套衣服」只许用「名字前几个词的最长共享前缀」，不许写死关键词（`Dress` / `Skirt` / 某个 mod 的前缀），也不许改成「恒为真」或「一个 ESP 一套」。改判据就必须回头复核 §4.69.3 的两条偏差是否还能复现。
 - **ImGui 控件 id 必须跨帧稳定**（m10689 / 1.5.44）：凡是列表行，`PushID` 只许压整数（行号、FormID、插件 index）。压字符串指针（`x.c_str()` / `x.data()`）会在数据每帧重建时变 id，点击被 ImGui 丢弃，症状是「怎么点都没反应」，而同一页用整数 id 的控件一切正常。要确认某个列表「到底是没点到还是点了没生效」，点击处一律打 **info** 级日志（`debug` 在默认级别看不到，等于没有证据）。

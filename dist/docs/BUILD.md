@@ -1,6 +1,16 @@
 # 构建说明（BUILD）
 
-## 1.5.45 构建与交付复核状态
+## 1.5.46 构建与交付复核状态
+
+**验证状态（1.5.46）**：尚未实机验证。Release 重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_46.log`）。
+
+- **本版改动面**：`src/core/EspOutfits.cpp`（整文件重写，782 行：`Decode` / `Normalize` / `LabelRange` / `CommonEnd` / `KeyOf` / `Piece` / `BuildTrie` / `SubtreePieces` / `Classify` / `PlanCostume` / `BuildVariants`）、`src/core/EspOutfits.h`（头注释改五阶段说明）、`src/cpp/include/version.h`（PATCH 46）、`CMakeLists.txt`（1.5.46）。**`MenuUI.cpp` / `PluginScan` / `GoldenItems` / 钩子层 / 贴件 / 槽清理 / `.tri` / 场景套装全部未改。**
+- **产物**：`OutfitSystemNG.dll` 2,097,664 B / sha256 `220994b5b2eeb1d8bbe7c4735fd1ee23c115982110daac8bc51574c7b9957015` / FileVersion=ProductVersion 1.5.46.0（`build/Release` 与 `dist/SKSE/Plugins` 一致；旧名 `SkyrimOutfitSystemNG.dll` 不得留在 Data）。
+- **构建后必查（字符串）**：应命中 `costume(s)`、`cannot be matched by name across slots`、`would wear two pieces on one slot`、`with the same name and slot; the first one is used.`、`more alternatives than fit in one run`、`1.5.46`；应 **0 命中** `name group(s)`（1.5.45 的旧分组行）。注意 `PlanCostume` / `BuildTrie` 等内部符号在 Release 会被内联，不会出现在字符串表里（这是正常的，别据此判断改没改）。
+- **阶段 1 有哨兵注释**：`// --- stage 1 begin: tests/esp_outfits_trie.ps1 copies this block verbatim ---` 与 `// --- stage 1 end ---` 包住 `struct Unit` 到 `KeyOf`。**改这一段时必须保留这两行**，否则 `tests/esp_outfits_trie.ps1` 抽不到块会直接失败。
+- **静态守卫**：`tests/esp_outfits_names.ps1` 打印 `ESP_OUTFITS_NAMES_OK`、`tests/esp_outfits_trie.ps1` 打印 `ESP_OUTFITS_TRIE_OK`（后者会用 `vcvars64.bat` + `cl /std:c++20` 真编译一次，cl 不在 PATH 时脚本自己写 `build.bat` 调 vcvars）。跑法：`C:/Program Files/PowerShell/7/pwsh.exe -NoProfile -File tests/<名字>.ps1`，env 需带 `PATHEXT=.COM;.EXE;.BAT;.CMD`。
+- **交付两种包**：①全量包 `SkyrimOutfitSystemNG-1.5.46.zip`（`build/pack_1_5_46.ps1`，31 条目，dist 全量 + `SHA256SUMS.txt`）；②测试包 `SkyrimOutfitSystemNG-1.5.46-test.zip`（`build/pack_1_5_46_test.ps1`，2 条目：`SKSE/Plugins/OutfitSystemNG.dll` + 说明文本），可直接用 MO2 装。
+## 1.5.45 构建与交付复核状态（历史，已被 1.5.46 取代）
 
 **验证状态（1.5.45）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_45.log`）。
 

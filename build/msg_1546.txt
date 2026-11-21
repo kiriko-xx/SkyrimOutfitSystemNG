@@ -1,0 +1,25 @@
+1.5.46: generate outfits from a plugin with a prefix tree, a character level LCP and slot constraints
+
+Replaces the 1.5.45 rule (first four words as the costume name) which assumed
+separators and could not tell two costumes apart when they only differ late in
+the name.
+
+- normalise for comparison only: ASCII lowercase, drop every separator, ignore
+  tags in [] and (); the original spelling is kept for the outfit name.
+- build a character level prefix tree and split a prefix only when every branch
+  under it already forms a costume of its own (two pieces or more over two slots
+  or more); otherwise the whole subtree stays one costume.
+- bucket the pieces of a costume by slot, strip the shared part of each bucket
+  and keep the differentiator (A / B / red / black); single piece slots are
+  shared by every combination.
+- combine only identical differentiators across slots; unmatched costumes write
+  no preset at all and say so in the log, two pieces on one slot drops that
+  combination, the same name on one slot keeps the first piece.
+- names and limits unchanged: <plugin> <costume> / <plugin> _1, 96 outfits,
+  32 variants, every outfit still needs its slots equipped (XXXO).
+
+Stage 1 helpers are fenced with sentinel comments so tests/esp_outfits_trie.ps1
+can compile them verbatim and assert the behaviour.
+
+DLL 2,097,664 B / 220994b5... / 1.5.46.0; zip 1,364,056 B / aa2b7230...;
+MO2 test package 943,949 B / 41241267...

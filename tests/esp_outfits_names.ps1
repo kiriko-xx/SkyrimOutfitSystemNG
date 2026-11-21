@@ -1,9 +1,10 @@
 $ErrorActionPreference = 'Stop'
-# Static guard for the 1.5.45 outfit generator. Nothing here is compiled or executed.
-# One plugin often holds several costumes. 1.5.45 groups the slot armour of a plugin
-# by the first words of its name ("the first fields of a costume name are the same"),
-# then splits every costume into as many outfits as its slots need. A plugin with one
-# costume must keep producing exactly the old names, and the run must stay bounded.
+# Static guard for the 1.5.46 outfit generator. Nothing here is compiled or run.
+# The user asked for "prefix tree + longest common prefix + slot constraint": no
+# separator is assumed, a costume is found by walking a character level trie, a
+# slot contributes one piece, and anything ambiguous is left out instead of
+# guessed. 1.5.45 bucketed pieces by the leading words of their names, and that
+# wording must be gone.
 $root = Join-Path $PSScriptRoot '..'
 $fail = @()
 function Assert-Present([string] $haystack, [string] $needle, [string] $label) {
@@ -16,34 +17,44 @@ function Assert-Absent([string] $haystack, [string] $needle, [string] $label) {
 $esp = Get-Content -Raw -LiteralPath (Join-Path $root 'src/core/EspOutfits.cpp')
 $header = Get-Content -Raw -LiteralPath (Join-Path $root 'src/core/EspOutfits.h')
 
-# --- 1. names are split into words, bracketed tags are ignored -------------------
-Assert-Present $esp 'std::vector<Word> NameWords(' 'names are split into words'
-Assert-Present $esp 'constexpr std::size_t kMaxNameWords = 4;' 'at most four words are compared'
-Assert-Present $esp 'bool IsWordByte(unsigned char a_char)' 'a word byte test exists'
-Assert-Absent $esp 'tolower(a_text' 'no locale dependent lowercasing'
+# --- 1. stage 1: the name a comparison runs on --------------------------------
+Assert-Present $esp 'bool IsContinuation(unsigned char a_char)' 'utf8 continuation test exists'
+Assert-Present $esp 'std::vector<Unit> Decode(const std::string& a_text)' 'names are decoded into code points'
+Assert-Present $esp 'std::vector<Unit> Normalize(const std::string& a_text)' 'a comparison copy exists'
+Assert-Present $esp "codePoint == '['" 'a bracketed label is detected'
+Assert-Present $esp 'std::isalnum(' 'only alphanumerics survive as ascii'
+Assert-Absent $esp 'kMaxNameWords' 'the word based grouping is gone'
+Assert-Absent $esp 'WordKey(' 'the word prefix key is gone'
+Assert-Absent $esp 'piece.family' 'pieces no longer carry a word family'
 
-# --- 2. a group is the longest prefix shared by at least two pieces -------------
-Assert-Present $esp 'it->second >= 2' 'a prefix counts only when two pieces share it'
-Assert-Present $esp 'piece.family = WordKey(piece.name, piece.words, shared);' 'the group key is the shared prefix'
-Assert-Present $esp 'piece.label = WordLabel(piece.name, piece.words, shared);' 'the group keeps the original spelling for the name'
-Assert-Present $esp 'std::map<std::string, std::vector<std::size_t>> families;' 'the pieces are collected per group'
-Assert-Present $esp 'const bool multiCostume = order.size() > 1;' 'one costume keeps the plain plugin name'
+# --- 2. stage 2: costume detection over a trie --------------------------------
+Assert-Present $esp 'std::vector<TrieNode> BuildTrie(const std::vector<Piece>& a_pieces)' 'a character level trie is built'
+Assert-Present $esp 'std::vector<std::size_t> SubtreePieces(' 'a subtree can be collected'
+Assert-Present $esp 'void Classify(' 'the trie is classified recursively'
+Assert-Present $esp 'std::size_t DistinctSlots(' 'a branch is judged by how many slots it covers'
+Assert-Present $esp 'loose' 'pieces with no costume fall into a loose bucket'
 
-# --- 3. every costume is split by slot conflicts, and padded from its own group --
-Assert-Present $esp 'std::vector<std::vector<std::size_t>> BuildVariants(' 'the variants are built by slot conflicts'
-Assert-Present $esp 'constexpr std::size_t kMaxVariants = 32;' 'the variant count is bounded'
+# --- 3. stage 3 and 4: slot buckets, differential identifier -------------------
+Assert-Present $esp 'CostumePlan PlanCostume(' 'a costume is planned per slot bucket'
+Assert-Present $esp 'std::size_t CommonEnd(const std::vector<const std::vector<Unit>*>& a_names, std::size_t a_from)' 'the common part of a slot is its longest common prefix'
+Assert-Present $esp 'std::u32string KeyOf(' 'what is left of a name is a key'
+Assert-Present $esp 'byKey' 'identifiers are matched across slots'
+Assert-Present $esp 'kNoPiece' 'a slot without a candidate is explicit'
+
+# --- 4. stage 5: bounded, policy compliant, honest about ambiguity ------------
 Assert-Present $esp 'constexpr std::size_t kMaxOutfits = 96;' 'the outfit count is bounded'
+Assert-Present $esp 'constexpr std::size_t kMaxVariants = 32;' 'the loose variant count is bounded'
 Assert-Present $esp 'set_blanket_slot_policy_c(kPolicy)' 'every generated outfit requires the slot to be equipped'
 Assert-Present $esp 'constexpr const char* kPolicy = "XXXO";' 'the blanket policy is require equipped'
-Assert-Present $esp 'kFxBit' 'the FX slot is not treated as a costume slot'
-
-# --- 4. the result says what happened -------------------------------------------
-Assert-Present $esp '"%zu outfit(s) from %zu piece(s) in %zu name group(s); %zu created, %zu updated%s%s%s."' 'the message counts the name groups'
-Assert-Present $esp 'name group(s)' 'the wording keeps the group count'
-Assert-Present $header 'name' 'the header documents the name grouping'
+Assert-Present $esp 'kFxBit' 'the FX slot never joins an outfit'
+Assert-Present $esp 'cannot be matched by name across slots' 'ambiguity is reported instead of guessed'
+Assert-Present $esp 'would wear two pieces on one slot' 'a slot conflict is reported'
+Assert-Present $esp 'holds {} piece(s) over {} slot(s)' 'every costume says what it holds'
+Assert-Present $esp '%zu outfit(s) from %zu piece(s) in %zu costume(s)' 'the message counts the costumes'
+Assert-Present $header 'prefix tree' 'the header documents the design'
 
 if ($fail.Count -ne 0) {
     $fail | ForEach-Object { Write-Host "FAIL $_" }
     exit 1
 }
-Write-Host 'ESP_OUTFITS_NAMES_OK: the generator groups a plugin by the leading words of its names, splits each costume by slot conflicts and keeps the old names for a single costume.'
+Write-Host 'ESP_OUTFITS_NAMES_OK: costume detection walks a character level trie, an outfit is combined by differential identifier with slot uniqueness, and anything ambiguous is left out.'

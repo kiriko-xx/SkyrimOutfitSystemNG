@@ -931,6 +931,25 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 11. **E1 基础幻化不回归**：换普通幻化套装、进/出 OStim 场景（`<当前套装>_sex`）各一次 —— 显示与场景切换仍正常（1.5.25 / 1.5.34 的验收项）。
 12. **F1 组行仍点得中**：金件左栏组行仍一点就选中，日志 `Menu: golden group <名字> selected (N of M).`（1.5.44 的行为不能被本版破坏）。
 
+## 3.54 1.5.46 从 ESP 生成套装：Trie + 字符级 LCP + 槽位约束组合（m11058）
+
+前置：装 1.5.46（`Data/SKSE/Plugins/OutfitSystemNG.dll`，FileVersion 1.5.46.0，旧名 `SkyrimOutfitSystemNG.dll` 必须已删）。测试都在「幻化」栏 → `Choose a plugin...`；每点一次都看日志 `ESP outfits: N outfit(s) from M piece(s) in K costume(s); C created, U updated…`。
+
+1. **A1 分隔符无关**：同一个 ESP 里一组名字用 `星夜礼服_上衣A`（下划线）、另一组用 `星夜礼服 上衣A`（空格）→ 两种都能被识别成同一款式，生成的套装名不带分隔符差异。日志 `costume('<款式>' …)` 的款式串是原始拼写（不是去掉分隔符的版本）。
+2. **A2 中文按字比较**：名字里有三字节中文字符（`星夜礼服`）→ 款式前缀切在完整字符上，不会切出半个字（套装名不出现乱码）。
+3. **A3 `[]` / `()` 标签忽略**：名字带 `[Caenarvon]` 这类作者标签 → 标签不参与款式识别（`[Caenarvon] Dress Top` 与 `Dress Skirt` 仍同一套），但生成的套装名保留原拼写。
+4. **B1 两套只差一两个字要拆开**：`星夜礼服上衣A/裙子A/假发A/鞋子A` 与 `星夜晚礼服上衣A/裙子A/假发A/鞋子A`（共 8 件）→ 应生成**两套**（`… 星夜礼服` 与 `… 星夜晚礼服`），而不是一套 8 件。日志 K=2。
+5. **B2 一套共享短前缀不拆**：`Sailor hair / Sailor top / Sailor skirt / Sailor shoes` → 一套（K=1），名字是 `<ESP名称> Sailor` 或 `<ESP名称>`。
+6. **B3 零散件落「其余」组**：一个只有单件的槽位（如单独一件帽子，名字前缀与本套无关）→ 落进「其余」组，用 ESP 原名成套装或合并处理，不会污染其它款式。
+7. **C1 单件槽位被共享**：一套衣服里假发、鞋子各 1 件，上衣、裙子各 2 件（A/B）→ 生成两套：`A` 组合与 `B` 组合，**假发与鞋子在两套里是同一件**。
+8. **C2 同槽同名重复只取第一件**：人为造两份同名同槽的件 → 日志 `costume '<款式>' holds N record(s) with the same name and slot; the first one is used.`（info），不生成重复套。
+9. **C3 标识对不上不生成**：上衣只有 `A/B`、裙子只有 `红色/黑色`（没有任何共同标识）→ 日志 `the alternatives of costume '<款式>' cannot be matched by name across slots (N unmatched); no preset was written for it so no wrong outfit appears in the list.`（warn），**该款式一套都不出现**。绝对不应出现「上衣A+裙子红色」这种瞎猜组合。
+10. **D1 槽位冲突丢弃**：造一个会两件占同一槽的组合 → 日志 `holds N combination(s) that would wear two pieces on one slot; they were left out.`（warn），该组合不生成。
+11. **D2 上限与超限**：件数极多的 ESP（>96 套）→ 不崩，消息尾缀出现 `; the plugin holds more alternatives than fit in one run`，已生成的套装可用。
+12. **E1 单服装 ESP 命名不变**：只有一个款式的 ESP → 名字仍是 `<ESP名称>` / `<ESP名称>_1`，件数与 1.5.45 一致（回归项）。
+13. **F1 槽位策略与收藏**：生成的每套都是 `XXXO`（需要已装备才显示幻化）；设置里「生成的套装自动收藏」开着时新套装进收藏夹。
+14. **F2 基础幻化与场景套装不回归**：换普通幻化套装、进/出 OStim 或 SexLab 场景（`<当前套装>_sex`）、拖 RaceMenu 滑块各一次 —— 1.5.25 / 1.5.34 的验收项仍正常。
+
 ## 4. 性能协议（1000+ 套装）
 
 用 Papyrus 生成 1000 个套装后测：
@@ -1218,6 +1237,7 @@ B. 回归
 - 存档往返一致。
 
 ## 6. 已知未验证项
+- **1.5.46 的生成规则未实机验证**（m11058）：本机没有游戏。纯函数由 `tests/esp_outfits_trie.ps1`（真实编译 + 断言：分隔符无关、`[]`/`()` 标签忽略、中文按 code point、LCP 各情形）与 `tests/esp_outfits_names.ps1`（源码断言）覆盖，**但没有任何真实 ESP 名称**跑过。已知掉队情形：①两套衣服只在很靠后字符上不同且各自分支不足两件 → 会被算成一套；②某槽两件剥掉共同前缀后标识相同 → `duplicates`，只取第一件；③标识跨槽对不上 → `unmatched`，整套不生成。
 - **1.5.45 的两处改动未实机验证**：本机没有游戏。金件两级列表依赖 `PluginScan` 既有索引与 ImGui 列表语义（行号 id、`PushID(scopeId)` 分栈）；「按名字最长共享前缀分组」是从用户描述的启发式，未在真实 ESP 上跑过，两种偏差（两套前缀相同被并组 / 某件第一个词不同掉进「其余」组）只能靠 `K name group(s)` 与自数套数比对发现。
 - **1.5.44 的金件组行修复未实机验证**（m10689）：本机无游戏。结论来自 ImGui 点击语义（`ActiveId` 必须与松开时的控件 id 一致）+ 同一函数里「指针 id 坏、整数 id 好」的对照事实，不是实机复现。唯一的判据是 `Menu: golden group <名字> selected (N of M).` 这行 info 日志的有无。
 
