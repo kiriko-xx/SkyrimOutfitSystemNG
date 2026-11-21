@@ -104,9 +104,12 @@ namespace SOS::EspOutfits::Match
 	// An empty slot is filled with exactly one piece: the player wants one outfit per
 	// style, not the whole cross product of every option in every slot. Which piece
 	// gets the slot is drawn (see Rand), so the five presets of one style do not all
-	// wear the same option; everything else that could have gone there is left for
-	// the player to judge. Without a Rand the first candidate in plugin order is used,
+	// wear the same option. Without a Rand the first candidate in plugin order is used,
 	// which keeps the pure planner reproducible for tests.
+	// A piece that only offers another option for a slot that is already filled still
+	// gets a preset of its own: one existing preset has that slot swapped to it. That
+	// keeps every record the player owns reachable, and the preset count grows by one
+	// per such piece instead of by a cross product.
 	inline void FinalizeVariants(Group& group, const std::vector<Piece>& pieces, Rand* rng = nullptr)
 	{
 		std::uint32_t coverage = 0;
@@ -121,14 +124,11 @@ namespace SOS::EspOutfits::Match
 			}
 			return mask;
 		};
-		std::vector<IndexList>                 kept;
+		std::vector<IndexList>                         kept;
 		std::vector<std::pair<IndexList, const char*>> dead;
-		std::vector<std::size_t>               spare;
-		std::vector<std::size_t>               overflowed;
-		std::size_t                            overflow = 0;
+		std::vector<std::size_t>                       overflowed;
 		for (auto& variant : group.variants) {
 			if (kept.size() >= kMaxVariants) {
-				++overflow;
 				for (const auto i : variant) {
 					overflowed.push_back(i);
 				}
@@ -146,10 +146,7 @@ namespace SOS::EspOutfits::Match
 						continue;
 					}
 					const auto slots = BodySlots(pieces[i].mask);
-					if (slots == 0) {
-						continue;
-					}
-					if ((slots & ~missing) != 0) {
+					if (slots == 0 || (slots & ~missing) != 0) {
 						continue;
 					}
 					const auto count = static_cast<std::size_t>(std::popcount(slots));
@@ -167,17 +164,6 @@ namespace SOS::EspOutfits::Match
 				variant.push_back(chosen);
 				missing &= ~BodySlots(pieces[chosen].mask);
 			}
-			for (const auto i : group.members) {
-				if (std::find(variant.begin(), variant.end(), i) != variant.end()) {
-					continue;
-				}
-				const auto slots = BodySlots(pieces[i].mask);
-				// Takes no slot this style does not already fill, so it is a second
-				// option for a slot that is now taken: kept back, never cross multiplied.
-				if (slots != 0 && (slots & ~coverage) == 0) {
-					spare.push_back(i);
-				}
-			}
 			std::sort(variant.begin(), variant.end());
 			if (missing != 0) {
 				dead.push_back({ std::move(variant), "incomplete-slots" });
@@ -194,6 +180,52 @@ namespace SOS::EspOutfits::Match
 				return std::binary_search(variant.begin(), variant.end(), index);
 			});
 		};
+		// One swap-in preset per still unused piece, never one per combination. With no
+		// preset to swap in yet there is nothing to build on, and the dead reasons below
+		// explain the style better than "that slot is taken".
+		const auto                       bases = kept;
+		std::vector<std::size_t>         tooMany;
+		std::vector<std::size_t>         noSwap;
+		for (const auto i : group.members) {
+			if (bases.empty()) {
+				break;
+			}
+			if (used(i) || BodySlots(pieces[i].mask) == 0) {
+				continue;
+			}
+			if (kept.size() >= kMaxVariants) {
+				tooMany.push_back(i);
+				continue;
+			}
+			const auto slots = BodySlots(pieces[i].mask);
+			const auto start = rng ? rng->Pick(bases.size()) : std::size_t{ 0 };
+			bool       accepted = false;
+			for (std::size_t k = 0; k < bases.size() && !accepted; ++k) {
+				const auto& base = bases[start + k < bases.size() ? start + k : start + k - bases.size()];
+				IndexList   next;
+				bool        swapped = false;
+				for (const auto j : base) {
+					if ((BodySlots(pieces[j].mask) & slots) != 0) {
+						swapped = true;
+						continue;
+					}
+					next.push_back(j);
+				}
+				if (!swapped) {
+					continue;
+				}
+				next.push_back(i);
+				std::sort(next.begin(), next.end());
+				if (next.size() < 2 || coveredBy(next) != coverage || std::find(kept.begin(), kept.end(), next) != kept.end()) {
+					continue;
+				}
+				kept.push_back(next);
+				accepted = true;
+			}
+			if (!accepted) {
+				noSwap.push_back(i);
+			}
+		}
 		std::vector<std::pair<std::size_t, const char*>> pending;
 		const auto note = [&pending](std::size_t index, const char* why) {
 			if (std::none_of(pending.begin(), pending.end(), [index](const auto& entry) { return entry.first == index; })) {
@@ -201,15 +233,20 @@ namespace SOS::EspOutfits::Match
 			}
 		};
 		// A piece that conflicts with the others is the real reason a style stays
-		// empty, so those remarks come before "another option of that slot".
+		// empty, so those remarks come before the ones about a slot being taken.
 		for (const auto& [index, why] : group.pending) {
 			if (!used(index) && std::string_view(why) != "unmatched-difference") {
 				note(index, why);
 			}
 		}
-		for (const auto i : spare) {
+		for (const auto i : noSwap) {
 			if (!used(i)) {
 				note(i, "same-slot-alternative");
+			}
+		}
+		for (const auto i : tooMany) {
+			if (!used(i)) {
+				note(i, "variant-limit");
 			}
 		}
 		for (const auto i : overflowed) {
@@ -234,7 +271,6 @@ namespace SOS::EspOutfits::Match
 				note(i, "no-complete-outfit");
 			}
 		}
-		(void)overflow;
 
 		std::sort(pending.begin(), pending.end());
 		group.pending = std::move(pending);

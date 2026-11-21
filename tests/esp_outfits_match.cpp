@@ -121,14 +121,15 @@ int main()
 
     // ---- difference marks must line up -----------------------------------
     // Marks that do not line up are not paired by name. The style still gets one
-    // full outfit per variant, and the second skirt is offered instead of doubling
-    // every outfit with it.
+    // full outfit per variant, and the skirt that no mark pairs with gets an outfit
+    // of its own instead of doubling every outfit with it. Presets taken from the
+    // marks come first, the ones made for a leftover piece follow.
     std::vector<Piece> marks{ Item("星夜礼服上衣A", top), Item("星夜礼服上衣B", top), Item("星夜礼服裙子红色", skirt),
         Item("星夜礼服裙子黑色", skirt) };
     groups = Match::Plan(marks);
     CHECK(groups.size() == 1 && !groups[0].issue);
-    CHECK(groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
-    CHECK(ReasonOf(groups[0], 3) == std::string_view("same-slot-alternative"));
+    CHECK(groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 }, { 0, 3 } }));
+    CHECK(groups[0].pending.empty());
     CHECK_COMPLETE(groups, marks);
 
     Match::Aliases aliases{ { U"红色", U"a" }, { U"黑色", U"b" } };
@@ -140,8 +141,8 @@ int main()
     // Two options that translate to the same mark cannot be told apart either.
     Match::Aliases duplicate{ { U"红色", U"a" }, { U"黑色", U"a" } };
     groups = Match::Plan(marks, duplicate);
-    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
-    CHECK(ReasonOf(groups[0], 3) == std::string_view("non-unique-difference"));
+    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 }, { 0, 3 } }));
+    CHECK(groups[0].pending.empty());
 
     // Two records with one and the same name cannot be told apart: the second one
     // is never pretended to be a variant of its own.
@@ -149,22 +150,22 @@ int main()
     std::vector<Piece> same = marks;
     same[3] = Item("星夜礼服裙子红色", skirt);
     groups = Match::Plan(same, clash);
-    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
-    CHECK(ReasonOf(groups[0], 3) == std::string_view("non-unique-difference"));
+    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 }, { 0, 3 } }));
+    CHECK(groups[0].pending.empty());
 
     // An empty mark is a legal base variant as long as it is unique.
     std::vector<Piece> base{ Item("Love Letter Maiden Boots", shoes), Item("Love Letter Maiden Loose", top),
         Item("Love Letter Maiden Normal", top), Item("Love Letter Maiden Normal (Short)", top),
         Item("Love Letter Maiden Panty", panty), Item("Love Letter Maiden Panty (Trans)", panty) };
     groups = Match::Plan(base);
-    CHECK(groups.size() == 1 && groups[0].variants.size() == 3);
-    CHECK(groups[0].variants == std::vector<IndexList>({ { 0, 1, 4 }, { 0, 2, 4 }, { 0, 3, 4 } }));
-    CHECK(ReasonOf(groups[0], 5) == std::string_view("same-slot-alternative"));
+    CHECK(groups.size() == 1 && groups[0].variants.size() == 4 && groups[0].pending.empty());
+    CHECK(groups[0].variants
+        == std::vector<IndexList>({ { 0, 1, 4 }, { 0, 2, 4 }, { 0, 3, 4 }, { 0, 1, 5 } }));
     CHECK_COMPLETE(groups, base);
 
     // ---- an option slot is drawn, not taken in plugin order --------------
-    // Every preset must still hold exactly one piece of that slot, the draw must
-    // really use both options, and one seed must always give the same presets.
+    // Every preset must still hold exactly one piece of that slot, no option may be
+    // hidden by the draw, and one seed must always give the same presets back.
     const auto drawsWithSeed = [&base](std::uint64_t seed) {
         Match::Rand rng{ seed };
         return Match::Plan(base, {}, true, &rng);
@@ -172,14 +173,22 @@ int main()
     std::size_t firstChosen = 0, secondChosen = 0;
     for (std::uint64_t seed = 1; seed <= 8; ++seed) {
         const auto drawn = drawsWithSeed(seed);
-        CHECK(drawn.size() == 1 && drawn[0].variants.size() == 3);
+        CHECK(drawn.size() == 1 && drawn[0].pending.empty());
         CHECK_COMPLETE(drawn, base);
+        bool sawFirst = false, sawSecond = false;
         for (const auto& variant : drawn[0].variants) {
             const bool first = std::binary_search(variant.begin(), variant.end(), 4);
             const bool second = std::binary_search(variant.begin(), variant.end(), 5);
             CHECK(first != second);
-            first ? ++firstChosen : ++secondChosen;
+            if (first) {
+                ++firstChosen;
+                sawFirst = true;
+            } else {
+                ++secondChosen;
+                sawSecond = true;
+            }
         }
+        CHECK(sawFirst && sawSecond);
     }
     CHECK(firstChosen > 0 && secondChosen > 0);
     CHECK(drawsWithSeed(7)[0].variants == drawsWithSeed(7)[0].variants);
@@ -188,8 +197,8 @@ int main()
     std::vector<Piece> orionAC{ Item("Orion Top A", top), Item("Orion Top B", top), Item("Orion Skirt A", skirt),
         Item("Orion Skirt C", skirt) };
     groups = Match::Plan(orionAC);
-    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 } }));
-    CHECK(ReasonOf(groups[0], 3) == std::string_view("same-slot-alternative"));
+    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2 }, { 1, 2 }, { 0, 3 } }));
+    CHECK(groups[0].pending.empty());
     CHECK_COMPLETE(groups, orionAC);
 
     std::vector<Piece> orionShoes{ Item("Orion Top A", top), Item("Orion Top B", top), Item("Orion Shoes", shoes) };
@@ -199,9 +208,24 @@ int main()
     std::vector<Piece> five{ Item("Orion Top A", top), Item("Orion Top B", top), Item("Orion Skirt Red", skirt),
         Item("Orion Skirt Blue", skirt), Item("Orion Shoes", shoes) };
     groups = Match::Plan(five);
-    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2, 4 }, { 1, 2, 4 } }));
-    CHECK(ReasonOf(groups[0], 3) == std::string_view("same-slot-alternative"));
+    CHECK(groups.size() == 1 && groups[0].variants == std::vector<IndexList>({ { 0, 2, 4 }, { 1, 2, 4 }, { 0, 3, 4 } }));
+    CHECK(groups[0].pending.empty());
     CHECK_COMPLETE(groups, five);
+
+    // ---- every option ends up in an outfit of its own --------------------
+    // Two records share the mark "2" and cannot be told apart, so they are not paired
+    // by name - but each of them still gets one outfit instead of being left over.
+    std::vector<Piece> spare{ Item("[Stall] Dress", top), Item("[Stall] Dress 2", top), Item("[Stall] Dress 2", top),
+        Item("[Stall] Dress Short", top), Item("[Stall] Stocking", 1u << 8) };
+    groups = Match::Plan(spare);
+    CHECK(groups.size() == 1 && !groups[0].issue && groups[0].pending.empty());
+    CHECK(groups[0].variants.size() == 4);
+    CHECK_COMPLETE(groups, spare);
+    for (std::size_t piece = 0; piece < spare.size(); ++piece) {
+        CHECK(std::any_of(groups[0].variants.begin(), groups[0].variants.end(), [piece](const IndexList& variant) {
+            return std::binary_search(variant.begin(), variant.end(), piece);
+        }));
+    }
 
     // ---- real [BAKU]DOAXVV Love Letter Maiden shape ----------------------
     std::vector<Piece> maiden{ Item("Love Letter Maiden Boots", shoes), Item("Love Letter Maiden Gloves", 1u << 3),
