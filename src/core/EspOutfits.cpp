@@ -9,6 +9,7 @@
 #include <SKSE/SKSE.h>
 
 #include <algorithm>
+#include <chrono>
 #include <set>
 #include <tuple>
 
@@ -46,6 +47,17 @@ namespace SOS::EspOutfits
 			base.erase(dot);
 		}
 		return base;
+	}
+
+	// Every preview draws its own fill-ins, so reopening a plugin offers the other
+	// option of a slot instead of the same one forever (no two previews of the same
+	// plugin share a seed). Applying a preview uses the pieces it shows, so what the
+	// menu lists is exactly what gets created.
+	static std::uint64_t NextPreviewSeed()
+	{
+		static std::uint64_t counter = 0;
+		const auto           now = std::chrono::steady_clock::now().time_since_epoch().count();
+		return static_cast<std::uint64_t>(now) ^ (++counter * 0x9E3779B97F4A7C15ull);
 	}
 
 	std::string SlotNumbers(std::uint32_t a_mask)
@@ -90,7 +102,8 @@ namespace SOS::EspOutfits
 			}
 			input.push_back({ std::move(key), piece.mask });
 		}
-		const auto groups = Match::Plan(input);
+		Match::Rand rng{ NextPreviewSeed() };
+		const auto groups = Match::Plan(input, {}, true, &rng);
 		const auto base = BaseNameFor(a_plugin);
 		const auto maxName = static_cast<std::size_t>(outfit_service_get_singleton_ptr()->inner().max_outfit_name_len());
 		std::vector<bool> included(preview.pieces.size(), false);

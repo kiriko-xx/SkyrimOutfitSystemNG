@@ -162,6 +162,28 @@ int main()
     CHECK(ReasonOf(groups[0], 5) == std::string_view("same-slot-alternative"));
     CHECK_COMPLETE(groups, base);
 
+    // ---- an option slot is drawn, not taken in plugin order --------------
+    // Every preset must still hold exactly one piece of that slot, the draw must
+    // really use both options, and one seed must always give the same presets.
+    const auto drawsWithSeed = [&base](std::uint64_t seed) {
+        Match::Rand rng{ seed };
+        return Match::Plan(base, {}, true, &rng);
+    };
+    std::size_t firstChosen = 0, secondChosen = 0;
+    for (std::uint64_t seed = 1; seed <= 8; ++seed) {
+        const auto drawn = drawsWithSeed(seed);
+        CHECK(drawn.size() == 1 && drawn[0].variants.size() == 3);
+        CHECK_COMPLETE(drawn, base);
+        for (const auto& variant : drawn[0].variants) {
+            const bool first = std::binary_search(variant.begin(), variant.end(), 4);
+            const bool second = std::binary_search(variant.begin(), variant.end(), 5);
+            CHECK(first != second);
+            first ? ++firstChosen : ++secondChosen;
+        }
+    }
+    CHECK(firstChosen > 0 && secondChosen > 0);
+    CHECK(drawsWithSeed(7)[0].variants == drawsWithSeed(7)[0].variants);
+
     // ---- a slot that cannot be paired does not sink the outfit -----------
     std::vector<Piece> orionAC{ Item("Orion Top A", top), Item("Orion Top B", top), Item("Orion Skirt A", skirt),
         Item("Orion Skirt C", skirt) };

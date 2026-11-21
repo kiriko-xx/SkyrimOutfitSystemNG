@@ -27,6 +27,31 @@ namespace SOS::EspOutfits::Match
 		return mask & ~kFxBit;
 	}
 
+	// Picking which of several pieces fills an empty slot has to be a draw, not
+	// plugin order: five presets of one style must not all wear the same panty.
+	// splitmix64 keeps the draw deterministic per seed and identical on every build,
+	// so a report can be reproduced exactly by reusing its seed.
+	struct Rand
+	{
+		std::uint64_t state{};
+
+		explicit Rand(std::uint64_t seed = 0) : state(seed) {}
+
+		std::uint64_t Next()
+		{
+			std::uint64_t z = (state += 0x9E3779B97F4A7C15ull);
+			z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+			z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+			return z ^ (z >> 31);
+		}
+
+		// Uniform enough for choosing between a handful of options.
+		std::size_t Pick(std::size_t count)
+		{
+			return count > 1 ? static_cast<std::size_t>(Next() % count) : 0;
+		}
+	};
+
 	struct Piece
 	{
 		Key key;
@@ -77,10 +102,12 @@ namespace SOS::EspOutfits::Match
 	// only some variants cover is completed from the family itself - a shared part,
 	// or one option of that same slot - so a style never ends up half dressed.
 	// An empty slot is filled with exactly one piece: the player wants one outfit per
-	// style, not the whole cross product of every option in every slot. The first
-	// piece in plugin order wins, everything else that could have gone there is left
-	// for the player to judge.
-	inline void FinalizeVariants(Group& group, const std::vector<Piece>& pieces)
+	// style, not the whole cross product of every option in every slot. Which piece
+	// gets the slot is drawn (see Rand), so the five presets of one style do not all
+	// wear the same option; everything else that could have gone there is left for
+	// the player to judge. Without a Rand the first candidate in plugin order is used,
+	// which keeps the pure planner reproducible for tests.
+	inline void FinalizeVariants(Group& group, const std::vector<Piece>& pieces, Rand* rng = nullptr)
 	{
 		std::uint32_t coverage = 0;
 		for (const auto i : group.members) {
@@ -108,20 +135,46 @@ namespace SOS::EspOutfits::Match
 				continue;
 			}
 			auto missing = coverage & ~coveredBy(variant);
+			while (missing != 0) {
+				// Widest coverage first keeps the fill possible; among the pieces that
+				// fill equally much the draw is free. Panty and Panty (Trans) both take
+				// one slot, so either of them may end up in this preset.
+				std::size_t              bestCount = 0;
+				std::vector<std::size_t> best;
+				for (const auto i : group.members) {
+					if (std::find(variant.begin(), variant.end(), i) != variant.end()) {
+						continue;
+					}
+					const auto slots = BodySlots(pieces[i].mask);
+					if (slots == 0) {
+						continue;
+					}
+					if ((slots & ~missing) != 0) {
+						continue;
+					}
+					const auto count = static_cast<std::size_t>(std::popcount(slots));
+					if (count > bestCount) {
+						bestCount = count;
+						best.assign(1, i);
+					} else if (count == bestCount) {
+						best.push_back(i);
+					}
+				}
+				if (best.empty()) {
+					break;
+				}
+				const auto chosen = best[rng ? rng->Pick(best.size()) : 0];
+				variant.push_back(chosen);
+				missing &= ~BodySlots(pieces[chosen].mask);
+			}
 			for (const auto i : group.members) {
-				if (std::binary_search(variant.begin(), variant.end(), i)) {
+				if (std::find(variant.begin(), variant.end(), i) != variant.end()) {
 					continue;
 				}
 				const auto slots = BodySlots(pieces[i].mask);
-				if (slots == 0) {
-					continue;
-				}
-				if ((slots & ~missing) == 0) {
-					variant.push_back(i);
-					missing &= ~slots;
-				} else if ((slots & ~coverage) == 0) {
-					// Takes no slot this style does not already fill, so it is a second
-					// option for a slot that is now taken: kept back, not cross multiplied.
+				// Takes no slot this style does not already fill, so it is a second
+				// option for a slot that is now taken: kept back, never cross multiplied.
+				if (slots != 0 && (slots & ~coverage) == 0) {
 					spare.push_back(i);
 				}
 			}
@@ -192,7 +245,7 @@ namespace SOS::EspOutfits::Match
 	// and several pieces on one slot become variants only when their difference
 	// marks line up. Nothing is paired by position and nothing is invented, yet one
 	// unreadable slot no longer sinks the whole outfit.
-	inline void MatchVariants(Group& group, const std::vector<Piece>& pieces, const Aliases& aliases)
+	inline void MatchVariants(Group& group, const std::vector<Piece>& pieces, const Aliases& aliases, Rand* rng = nullptr)
 	{
 		std::map<std::uint32_t, IndexList> buckets;
 		for (const auto i : group.members) {
@@ -275,7 +328,7 @@ namespace SOS::EspOutfits::Match
 				group.pending.push_back({ shared.front(), "no-complete-outfit" });
 			}
 			group.aligned = PlacedOf(pieces, group.variants);
-			FinalizeVariants(group, pieces);
+			FinalizeVariants(group, pieces, rng);
 			if (group.variants.empty()) {
 				group.issue = !group.pending.empty() ? group.pending.front().second : "no-complete-outfit";
 			}
@@ -344,7 +397,7 @@ namespace SOS::EspOutfits::Match
 		group.variants = std::move(built);
 		group.aligned = PlacedOf(pieces, group.variants);
 		const char* alignedReason = group.pending.empty() ? nullptr : group.pending.front().second;
-		FinalizeVariants(group, pieces);
+		FinalizeVariants(group, pieces, rng);
 		if (group.variants.empty()) {
 			group.issue = alignedReason ? alignedReason : (!group.pending.empty() ? group.pending.front().second : "no-complete-outfit");
 		}
@@ -434,7 +487,7 @@ namespace SOS::EspOutfits::Match
 	// under a shared prefix ("星夜礼服" and "星夜晚礼服" under "星夜") stay apart
 	// instead of being matched across styles.
 	template <class KeyOf>
-	inline std::vector<Group> FamiliesOf(const std::vector<Piece>& pieces, const Aliases& aliases, IndexList avail, KeyOf keyOf, IndexList& leftover, bool a_report)
+	inline std::vector<Group> FamiliesOf(const std::vector<Piece>& pieces, const Aliases& aliases, IndexList avail, KeyOf keyOf, IndexList& leftover, bool a_report, Rand* rng = nullptr)
 	{
 		std::vector<Group> families;
 		while (avail.size() >= 2) {
@@ -455,6 +508,16 @@ namespace SOS::EspOutfits::Match
 			}
 			if (!found || (bestPlaced == 0 && !a_report)) {
 				break;
+			}
+			if (rng) {
+				// Scoring above ran with no draw so the candidates stay comparable; the
+				// family that wins is laid out again on the caller's stream, which gives
+				// every family its own picks.
+				Group replay;
+				replay.prefix = best.prefix;
+				replay.members = best.members;
+				MatchVariants(replay, pieces, aliases, rng);
+				best = std::move(replay);
 			}
 			IndexList gone = best.members;
 			std::sort(gone.begin(), gone.end());
@@ -497,7 +560,7 @@ namespace SOS::EspOutfits::Match
 		groups.push_back(std::move(group));
 	}
 
-	inline std::vector<Group> Plan(const std::vector<Piece>& pieces, const Aliases& aliases = {}, bool useLabels = true)
+	inline std::vector<Group> Plan(const std::vector<Piece>& pieces, const Aliases& aliases = {}, bool useLabels = true, Rand* rng = nullptr)
 	{
 		if (pieces.size() == 1 && !pieces.front().key.empty() && pieces.front().mask) {
 			return { Group{ {}, { 0 }, { { 0 } }, nullptr } };
@@ -536,7 +599,7 @@ namespace SOS::EspOutfits::Match
 				});
 				suffixes.push_back({ pieces[i].key.substr(label.size()), mask });
 			}
-			auto deeper = Plan(suffixes, aliases, false);
+			auto deeper = Plan(suffixes, aliases, false, rng);
 			if (deeper.size() > 1) {
 				for (auto& child : deeper) {
 					child.prefix = label + child.prefix;
@@ -559,17 +622,17 @@ namespace SOS::EspOutfits::Match
 			if (!complementary && group.members.size() > 1) {
 				group.issue = "no-complementary-slots";
 			} else {
-				MatchVariants(group, pieces, aliases);
+				MatchVariants(group, pieces, aliases, rng);
 			}
 			groups.push_back(std::move(group));
 		}
 		IndexList leftover;
-		for (auto& family : FamiliesOf(pieces, aliases, plain, fullKeys, leftover, false)) {
+		for (auto& family : FamiliesOf(pieces, aliases, plain, fullKeys, leftover, false, rng)) {
 			groups.push_back(std::move(family));
 		}
 		if (!leftover.empty()) {
 			IndexList rest;
-			for (auto& family : FamiliesOf(pieces, aliases, leftover, fullKeys, rest, true)) {
+			for (auto& family : FamiliesOf(pieces, aliases, leftover, fullKeys, rest, true, rng)) {
 				groups.push_back(std::move(family));
 			}
 			ReportLeftovers(groups, pieces, rest);
