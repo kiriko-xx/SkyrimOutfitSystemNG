@@ -79,6 +79,24 @@ namespace SOS::EspOutfits::Names
 		return {};  // e.g. prefix ends inside an NFKC expansion
 	}
 
+	inline std::string PresetName(std::string_view plugin, std::string_view style, std::size_t styleCount,
+		std::size_t variantCount, std::size_t index)
+	{
+		if (styleCount > 1 && style.empty()) {
+			return {};
+		}
+		std::string name(plugin);
+		if (styleCount > 1) {
+			name += '_';
+			name += style;
+		}
+		if (variantCount > 1) {
+			name += '_';
+			name += std::to_string(index + 1);
+		}
+		return name;
+	}
+
 	inline std::string SlotNumbers(std::uint32_t mask)
 	{
 		std::string numbers;

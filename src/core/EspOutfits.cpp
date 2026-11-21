@@ -15,7 +15,6 @@
 namespace SOS::EspOutfits
 {
 	static constexpr auto kPolicy = "XXXO";  // require equipped
-	static constexpr std::uint32_t kFxBit = 1u << 31;
 
 	std::vector<PluginSummary> PluginsWithArmor()
 	{
@@ -49,14 +48,6 @@ namespace SOS::EspOutfits
 		return base;
 	}
 
-	std::string OutfitNameFor(const std::string& a_base, std::size_t a_index)
-	{
-		if (a_index == 0) {
-			return a_base;
-		}
-		return a_base + "_" + std::to_string(a_index);
-	}
-
 	std::string SlotNumbers(std::uint32_t a_mask)
 	{
 		return Names::SlotNumbers(a_mask);
@@ -75,7 +66,7 @@ namespace SOS::EspOutfits
 			const char* full = armor->GetFullName();
 			const char* editor = armor->GetFormEditorID();
 			const auto mask = armor->GetSlotMask().underlying();
-			const bool ordinary = wearable && mask != 0 && (mask & kFxBit) == 0;
+			const bool ordinary = wearable;  // keep the original mask, including FX on a mixed-slot piece
 			SKSE::log::info("ESP outfits: input [{}] id={:08X} mask={:08X} editor='{}' name='{}' slots={} {}",
 				a_plugin, armor->GetFormID(), armor->GetSlotMask().underlying(), editor ? editor : "", full ? full : "",
 				Names::SlotNumbers(mask), ordinary ? "wearable" : "not clothing");
@@ -114,12 +105,11 @@ namespace SOS::EspOutfits
 				preview.truncated = true;
 				continue;
 			}
-			const auto stem = groups.size() > 1 && !label.empty() ? base + " " + label : base;
 			for (std::size_t i = 0; i < group.variants.size(); ++i) {
-				const auto raw = OutfitNameFor(stem, i);
-				auto name = raw;
-				for (std::size_t suffix = 2; usedNames.contains(Names::ComparisonKey(name)); ++suffix) {
-					name = raw + "_" + std::to_string(suffix);
+				auto name = Names::PresetName(base, label, groups.size(), group.variants.size(), i);
+				if (usedNames.contains(Names::ComparisonKey(name))) {
+					SKSE::log::warn("ESP outfits: pending [{}] family='{}' reason=duplicate-preset-name", a_plugin, label);
+					continue;
 				}
 				if (name.empty() || name.size() > maxName || Names::ComparisonKey(name).empty()) {
 					SKSE::log::warn("ESP outfits: pending [{}] family='{}' reason=unsupported-preset-name", a_plugin, label);
@@ -169,7 +159,7 @@ namespace SOS::EspOutfits
 			for (const auto index : outfit.pieces) {
 				const auto& item = a_preview.pieces.at(index);
 				const auto* armor = RE::TESForm::LookupByID<RE::TESObjectARMO>(item.formId);
-				if (!PluginScan::IsOutfitArmor(armor) || armor->GetSlotMask().underlying() != item.mask || (item.mask & kFxBit) != 0 ||
+				if (!PluginScan::IsOutfitArmor(armor) || armor->GetSlotMask().underlying() != item.mask ||
 					(occupied & item.mask) != 0) {
 					break;
 				}

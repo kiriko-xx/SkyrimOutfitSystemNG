@@ -49,7 +49,6 @@ namespace SOS::EspOutfits
 	std::vector<PluginSummary> PluginsWithArmor();
 	std::string SlotNumbers(std::uint32_t a_mask);
 	std::string BaseNameFor(const std::string& a_plugin);
-	std::string OutfitNameFor(const std::string& a_base, std::size_t a_index);
 	// Planning does not write. Applying revalidates the exact previewed records
 	// and never replaces an existing preset. All new presets use XXXO policy.
 	Preview PreviewFromPlugin(const std::string& a_plugin);

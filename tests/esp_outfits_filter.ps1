@@ -19,15 +19,18 @@ function Assert-Present([string] $haystack, [string] $needle, [string] $label) {
 
 # 1. The outfit generator goes through the clothing test.
 Assert-Present $esp 'PluginScan::IsOutfitArmor(armor)' 'clothing test on the outfit path'
-Assert-Present $esp 'kFxBit' 'FX channel constant'
-Assert-Present $esp '(mask & kFxBit) == 0' 'mixed FX records excluded rather than masking off the FX slot'
+Assert-Absent $esp 'kFxBit' 'do not erase or filter the FX bit again when combining ordinary pieces'
+Assert-Present $esp 'armor->GetSlotMask().underlying() != item.mask' 'confirmation checks the full mask'
+Assert-Present $esp '(occupied & item.mask) != 0' 'all occupied slots take part in overlap checks'
 Assert-Present $esp 'not clothing' 'skipped-record report'
 Assert-Present $espHeader 'outfitArmors' 'clothing count in the plugin row'
 
 # 2. The clothing test itself looks at all three things the user named.
 Assert-Present $scan 'bool IsOutfitArmor(const RE::TESObjectARMO* a_armor)' 'clothing test definition'
 Assert-Present $scan 'GetFormEditorID()' 'editor id test'
-Assert-Present $scan 'if (!editorId || editorId[0]' 'EditorID required even if a display name is available'
+Assert-Present $scan 'const char* fullName = a_armor->GetFullName();' 'use the display name when the runtime EditorID is unavailable'
+Assert-Present $scan '&& (!fullName || fullName[0]' 'only skip when neither name is available'
+Assert-Present $scan 'if ((mask & ~kFxBit) == 0)' 'exclude pure FX without excluding ordinary mixed-slot pieces'
 Assert-Present $scan 'constexpr std::uint32_t kFxBit = 1u << 31;' 'FX slot mask'
 Assert-Present $scan 'armorAddons.size() == 0' 'armour addon test'
 Assert-Present $scan 'GetModel()' 'model test'

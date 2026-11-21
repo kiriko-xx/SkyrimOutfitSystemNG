@@ -22,6 +22,13 @@ int main()
     CHECK(Names::ComparisonKey("\xC3\x28").empty());
     CHECK(Names::OriginalPrefix("星夜礼服-上衣A", U"星夜礼服") == "星夜礼服");
     CHECK(Names::SlotNumbers(top | shoes | (1u << 31)) == "32, 37, 61");
+    CHECK(Names::PresetName("Wardrobe", "星夜礼服", 1, 1, 0) == "Wardrobe");
+    CHECK(Names::PresetName("Wardrobe", "星夜礼服", 1, 2, 0) == "Wardrobe_1");
+    CHECK(Names::PresetName("Wardrobe", "星夜礼服", 1, 2, 1) == "Wardrobe_2");
+    CHECK(Names::PresetName("Wardrobe", "星夜礼服", 2, 1, 0) == "Wardrobe_星夜礼服");
+    CHECK(Names::PresetName("Wardrobe", "星夜礼服", 2, 2, 0) == "Wardrobe_星夜礼服_1");
+    CHECK(Names::PresetName("Wardrobe", "星夜礼服", 2, 2, 1) == "Wardrobe_星夜礼服_2");
+    CHECK(Names::PresetName("Wardrobe", "", 2, 1, 0).empty());
 
     std::vector<Piece> items{ Item("星夜礼服_假发A", hair), Item("星夜礼服-上衣A", top), Item("星夜礼服 上衣Ｂ", top),
         Item("星夜礼服裙子A", skirt), Item("星夜礼服裙子B", skirt), Item("星夜礼服鞋子A", shoes) };

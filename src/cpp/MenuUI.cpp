@@ -1197,7 +1197,7 @@ namespace SOS::Menu
 			IG::Separator();
 			IG::SeparatorText(I18n::T("Generate outfits from a plugin", "从 ESP 生成套装"));
 			IG::TextWrapped("%s", I18n::T("Select a plugin to preview its outfits. Uncertain matches are not created.", "选择 ESP 后先预览幻化预设，无法确定的搭配不会生成。"));
-			IG::TextDisabled(I18n::T("Only ordinary clothing is taken: FX effects, records with no editor id and records with no model are left out.", "只收录正常服装：FX 特效槽、没有 EditorID、没有模型的记录都不算在内。"));
+			IG::TextDisabled(I18n::T("Only ordinary clothing is taken: FX-only records, records with no readable name, and records with no model are left out.", "只收录正常服装：纯 FX 特效、无可读名称或无模型的记录不算在内。"));
 			if (IG::Button(I18n::T("Choose a plugin...", "选择 ESP..."))) {
 				g_espOutfitPicker = !g_espOutfitPicker;
 				g_espOutfitFilter[0] = 0;
@@ -1556,7 +1556,7 @@ namespace SOS::Menu
 					settings.espOutfitAutoFavorite = espFavorite;
 					Settings::Get().Save();
 				}
-				IG::TextDisabled(I18n::T("Generated outfits take ordinary clothing only: FX effects, records with no editor id and records with no model are skipped. Golden items are not filtered.", "生成的套装只收录正常服装：FX 特效、没有 EditorID、没有模型的记录都跳过；金件不做这个过滤。"));
+				IG::TextDisabled(I18n::T("Generated outfits take ordinary clothing only: FX-only records, records with no readable name, and records with no model are skipped. Golden items are not filtered.", "生成的幻化预设只收录正常服装：跳过纯 FX 特效、无可读名称或无模型的记录；金件不做这个过滤。"));
 			}
 
 			IG::SeparatorText("Language");

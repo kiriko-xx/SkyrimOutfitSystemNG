@@ -53,14 +53,16 @@ namespace SOS::PluginScan
 			if (!a_armor) {
 				return OutfitVerdict::kUnnamed;
 			}
-			// Outfit generation requires an EditorID. Golden items never use this verdict.
+			// ARMO does not expose its on-disk EDID reliably through the runtime getter.
+			// A nonempty FULL is valid evidence that the piece can be named.
 			const char* editorId = a_armor->GetFormEditorID();
-			if (!editorId || editorId[0] == '\0') {
+			const char* fullName = a_armor->GetFullName();
+			if ((!editorId || editorId[0] == '\0') && (!fullName || fullName[0] == '\0')) {
 				return OutfitVerdict::kUnnamed;
 			}
 			constexpr std::uint32_t kFxBit = 1u << 31;
 			const auto              mask = a_armor->GetSlotMask().underlying();
-			if (mask == 0 || (mask & kFxBit) != 0) {
+			if ((mask & ~kFxBit) == 0) {
 				return OutfitVerdict::kFxOnly;
 			}
 			if (a_armor->armorAddons.size() == 0) {
