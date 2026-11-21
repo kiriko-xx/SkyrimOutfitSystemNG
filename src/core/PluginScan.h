@@ -71,6 +71,20 @@ namespace SOS::PluginScan
 	// armour.
 	RE::TESObjectARMO* ResolveArmor(std::string_view a_plugin, std::uint32_t a_localId);
 
+	// True when the plugin is a light file (ESL, or an .esp flagged light).
+	bool IsLightPlugin(std::string_view a_plugin);
+
+	// Plugin-local id of a form in the width its plugin uses: 12 bits for a
+	// light file, 24 bits otherwise. Storing the wrong width is what made every
+	// golden item of a light plugin unresolvable: the light index sat inside the
+	// stored word and LookupForm added it a second time.
+	std::uint32_t LocalIdFor(std::string_view a_plugin, std::uint32_t a_formId);
+
+	// Lookup of a plugin-local id of either width. Accepts the compact id and the
+	// over-wide one 1.5.39-1.5.42 wrote, so old files keep working.
+	// Returns nullptr when the plugin is not loaded or the id names no record.
+	RE::TESForm* ResolveForm(std::string_view a_plugin, std::uint32_t a_localId);
+
 	// Drops the cached view of the load order. Only needed after a plugin is
 	// loaded at runtime; the normal load order never changes.
 	void Invalidate();

@@ -71,6 +71,13 @@ namespace SOS::Golden
 		// Normalises and sorts the entry list. Runs under g_mutex.
 		void Normalise(std::vector<Entry>& a_entries)
 		{
+			// 1.5.43: entries of a light plugin were saved with the light index
+			// inside the stored word (002E280C). Rewriting them in the width the
+			// plugin uses makes an existing file resolve again, and the next
+			// export writes the clean id.
+			for (auto& entry : a_entries) {
+				entry.localId = PluginScan::LocalIdFor(entry.plugin, entry.localId);
+			}
 			std::sort(a_entries.begin(), a_entries.end(), EntryLess);
 			a_entries.erase(std::unique(a_entries.begin(), a_entries.end(), SameEntry), a_entries.end());
 		}
@@ -85,7 +92,9 @@ namespace SOS::Golden
 			}
 			std::size_t missing = 0;
 			for (const auto& entry : a_entries) {
-				auto* form = handler->LookupForm(entry.localId, entry.plugin);
+				// Any record type: golden items deliberately accept FX records and
+				// records the outfit generator would skip.
+				auto* form = PluginScan::ResolveForm(entry.plugin, entry.localId);
 				if (form) {
 					resolved->insert(form->GetFormID());
 				} else {
@@ -293,8 +302,9 @@ namespace SOS::Golden
 		if (plugin.empty()) {
 			return false;
 		}
-		const RE::FormID full = a_armor->GetFormID();
-		const std::uint32_t localId = full & 0x00FFFFFFu;  // ESL ids keep the 12 bit index in the low word
+		const RE::FormID    full = a_armor->GetFormID();
+		// 12 bits for a light file, 24 for a normal one; see PluginScan::LocalIdFor.
+		const std::uint32_t localId = PluginScan::LocalIdFor(plugin, full);
 		Entry entry;
 		entry.plugin = plugin;
 		entry.localId = localId;
@@ -316,15 +326,18 @@ namespace SOS::Golden
 			a_message = "The plugin name is empty.";
 			return false;
 		}
-		auto* armor = PluginScan::ResolveArmor(a_plugin, a_localId);
+		// Any armour record counts here, not just slot armour: golden items take
+		// FX pieces and records without a slot of their own as well.
+		auto* form = PluginScan::ResolveForm(a_plugin, a_localId);
+		auto* armor = form ? form->As<RE::TESObjectARMO>() : nullptr;
 		if (!armor) {
-			a_message = "No slot armour with that id was found in that plugin.";
+			a_message = "No armour with that id was found in that plugin.";
 			return false;
 		}
 		const std::string owner = PluginScan::OwningPlugin(armor);
 		Entry entry;
 		entry.plugin = owner.empty() ? a_plugin : owner;
-		entry.localId = a_localId & 0x00FFFFFFu;
+		entry.localId = PluginScan::LocalIdFor(entry.plugin, armor->GetFormID());
 		{
 			std::lock_guard lock(g_mutex);
 			auto entries = Current()->entries;
@@ -358,7 +371,7 @@ namespace SOS::Golden
 			if (entry.plugin.empty()) {
 				continue;
 			}
-			entry.localId = armor->GetFormID() & 0x00FFFFFFu;
+			entry.localId = PluginScan::LocalIdFor(entry.plugin, armor->GetFormID());
 			const bool known = std::any_of(entries.begin(), entries.end(), [&](const Entry& a_existing) {
 				return SameEntry(a_existing, entry);
 			});

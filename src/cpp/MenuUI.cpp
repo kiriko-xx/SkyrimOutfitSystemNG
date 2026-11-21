@@ -74,6 +74,10 @@ namespace SOS::Menu
 		char        g_goldenLocalId[32]{};
 		char        g_goldenFilter[128]{};
 		std::string g_goldenStatus;
+		// True while the golden item store differs from the file on disk. Every
+		// edit used to write the file on the spot, behind the user's back
+		// (1.5.43: the Export button is the only thing that saves).
+		bool        g_goldenDirty{ false };
 		// The framework has no popup windows, so the plugin chooser of both pages
 		// is an inline list: 1 = every piece of a plugin, 2 = the plugin that
 		// owns one hand typed piece.
@@ -1811,6 +1815,18 @@ namespace SOS::Menu
 			return true;
 		}
 
+		// A list row the mouse can actually hit: the full width of what is
+		// visible plus a little vertical padding. The plain two-argument
+		// Selectable spans the content region of a scrolling child, which in this
+		// framework can end up far narrower than the visible list, so most of a
+		// row was not clickable.
+		bool GoldenRow(const char* a_label, bool a_selected)
+		{
+			const float width = std::max(IG::ContentRegionAvail().x, IG::CalcTextSize(a_label).x + 32.0f);
+			const float height = IG::CalcTextSize("A").y + 8.0f;
+			return IG::Selectable(a_label, a_selected, 0, ImVec2(width, height));
+		}
+
 		void RenderGolden()
 		{
 			auto& settings = Settings::Get();
@@ -1820,6 +1836,11 @@ namespace SOS::Menu
 			IG::TextDisabled(I18n::T("A golden item is drawn on top of the outfit. Its file is separate from the outfit data.", "金件会盖在幻化之上显示；它的数据文件与幻化数据分开保存。"));
 			IG::TextDisabled(I18n::T("Golden items take any record: FX effects, unnamed records and records without a model are allowed here.", "金件不挑记录：FX 特效、没有 EditorID、没有模型的记录都能加进来。"));
 			IG::TextDisabled("Data\\SKSE\\Plugins\\OutfitSystemGoldenItems.json");
+			if (g_goldenDirty) {
+				IG::Text(I18n::T("[not saved] The changes live in memory only; press Export to write OutfitSystemGoldenItems.json.", "[未保存] 改动只在内存里生效，点「导出到 OutfitSystemGoldenItems.json」才会写盘保存。"));
+			} else {
+				IG::TextDisabled(I18n::T("Changes reach the file only when you press Export.", "只有点「导出」才会把改动写进文件。"));
+			}
 
 			// The selection can point at a group that was removed or replaced by an
 			// import; drop it so the editor does not sit on a stale name.
@@ -1846,6 +1867,7 @@ namespace SOS::Menu
 			if (IG::Button(I18n::T("Export to OutfitSystemGoldenItems.json", "导出到 OutfitSystemGoldenItems.json"))) {
 				const bool ok = Golden::SaveToDisk();
 				if (ok) {
+					g_goldenDirty = false;
 					char text[512]{};
 					std::snprintf(text, sizeof(text), I18n::T("Exported %zu piece(s) to %s", "已导出 %zu 件到 %s"), Golden::TotalCount(), Golden::JsonPath().c_str());
 					g_goldenStatus = text;
@@ -1859,6 +1881,7 @@ namespace SOS::Menu
 			if (IG::Button(I18n::T("Import from OutfitSystemGoldenItems.json", "从 OutfitSystemGoldenItems.json 导入"))) {
 				const bool ok = Golden::LoadFromDisk();
 				if (ok) {
+					g_goldenDirty = false;
 					char text[512]{};
 					std::snprintf(text, sizeof(text), I18n::T("Imported %zu piece(s) from %s", "已导入 %zu 件，来源 %s"), Golden::TotalCount(), Golden::JsonPath().c_str());
 					g_goldenStatus = text;
@@ -1889,10 +1912,10 @@ namespace SOS::Menu
 						char label[320]{};
 						std::snprintf(label, sizeof(label), I18n::T("%s  (%zu piece(s))", "%s（%zu 件）"), it->name.c_str(), it->armors);
 						IG::PushID(static_cast<int>(it->order));
-						if (IG::Selectable(label)) {
+						if (GoldenRow(label, false)) {
 							if (g_goldenPluginPicker == 1) {
 								const auto added = Golden::AddAllFromPlugin(it->name);
-								Golden::SaveToDisk();
+								g_goldenDirty = true;
 								g_goldenSelected = it->name;
 								{
 					char text[512]{};
@@ -1918,7 +1941,11 @@ namespace SOS::Menu
 				IG::EndChild();
 			}
 
-			const float listWidth = static_cast<float>(std::clamp(settings.outfitListWidth, 240, 1200));
+			// Keep both panes inside the window: a list wider than the free space
+			// used to push the editor pane over the list, and the pane drawn last
+			// swallowed the clicks meant for the rows underneath it.
+			const float avail = IG::ContentRegionAvail().x;
+			const float listWidth = std::min(static_cast<float>(std::clamp(settings.outfitListWidth, 240, 1200)), std::max(240.0f, avail - 320.0f));
 			if (IG::BeginChild("##goldengroups", ImVec2(listWidth, 440.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
 				if (groups.empty()) {
 					IG::TextDisabled(I18n::T("No golden items yet - add a plugin above, or pick a single piece by its form id.", "还没有金件 - 先在上面添加一个 ESP，或按 FormID 添加单件。"));
@@ -1928,9 +1955,10 @@ namespace SOS::Menu
 					char label[384]{};
 					std::snprintf(label, sizeof(label), "%s  (%zu)", group.plugin.c_str(), group.localIds.size());
 					const bool isSelected = !g_goldenSelected.empty() && Lower(group.plugin) == Lower(g_goldenSelected);
-					if (IG::Selectable(label, isSelected)) {
+					if (GoldenRow(label, isSelected)) {
 						g_goldenSelected = group.plugin;
 						g_goldenLocalId[0] = 0;
+						SKSE::log::debug("Menu: golden group '{}' selected.", group.plugin);
 					}
 					IG::PopID();
 				}
@@ -1938,7 +1966,8 @@ namespace SOS::Menu
 			IG::EndChild();
 
 			IG::SameLine();
-			if (IG::BeginChild("##goldeneditor", ImVec2(0.0f, 440.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
+			const float editorWidth = std::max(320.0f, IG::ContentRegionAvail().x);
+			if (IG::BeginChild("##goldeneditor", ImVec2(editorWidth, 440.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
 				const Golden::Group* selected = nullptr;
 				for (const auto& group : groups) {
 					if (Lower(group.plugin) == Lower(g_goldenSelected)) {
@@ -1953,7 +1982,7 @@ namespace SOS::Menu
 					IG::Text(I18n::T("%zu golden piece(s); the plugin holds %zu slot armour record(s).", "金件 %zu 件；该 ESP 共有 %zu 条槽位护甲记录。"), selected->localIds.size(), PluginScan::ArmorsOf(selected->plugin).size());
 					if (IG::Button(I18n::T("Remove every piece of this plugin", "移除该 ESP 的全部金件"))) {
 						if (Golden::RemoveGroup(selected->plugin)) {
-							Golden::SaveToDisk();
+							g_goldenDirty = true;
 							{
 							char text[512]{};
 							std::snprintf(text, sizeof(text), I18n::T("Removed the %s group.", "已移除 %s 组。"), selected->plugin.c_str());
@@ -1965,18 +1994,17 @@ namespace SOS::Menu
 					}
 					IG::Separator();
 					for (const auto localId : selected->localIds) {
-						const auto* armor = PluginScan::ResolveArmor(selected->plugin, localId);
+						// Any armour record counts here as well; a golden item may be
+						// a piece the outfit generator would skip (FX, no model).
+						const auto* form = PluginScan::ResolveForm(selected->plugin, localId);
+						const auto* armor = form ? form->As<RE::TESObjectARMO>() : nullptr;
 						const char* name = (armor && armor->GetFullName()) ? armor->GetFullName() : I18n::T("<not in this load order>", "<当前加载顺序里没有>");
 						IG::PushID(static_cast<int>(localId));
-						char line[512]{};
-						std::snprintf(line, sizeof(line), "%s:%s  %s", selected->plugin.c_str(), HexLocalId(localId).c_str(), name);
-						IG::Text("%s", line);
-						IG::SameLine();
-						IG::TextDisabled(I18n::T("[slot %s]", "[槽位 %s]"), SlotNumbersFor(armor).c_str());
-						IG::SameLine();
+						// The remove button comes first: with a long piece name the
+						// buttons used to sit past the right edge of the pane.
 						if (IG::SmallButton(I18n::T("Remove", "移除"))) {
 							if (Golden::RemoveLocal(selected->plugin, localId)) {
-								Golden::SaveToDisk();
+								g_goldenDirty = true;
 								{
 								char text[512]{};
 								std::snprintf(text, sizeof(text), I18n::T("Removed %s:%s.", "已移除 %s:%s。"), selected->plugin.c_str(), HexLocalId(localId).c_str());
@@ -1985,6 +2013,12 @@ namespace SOS::Menu
 								CreateRefreshAllArmorsTask();
 							}
 						}
+						IG::SameLine();
+						char line[512]{};
+						std::snprintf(line, sizeof(line), "%s:%s  %s", selected->plugin.c_str(), HexLocalId(localId).c_str(), name);
+						IG::Text("%s", line);
+						IG::SameLine();
+						IG::TextDisabled(I18n::T("[slot %s]", "[槽位 %s]"), SlotNumbersFor(armor).c_str());
 						IG::PopID();
 					}
 					IG::Separator();
@@ -2006,7 +2040,7 @@ namespace SOS::Menu
 						} else {
 							std::string message;
 							if (Golden::AddLocal(selected->plugin, localId, message)) {
-								Golden::SaveToDisk();
+								g_goldenDirty = true;
 								{
 								char text[512]{};
 								std::snprintf(text, sizeof(text), I18n::T("Added %s.", "已添加 %s。"), message.c_str());

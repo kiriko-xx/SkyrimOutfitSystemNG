@@ -1,6 +1,14 @@
 # 构建说明（BUILD）
 
-## 1.5.42 构建与交付复核状态
+## 1.5.43 构建与交付复核状态
+
+**验证状态（1.5.43）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_43.log`，末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。守卫测试 18 项 PASS（新增 `tests/golden_local_id.ps1`，并同步修掉 `tests/esp_outfits_filter.ps1` 里因重构失效的单件查找断言），另 2 项是既有环境失败（`hair_tint_read_only.ps1` 锚点已随代码迁移消失、`skse_listener_replay.ps1` 需现场 `bug/skse64.log`），不是本版回归。
+
+- **本版改动面（只修金件页三处）**：`src/core/PluginScan.h` / `.cpp`（`Index` 增 `light` 表，新增 `IsLightPlugin()` / `LocalIdFor()` / `ResolveForm()`，`ResolveArmor()` 改走它们）、`src/core/GoldenItems.cpp`（`Normalise()` 归一化 id、`AddArmor()` / `AddAllFromPlugin()` / `AddLocal()` / `Resolve()` 改走新接口）、`src/cpp/MenuUI.cpp`（`g_goldenDirty`、`GoldenRow()`、双栏宽度夹紧、四处自动保存改置脏、单件行改用 `ResolveForm()`、`Remove` 按钮挪到行首）、`src/cpp/include/version.h` PATCH 43、`CMakeLists.txt` VERSION 1.5.43，外加 `tests/golden_local_id.ps1` 与 `tests/esp_outfits_filter.ps1`。`MorphRefresh.cpp` / `SceneOutfits.cpp` / `Patches.cpp` / `Hooks.cpp` / `HookSupport.cpp` / `I18n.cpp` / `main.cpp` 必须是空 diff（`main.cpp` 的旧 ini 一次性迁移仍会自己 `SaveToDisk()` 一次，属刻意保留）。
+- **构建后必查**：DLL 里能搜到 `[not saved] The changes live in memory only` / `Changes reach the file only when you press Export.` / `Menu: golden group ` / `No armour with that id was found` / `1.5.43`；旧串 `No slot armour with that id was found` 必须 **0 命中**；`LocalIdFor` / `IsLightPlugin` / `ResolveForm` 是内部符号，Release 内联后通常**搜不到**（属正常，别当成没改）。版本资源应为 `1.5.43.0`，DLL 2,041,856 字节 / `349a3e0f…`。
+- **静态守卫**：`tests/golden_local_id.ps1` 必须打印 `GOLDEN_LOCAL_ID_OK`（light 分支掩 `0xFFF`、`ResolveForm` 先 compact 后 wide、`ResolveArmor` 不再裸 `LookupForm`、金件三处 `LocalIdFor`、`RenderGolden()` 内 `Golden::SaveToDisk()` 恰好 1 次、`g_goldenDirty` 与两条提示串、`GoldenRow(` 用于两处列表、`std::max(240.0f, avail - 320.0f)` 夹紧）。跑法：`C:/Program Files/PowerShell/7/pwsh.exe -NoProfile -File tests/golden_local_id.ps1`（必须 pwsh 7，且 spawn 时 env 要带 `PATHEXT=.COM;.EXE;.BAT;.CMD`，否则 cl mock 用例假失败）。
+- **交付两种包**：①全量包 `SkyrimOutfitSystemNG-1.5.43.zip`（`build/pack_1_5_43.ps1`，31 条目，dist 全量 + `SHA256SUMS.txt`）；②测试包 `SkyrimOutfitSystemNG-1.5.43-test.zip`（`build/pack_1_5_43_test.ps1`，2 条目：`SKSE/Plugins/OutfitSystemNG.dll` + `1.5.43-test-notes.txt`），可直接用 MO2 装。
+## 1.5.42 构建与交付复核状态（历史，删除崩溃已由 1.5.43 修；其金件页仍每次点击自动写盘）
 
 **验证状态（1.5.42）**：尚未实机验证。Release 全量重编 `BUILD_EXIT=0`，0 error / 0 warning（`cmd /c buildtask_msbuild.bat`，日志 `build/build_task.log`，留档 `build/build_1_5_42.log`，末尾有 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`）。守卫测试 16 项 PASS（新增 `tests/menu_page_slice.ps1`），另 2 项是既有环境失败（`hair_tint_read_only.ps1` 锚点已随代码迁移消失、`skse_listener_replay.ps1` 需要现场 `bug/skse64.log`）。
 
@@ -181,7 +189,7 @@ schtasks /run /tn SOSNG
 
 ## 8. 打包
 
-> **当前版本（1.5.42）用封装好的脚本**：`build/pack_1_5_42.ps1`（由上一版脚本改版本号），直接 `C:/Program Files/PowerShell/7/pwsh.exe -NoProfile -File build/pack_1_5_42.ps1` 即可 —— 它会重算 `dist/SHA256SUMS.txt`、用 `[IO.Compression.ZipFile]` 逐条正斜杠 `CreateEntry` 压包、回读校验条目数与逐文件哈希、最后打印 `ZipBytes` / `ZipSHA256` / `EntriesVerified` / `ManifestVerified` / `DistBytes`。下面这段是 1.5.27 的原始记录，步骤等价，仅作参考（包名按当前版本替换）。
+> **当前版本（1.5.43）用封装好的脚本**：`build/pack_1_5_43.ps1`（由上一版脚本改版本号；测试包用 `build/pack_1_5_43_test.ps1`），直接 `C:/Program Files/PowerShell/7/pwsh.exe -NoProfile -File build/pack_1_5_43.ps1` 即可 —— 它会重算 `dist/SHA256SUMS.txt`、用 `[IO.Compression.ZipFile]` 逐条正斜杠 `CreateEntry` 压包、回读校验条目数与逐文件哈希、最后打印 `ZipBytes` / `ZipSHA256` / `EntriesVerified` / `ManifestVerified` / `DistBytes`。下面这段是 1.5.27 的原始记录，步骤等价，仅作参考（包名按当前版本替换）。
 
 ```powershell
 Remove-Item SkyrimOutfitSystemNG-1.5.27.zip -ErrorAction SilentlyContinue

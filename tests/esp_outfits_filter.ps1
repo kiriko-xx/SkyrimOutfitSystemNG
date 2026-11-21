@@ -35,7 +35,11 @@ Assert-Present $scanHeader 'bool IsOutfitArmor' 'clothing test declaration'
 # 3. Golden items are exempt: no clothing test anywhere on their path.
 Assert-Absent $golden 'IsOutfitArmor' 'clothing test on the golden path'
 Assert-Present $golden 'PluginScan::ArmorsOf(a_plugin)' 'golden items take the whole plugin'
-Assert-Present $golden 'PluginScan::ResolveArmor(a_plugin, a_localId)' 'single piece lookup stays'
+# 1.5.43: the single piece lookup goes through ResolveForm so an id of a light
+# plugin is read in its own width, and so a piece without a display slot can be
+# named in the editor instead of showing "<not in this load order>".
+Assert-Present $golden 'PluginScan::ResolveForm(a_plugin, a_localId)' 'single piece lookup stays'
+Assert-Present $golden 'form->As<RE::TESObjectARMO>()' 'single piece lookup still wants an armour record'
 
 if ($fail.Count -gt 0) {
     $fail | ForEach-Object { Write-Host "FAIL: $_" }

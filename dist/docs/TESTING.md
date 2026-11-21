@@ -882,6 +882,21 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | E1 | 基础幻化（1.5.25 基线） | `Custom: attaching N outfit-only piece(s)`，身体槽不空 | 回归 ⇒ 本版不该动 `Patches.cpp`，先查是不是装错 DLL |
 | F1 | 全日志搜 `Message handler: an exception escaped` | **0 条** | 有 ⇒ 还有别的异常逃出回调，发回整行 |
 
+## 3.51 1.5.43 金件页三处：组行可点 / 取消自动导出 / light 插件 id 宽度（m10387）
+
+| 编号 | 步骤 | 期望 |
+| --- | --- | --- |
+| A1 | 进菜单 →「金件」栏，鼠标点左栏第二、第三个插件组行 | 一点就选中，右侧编辑区立即切到该组（1.5.42 及更早：要反复点同一位置才偶尔命中） |
+| A2 | 开 Verbose，点一次组行 | 出现 `Menu: golden group <名字> selected.`（debug）；**没有这行** = 命中矩形问题仍存在，把分辨率与 UI 缩放发回 |
+| A3 | 把 `.ini` 里 `OutfitListWidth` 拖到很大再进金件页 | 左右两栏不重叠：左栏自动收窄（`[240, max(240, 可用宽-320)]`），右栏最小 320，两组行仍可点 |
+| B1 | 加一件金件（或移除一件），**不点导出** | 数据路径下方出现 `[not saved] The changes live in memory only; press Export to write OutfitSystemGoldenItems.json.`；磁盘上 `OutfitSystemGoldenItems.json` 的修改时间**不变** |
+| B2 | 承接 B1，直接退出游戏重进 | 那件改动**不在**（本版就是手动保存）；进去后提示是 `Changes reach the file only when you press Export.` |
+| B3 | 再改一件，点「导出到 OutfitSystemGoldenItems.json」，然后重启 | 提示先变回 `Changes reach the file only…`，重启后改动仍在；文件 mtime 变化 |
+| C1 | 选一个 light(ESL) 插件（例：`[SSE]Mini Bunny.esp`），点「Add every piece of a plugin」 | 右侧每行显示真实名字 + `[slot 30/32/…]`，**不再**是 `<当前加载顺序里没有>`；状态行 `Golden items: N piece(s) of <plugin> added.` |
+| C2 | 承接 C1（用户旧档里那 61 条仍存在时直接启动） | 启动日志 `Golden items: N entr(ies) resolved, 0 missing.`（1.5.43 的 `Normalise()` 把 light id 自动归一化）；不应再有成片 `was not found in this load order` |
+| D1 | 在「Add piece of this plugin」里手输同一个件的两种写法（`002E280C` 与 `E280C`） | 两种都能加进来；1.5.43 起存进文件的是归一化后的短 id（light 插件 3–4 位十六进制） |
+| E1 | 往金件里加一件**非槽位护甲**（例如只有 FX 槽的记录） | 能加（金件不做服装过滤），名字正常显示，`[slot …]` 显示真实槽号或 `?`；不再提示 `No slot armour with that id…`（1.5.43 文案改成 `No armour with that id was found in that plugin.`） |
+| F1 | 回归：切一次普通幻化套装、进一次 OStim 场景看 `_sex` 套装 | 幻化外观正常（1.5.25 行为）、场景套装自动切换正常（1.5.34 行为）；金件页改动不影响它们 |
 ## 4. 性能协议（1000+ 套装）
 
 用 Papyrus 生成 1000 个套装后测：
@@ -1170,6 +1185,7 @@ B. 回归
 
 ## 6. 已知未验证项
 
+- **1.5.43 的三处修复全部未实机验证**（m10387）：本机无游戏。①「点不中」是按 ImGui 语义推断 —— `Selectable(label, selected)` 的 `(0,0)` 尺寸 + 右栏 `ImVec2(0, …)` 在剩余宽度为负时覆盖左栏，对照是 `MenuUI.cpp:737-738` 那处显式给 `ImVec2(rowWidth, 0)` 才点得中的写法；②「手动导出」是本地可静态确认的（`RenderGolden()` 内只剩一处 `SaveToDisk()`），但「不点导出重启后真的没保存」要在游戏里看；③light 插件 id 宽度是从日志里 `002E280C` / `002E1D66` / `002E0823` 的高 12 位连续递增加上 CL-NG `GetFormID` 不掩码的事实推出，`ResolveForm()` 还留了 24 位兜底，所以最坏情况是「仍旧 missing 但不崩」。
 - **1.5.42 的删除崩溃修复未实机验证**（m10183）：本机无游戏。崩溃点是用自写 PE 解析把栈帧对位到 `MenuUI.cpp` 的 `RenderOutfits` 并复核 `begin` / `end` 的 `size_t` 下溢得出的，不是实机复现。判据是「第 2 页及以后删除不崩 + 删除行之后仍继续渲染」；若仍崩，先看崩溃栈里是否还是 `vector too long`。
 - **1.5.41 的启动崩溃修复未实机验证**（m10014）：本机无游戏，判据是崩溃栈字符串 `resource deadlock would occur` + 自写 PE 解析的帧对位（`MessageHandler` → `Golden::LoadFromDisk` → `Golden::ImportText` → 计数 getter）+ 源码核对；不是实机复现。若实机仍闪退，按 §3.49 的 A1/A3 分流。
 - **1.5.40 的两处修复未实机验证**（m09740）：ESP 列表是否非空、金件页是否还崩、`PluginScan` 四类跳过计数在你环境（890 插件 / 13,909 条槽位护甲）上的分布，全部没在游戏里看过。崩溃点由自写 PE 解析对位到 `RenderGolden` 内的 `snprintf`（读 `0x8`），非实机复现。

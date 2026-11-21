@@ -4,7 +4,17 @@
 
 本仓库是 Skyrim Outfit System SE 0.7.0 的 **CommonLibSSE-NG 移植版**：原 C++ 幻化实现（xbyak 钩子、Papyrus 层、策略系统、ESP/脚本/翻译）全部保留，只把随包的 Rust 数据层等价改写为 C++，并在此基础上增加/替换若干功能。没有任何 fitting-room 代码。
 
-## 1.5.42 最新说明（2026-11-21）
+## 1.5.43 最新说明（2026-11-21）
+
+- **修：金件页三处**（m10387）—— ①左侧金件列表「鼠标很难点中，或者说压根点不中」；②取消金件 JSON 的自动导出，改成界面上提示、点「导出」才写盘；③「添加某个 ESP 的全部装备」之后，右侧单件菜单每行都显示 `<当前加载顺序里没有>`。1.5.42 的删除崩溃已被用户实机确认修好。
+- **点不中的原因**：组行用的是 `IG::Selectable(label, isSelected)`（尺寸默认 `(0, 0)`），命中矩形只有一行文字高；再加上左栏宽度取用户可拖的 `outfitListWidth`、右侧编辑栏 `BeginChild(..., ImVec2(0, 440))` 的 0 表示「剩余宽度」，剩余宽度为负时右栏会盖到左栏上把点击吃掉。
+- **自动写盘的原因**：1.5.39 起「批量添加 / 移除单件 / 移除整组 / 手输添加」四处都在改完立刻 `Golden::SaveToDisk()`，用户没有「先改完再保存」的余地。
+- **`<当前加载顺序里没有>` 的原因**：金件存的是 `formId & 0x00FFFFFF`，对 light(ESL) 插件这 24 位里高 12 位是**运行时的光索引**（日志里 `002E280C` / `002E1D66` / `002E0823` 的高位 0x2E0/0x2E1/0x2E2 连续递增就是证据），而 CL-NG 的 `TESDataHandler::GetFormID` 对 light 插件返回 `0xFE000000 + (lightIndex << 12) + formID`（不掩码）⇒ `LookupForm` 把光索引叠两次 ⇒ 一条都查不到（`Golden items: 0 entr(ies) resolved, 61 missing.`）。
+- **修法**：①`PluginScan` 记住每个插件是不是 light 文件，新增 `LocalIdFor()`（light 掩 `0xFFF`、其它掩 `0xFFFFFF`）与 `ResolveForm()`（掩码 id 优先、24 位兜底），金件的增 / 批量增 / 解析 / 加载归一化与菜单单件行全部改走它们 —— **你现存那 61 条旧档在加载时自动修正**，下一次导出写成干净 id；②新增 `GoldenRow()` 给组行与插件选择器显式宽高，左栏自动收窄到 `[240, 可用宽-320]`、右栏最小 320，两栏不再重叠；③新增 `g_goldenDirty`，四处自动保存改成置脏，`RenderGolden()` 里只有「导出」按钮会写盘，数据路径下面常显 `[not saved] The changes live in memory only; press Export…` / `Changes reach the file only when you press Export.`（改动仍在内存里立即生效，只是不落盘）。
+- **未改动**：引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装切换 / 钩子安装）、逐槽策略、从 ESP 生成套装、金件存库锁一律未动。
+- **未验证**：本机没有游戏。点不中的根因是按 ImGui 语义 + `MenuUI.cpp:737-738` 那处「显式给宽高才点得中」的既有写法推断，light id 宽度是从日志 id 分布加 `GetFormID` 不掩码的事实推出。实机请按 docs/TESTING.md §3.51 走，重点看 `Menu: golden group <名字> selected.`、`[not saved] …` 与 `Golden items: N entr(ies) resolved, 0 missing.` 三条日志。
+
+## 1.5.42 说明（历史，删除崩溃已由 1.5.43 修；其金件页仍每次点击自动写盘）
 
 - **修：删除幻化套装预设时闪退**（m10183）。1.5.41 的启动闪退已经好了；同一版在新问题上崩：菜单里把套装列表翻到第 2 页及以后、删掉一套预设就闪退（第 1 页删除不触发）。
 - **原因**：删除按钮先把套装删掉、把过滤列表清空（`g_filtered.clear();`），紧接着仍按**删除前**的页码算本页区间 —— `end` 变成 0 而 `begin` 还大于 0，`end - begin` 是无符号减法，下溢成接近 `SIZE_MAX`，`pageFavorites.assign(...)` / `pageArmorCounts.assign(...)` 抛 `std::length_error("vector too long")`，异常从菜单渲染回调逃出直接终止游戏。
@@ -247,6 +257,7 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 50. **1.5.40**（2026-11-21）：修 1.5.39 两处回归 —— ESP 列表为空（服装判据只看男性模型 + 列表按服装计数过滤）、金件页闪退（中英占位符顺序不一致被当 printf 格式串）；新增 `I18n` 占位符运行时护栏与 `PluginScan` 统计行。
 51. **1.5.41**（2026-11-21）：修 1.5.40 的启动即闪退 —— 金件库 `std::mutex` 在同线程被重入加锁（`ImportText` 持锁后调 `TotalCount`），MSVC 抛 `std::system_error("resource deadlock would occur")` 且异常逃出 SKSE 回调；改递归锁 + `TotalCountLocked()`，并给启动加载与消息回调各加一道 try/catch 兜底。
 52. **1.5.42**（2026-11-21）：修 1.5.41 报出的新崩溃 —— 删除幻化套装预设时闪退（m10183）。菜单分页切片在删除后仍用旧页码：`g_filtered.clear()` 后 `end = 0` 而 `begin > 0`，`end - begin` 的 `size_t` 下溢让 `std::vector::assign` 抛 `std::length_error("vector too long")`，异常逃出渲染回调把游戏带走。修法是先取 `total`、把 `begin` / `end` 都 `min` 到 `total`，并加 `tests/menu_page_slice.ps1` 守卫。引擎侧与金件存库零改动。
+53. **1.5.43**（2026-11-21）：修金件页三处（m10387）—— 组行点不中（`Selectable` 尺寸 `(0,0)` + 右栏负宽覆盖左栏，改 `GoldenRow()` 显式宽高与双栏夹紧）、每次编辑都自动写盘（改 `g_goldenDirty`，只有「导出」按钮写盘并常显未保存提示）、light(ESL) 插件金件显示 `<当前加载顺序里没有>`（存 id 时把光索引一起存了，`LookupForm` 二次叠加 ⇒ 全 missing；新增 `PluginScan::LocalIdFor()` / `ResolveForm()` 按插件宽度归一，旧档加载自愈）。引擎侧零改动。
 
 
 ## 常见问题

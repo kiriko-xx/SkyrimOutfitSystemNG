@@ -28,6 +28,7 @@ namespace SOS::PluginScan
 		{
 			std::vector<PluginEntry>                                        plugins;
 			std::unordered_map<std::string, std::string>                    display;  // lower name -> stored name
+			std::unordered_map<std::string, bool>                           light;    // lower name -> light file
 			std::unordered_map<std::string, std::vector<RE::TESObjectARMO*>> armors;   // lower name -> slot armours
 			std::vector<RE::TESObjectARMO*>                                 all;      // every slot armour
 		};
@@ -109,6 +110,7 @@ namespace SOS::PluginScan
 					entry.order = order++;
 					entry.light = false;
 					a_index.display.emplace(LowerCopy(entry.name), entry.name);
+					a_index.light.emplace(LowerCopy(entry.name), entry.light);
 					a_index.plugins.push_back(std::move(entry));
 				}
 			}
@@ -128,6 +130,7 @@ namespace SOS::PluginScan
 					entry.order = order++;
 					entry.light = true;
 					a_index.display.emplace(LowerCopy(entry.name), entry.name);
+					a_index.light.emplace(LowerCopy(entry.name), entry.light);
 					a_index.plugins.push_back(std::move(entry));
 				}
 			}
@@ -257,7 +260,28 @@ namespace SOS::PluginScan
 		return it->second;
 	}
 
-	RE::TESObjectARMO* ResolveArmor(std::string_view a_plugin, std::uint32_t a_localId)
+	bool IsLightPlugin(std::string_view a_plugin)
+	{
+		if (a_plugin.empty()) {
+			return false;
+		}
+		const auto index = EnsureIndex();
+		const auto it = index->light.find(LowerCopy(a_plugin));
+		return it != index->light.end() && it->second;
+	}
+
+	std::uint32_t LocalIdFor(std::string_view a_plugin, std::uint32_t a_formId)
+	{
+		// A light file addresses its records with 12 bits; the light index lives
+		// above them in the runtime id and must never be stored with them.
+		// 1.5.39-1.5.42 stored formId & 0xFFFFFF for every plugin, which for a
+		// light file kept the light index (ids like 002E280C). LookupForm then
+		// adds the light index again, no form is found, and every golden item of
+		// that plugin showed up as "<not in this load order>".
+		return IsLightPlugin(a_plugin) ? (a_formId & 0x00000FFFu) : (a_formId & 0x00FFFFFFu);
+	}
+
+	RE::TESForm* ResolveForm(std::string_view a_plugin, std::uint32_t a_localId)
 	{
 		if (a_plugin.empty()) {
 			return nullptr;
@@ -271,7 +295,23 @@ namespace SOS::PluginScan
 		if (named == index->display.end()) {
 			return nullptr;
 		}
-		auto* form = handler->LookupForm(a_localId, named->second);
+		// First the width the plugin actually uses, then the raw 24 bit value:
+		// entries written by 1.5.39-1.5.42 (and ids typed in full by the user)
+		// are repaired here instead of being reported as missing.
+		const std::uint32_t compact = LocalIdFor(named->second, a_localId);
+		if (auto* form = handler->LookupForm(compact, named->second)) {
+			return form;
+		}
+		const std::uint32_t wide = a_localId & 0x00FFFFFFu;
+		if (compact != wide) {
+			return handler->LookupForm(wide, named->second);
+		}
+		return nullptr;
+	}
+
+	RE::TESObjectARMO* ResolveArmor(std::string_view a_plugin, std::uint32_t a_localId)
+	{
+		auto* form = ResolveForm(a_plugin, a_localId);
 		auto* armor = form ? form->As<RE::TESObjectARMO>() : nullptr;
 		return IsSlotArmor(armor) ? armor : nullptr;
 	}

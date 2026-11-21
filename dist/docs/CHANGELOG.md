@@ -1,5 +1,19 @@
 # 更新日志（CHANGELOG）
 
+## [1.5.43] - 2026-11-21
+
+### 修：金件页三处（点不中 / 每次编辑都写盘 / light 插件金件解析不到）（m10387）
+
+- **用户原话**：「上个轮问题已修复。“金件”列表里鼠标很难点中金件，或者说压根点不中！ 将“金件”的json自动导出取消，在界面提示，完成修改后需要手动点击导出才会保存。 “金件”中“添加某个esp的全部装备”后，右侧的单件菜单里会显示”<当前加载顺序里没有>“」
+- **症状一**：金件左栏组行点不中；**症状二**：改一件就自己写盘，没有「改完再导出」这回事；**症状三**：用「Add every piece of a plugin」加进来的 light(ESL) 插件金件，右侧每行都是 `<当前加载顺序里没有>`，`Golden items: 0 entr(ies) resolved, 61 missing.`
+- **日志证据**：`GoldenItems.cpp:93` 连发 61 条 `Golden items: <plugin>:<id> was not found in this load order.`（`[SSE]Mini Bunny.esp:002E280C`、`AE_AP_Xiaoyu_Bunny.esp:002E1D66`、`VtawWardrobe4 [SE].esp:002E0823`），紧接着 `GoldenItems.cpp:96: 0 entr(ies) resolved, 61 missing.`；添加当时却是成功的（`51 piece(s) of [SSE]Mini Bunny.esp added.`）。三个插件 id 的高 12 位 0x2E0/0x2E1/0x2E2 连续递增 = light 插件的光索引。
+- **真因**：①`IG::Selectable(label, isSelected)` 尺寸默认 `(0,0)`，命中矩形只有一行文字高，且左栏可宽到把右侧 `ImVec2(0, 440)`（剩余宽度）挤成负宽、盖在左栏上吞点击；②1.5.39 起「批量添加 / 移除单件 / 移除整组 / 手输添加」四处都在改完立刻 `Golden::SaveToDisk()`；③金件存的是 `formId & 0x00FFFFFF`，对 light 插件这 24 位里高 12 位是光索引，而 `TESDataHandler::GetFormID(modIndex, lightIndex, formID)` 对 light 插件是 `0xFE000000 + (lightIndex << 12) + formID`（不掩码）⇒ `LookupForm` 二次叠加 ⇒ 永远查不到。
+- **修法一**（`PluginScan`）：`Index` 增 `light` 表，新增 `IsLightPlugin()` / `LocalIdFor()`（light 掩 `0xFFF`）/ `ResolveForm()`（先掩码 id、失败再用 24 位兜底）；`ResolveArmor()` 改走它们。
+- **修法二**（`GoldenItems`）：`Normalise()` 对每条跑 `LocalIdFor()`（旧档 61 条加载即自愈）；`AddArmor()` / `AddAllFromPlugin()` / `AddLocal()` / `Resolve()` 全部改走 `LocalIdFor()` / `ResolveForm()`；`AddLocal()` 的报错文案改成 `No armour with that id was found in that plugin.`。
+- **修法三**（`MenuUI`）：新增 `g_goldenDirty`，四处自动保存改成置脏，`RenderGolden()` 内 `Golden::SaveToDisk()` 只剩「导出」一处；数据路径下方常显 `[not saved] The changes live in memory only; press Export…` / `Changes reach the file only when you press Export.`；新增 `GoldenRow()` 给插件选择器与组行显式宽高，`listWidth` 夹到 `[240, max(240, avail - 320)]`、右栏 `max(320, avail)`；`Remove` 按钮挪到行首。
+- **守卫测试**：新增 `tests/golden_local_id.ps1`（掩码宽度、ResolveForm 兜底、SaveToDisk 只有 1 处、GoldenRow 用法、宽度夹紧）；同步修掉 `tests/esp_outfits_filter.ps1` 里因重构失效的单件查找断言。全量 20 个脚本 18 PASS，2 项既有环境失败（`hair_tint_read_only.ps1` 锚点消失、`skse_listener_replay.ps1` 缺现场日志）。
+- **未改动**：引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装 / 钩子安装）、逐槽策略、从 ESP 生成套装、金件存库锁（1.5.41）一行未改。
+- **未验证**：本机无游戏。点不中的根因是 ImGui 语义推断（对照 `MenuUI.cpp:737-738` 显式给宽高的写法），light id 宽度是从日志 id 分布加 CL-NG `GetFormID` 事实推出；三项都要实机确认。
 ## [1.5.42] - 2026-11-21
 
 ### 修：删除幻化套装预设时闪退（m10183）
