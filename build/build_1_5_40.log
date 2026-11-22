@@ -1,6 +1,0 @@
-
-  PluginScan.cpp
-    正在创建库 D:/Skyrim-dev/src/SkyrimOutfitSystemSE-NG/build/Release/OutfitSystemNG.lib 和对象 D:/Skyrim-dev/src/SkyrimOutfitSystemSE-NG/build/Release/OutfitSystemNG.exp
-  SkyrimOutfitSystemNG.vcxproj -> D:\Skyrim-dev\src\SkyrimOutfitSystemSE-NG\build\Release\OutfitSystemNG.dll
-  	Deploying OutfitSystemNG.dll to dist/SKSE/Plugins
-BUILD_EXIT=0 
