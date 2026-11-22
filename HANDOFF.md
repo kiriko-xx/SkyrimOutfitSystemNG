@@ -157,7 +157,7 @@ cmd /c D:/Skyrim-dev/build/build_1_5_56.bat      # MSBuild 直编；set 环境�
 | 一槽一件掉件 | `Slot rule: [..] preset=... dropped XXXXXXXX ...` |
 | 批量删除 | `Outfits: bulk delete removed N preset(s)` |
 | 金件点选 | `Menu: golden piece <plugin>:<id> <name>` / `Menu: golden group <名字> selected (N of M).` |
-| Z 键 | `Quick picker: Z opens the window directly (0.5 s limit).`（info，启动时一行）；每次开窗本身在 debug 级 |
+| Z 键 | 启动/重载时 info 一行：`Hotkeys: 'Z' opens the quick picker right away (the quickslot power needs its cast animation).`（按键被禁用则只有 debug）；真正开窗是 debug：`Hotkeys: quick picker opened by the quickslot key 'Z'.` |
 
 ---
 
