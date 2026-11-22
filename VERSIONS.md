@@ -6,7 +6,8 @@
 
 | 版本 | 日期 | 包大小（字节） | SHA-256 | 状态 / 备注 |
 | --- | --- | --- | --- | --- |
-| 1.5.17 | 2026-11-16 | 981,613 | `3e58e8442371020a863463d4cdde43f4cb72d168141ad9172212a86def9dd869` | **当前回退目标**；SLIF NG 兼容版；幻化显示正常 |
+| 1.5.56 | 2026-11-22 | 1,413,907 | `82203e35ebbb35c14ca9f23e09618ed58c189fd2323bc21dedfc82486f24194c` | **当前版本，已并入 `main`，tag `v1.5.56`**：Z 键即时打开快速选择（`[RandomOutfit] QuickPickerKey = Z`，0.5 s 限流，绕过 lesser power 的施法动画）、未开 `ExtraLogging` 时日志只剩摘要行（预览行附待判断原因直方图）、i18n 341 条全量落到 `interface/translations`（129 处裸 ImGui 文案改走 `I18n::Tr/TrId`）、翻译文件 `$英文<TAB>译文` 逐字取用、新增 `tests/i18n_translation_files.ps1` 守卫；DLL 2,207,232 B / `42dcf428…` / 1.5.56.0；31 条目解包逐文件哈希与 dist 全等；本版一次性收尾 1.5.47–1.5.55（ESP 生成算法定稿：标签组整装、单槽不截断、待判断并入、同名副本不崩、撞槽不毁族、一槽一件） |
+| 1.5.17 | 2026-11-16 | 981,613 | `3e58e8442371020a863463d4cdde43f4cb72d168141ad9172212a86def9dd869` | 早期回退目标（1.5.56 之前的成熟基线）；SLIF NG 兼容版；幻化显示正常 |
 | 1.5.18 | 2026-11-16 | 986,943 | `2394cb3780aac9791b90c55ff7ebeddcf61fda3e9045fe8bdd2ba4e33ae4f008` | 几何签名探针；实机未解决 morph 跟随 |
 | 1.5.19 | 2026-11-17 | 1,022,531 | `31e81dcd32f36bc3a1c03b739939d46ebbdc3995ebd2b2c59d0b7260c1af4ab9` | provider-first；skee 握手永不放弃 |
 | 1.5.20 | 2026-11-17 | 1,020,827 | `a9ca108664f0df5714e7ba40f43f5910addb98f22194caadde4955cb8b115638` | .tri 目标 + MorphShapeCallback；**实机全裸**（CustomSkinPlayer 钩子校验失败） |
@@ -63,13 +64,14 @@
 | 1.5.41 | git tag `v1.5.41`（同一分支 `feature/slot-policy-esp-outfits-golden`；`main` 仍是 1.5.34） |
 | 1.5.40 | git tag `v1.5.40`（同一分支 `feature/slot-policy-esp-outfits-golden`；`main` 仍是 1.5.34） |
 | 1.5.39 | git tag `v1.5.39`（打在分支 `feature/slot-policy-esp-outfits-golden` 上；`main` 仍是 1.5.34，实机通过后快进合并） |
-| 当前 dist | 1.5.45 的候选交付（工作分支 `feature/slot-policy-esp-outfits-golden`，总共 31 文件 / 3,093,035 B；`SKSE/Plugins/OutfitSystemNG.dll` 2,074,112 B / 1.5.45.0 / `075e211e…`；旧名 `SkyrimOutfitSystemNG.dll` 不在包内；zip 1,316,037 B / `ab9fc2dc…`；测试包 917,373 B / `c76d6e42…`） |
+| 1.5.47 – 1.5.56 | 开发线在 `test/esp-outfit-*` 分支链上（1.5.47 `1a9ff46` → 1.5.50 `6467e43` → 1.5.51 `bf89961` → 1.5.52 `3cda8ec` → 1.5.53 `5f0c47b` → 1.5.54 `8976f40` → 1.5.55/1.5.56 的提交在 `test/slot-unique-bulk-delete-1.5.55`）；**已并入 `main`，tag `v1.5.56`** |
+| 当前 dist | 1.5.56 交付（分支 `test/slot-unique-bulk-delete-1.5.55`，31 文件 / 3,264,062 B；`SKSE/Plugins/OutfitSystemNG.dll` 2,207,232 B / 1.5.56.0 / `42dcf428…`；`interface/translations/SkyrimOutfitSystemNG_{english,chinese}.txt` 各 341 行；zip 1,413,907 B / `2fdfa421…`） |
 
 1.5.22 的交付目录存档在 `build/dist_1_5_22/`（build/ 不入库）。
 
 ## 版本管理规则
 
-- **分支布局（2026-11-21 19:10 快照）**：`main` = 最新发布线（`fad3e64` = `1.5.34` = tag `v1.5.34`，用户已验收）；`1.5.35`–`1.5.38` 的实时形变候选已按用户要求废弃为 tag `abandoned/menu-morph-live-1.5.38`；`1.5.39`–`1.5.45` 在分支 `feature/slot-policy-esp-outfits-golden` 上开发，**该分支 HEAD 已按用户要求 `git reset --hard v1.5.45`（`591e437`）**；`1.5.46` 因「从 ESP 自动生成套装」乱组被用户否决，封存为 tag `v1.5.46` + `abandoned/esp-outfits-trie-1.5.46`。**交接文档见仓库根 `HANDOFF.md`**。发布一律在 `main` 上按 tag 推进。历史上的实验性提交（2026-11-17 晚 `fix: gate scene and morph tasks…` 那一串）不在发布线上，已封存为分支 `archive/main-experiments-20261117` 与同名 tag，需要时 `git diff main archive/main-experiments-20261117 -- src/` 对照取舍。
+- **分支布局（2026-11-22 快照）**：`main` = 最新发布线，已从 `1.5.34`（`fad3e64`）快进到 **`1.5.56`（tag `v1.5.56`）**；`1.5.35`–`1.5.38` 的实时形变候选废弃为 tag `abandoned/menu-morph-live-1.5.38`；`1.5.39`–`1.5.45` 在 `feature/slot-policy-esp-outfits-golden` 上；`1.5.46` 因乱组被否，代码留 tag `v1.5.46` / `abandoned/esp-outfits-trie-1.5.46`；`1.5.47`–`1.5.56` 在 `test/*` 分支链上按 m08008 测试包协议逐版实机验证，1.5.56 一次性合并收尾。
 - 仓库根的 `.gitignore` 忽略 `dist/`、`build/`、`*.dll`、`*.pex`、`*.log`：git 只跟踪源码与文档，交付目录每次由构建生成。
 - 每次定稿一个交付版本：先把 `dist/` 收尾，再 `git tag vX.Y.Z`（tag 打在当时那份源码上），随后打包 zip 并更新本文件。
 - 回退 = 直接装对应版本的 zip；**不要**在没有源码快照的版本之间做“源码回退”，只能以二进制为准。
@@ -77,7 +79,7 @@
 
 ## 回退与合并（用户 m06712 要求：随时可回退、可合并有用版本）
 
-**回退（推荐、唯一安全途径）**：装对应版本的成品包即可 —— 仓库根有 1.5.17–1.5.46 的 `SkyrimOutfitSystemNG-<版本>.zip`，每个包旁有 `.zip.sha256`（内容为 `hash + 两空格 + 文件名`）。想完全干净地回退：删掉 `Data/SKSE/Plugins/` 下的 `OutfitSystemNG.dll` **和** `SkyrimOutfitSystemNG.dll`，再解压目标包覆盖。
+**回退（推荐、唯一安全途径）**：装对应版本的成品包即可 —— 仓库根有 1.5.17–1.5.56 的 `SkyrimOutfitSystemNG-<版本>.zip`，每个包旁有 `.zip.sha256`（内容为 `hash + 两空格 + 文件名`）。想完全干净地回退：删掉 `Data/SKSE/Plugins/` 下的 `OutfitSystemNG.dll` **和** `SkyrimOutfitSystemNG.dll`，再解压目标包覆盖。
 
 **源码级回退**：`git tag` 逐版对应（见上表）。`git checkout v1.5.29` 可回到那一版源码，`git diff v1.5.29 v1.5.30 -- src/` 可看单版差异。注意 1.5.17–1.5.21 **没有源码快照**，只能以二进制回退。
 

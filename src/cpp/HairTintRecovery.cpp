@@ -231,7 +231,7 @@ namespace SOS::HairTintRecovery
 			written[count++] = material;
 		}
 		if (count) {
-			SKSE::log::info("HairTintRecovery: eventConsumed=1 sourceSampled={} restored count={} source=({},{},{})", sampled, count, color.red, color.green, color.blue);
+			SKSE::log::debug("HairTintRecovery: eventConsumed=1 sourceSampled={} restored count={} source=({},{},{})", sampled, count, color.red, color.green, color.blue);
 		} else {
 			DebugSkip(Skip::kNoTargets, "no-distinct-target-needing-recovery", sampled);
 		}

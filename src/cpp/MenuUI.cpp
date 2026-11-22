@@ -622,9 +622,9 @@ namespace SOS::Menu
 			auto& settings = Settings::Get();
 			auto* player = RE::PlayerCharacter::GetSingleton();
 
-			IG::Text("Change outfit");
+			IG::Text(I18n::Tr("Change outfit"));
 			IG::SameLine();
-			IG::TextDisabled("%zu outfits", outfit_service_get_singleton_ptr()->inner().outfit_count());
+			IG::TextDisabled(I18n::Tr("%zu outfits"), outfit_service_get_singleton_ptr()->inner().outfit_count());
 
 			IG::SetNextItemWidth(300.0f);
 			if (IG::InputTextWithHint("##quicksearch", "Search...", g_quickSearch, sizeof(g_quickSearch))) {
@@ -632,13 +632,13 @@ namespace SOS::Menu
 				g_quickFocus = 0;
 			}
 			IG::SameLine();
-			if (IG::Checkbox("Favourites", &g_quickFavoritesOnly)) {
+			if (IG::Checkbox(I18n::TrId("Favourites"), &g_quickFavoritesOnly)) {
 				g_quickSignature.clear();
 				g_quickFocus = 0;
 			}
 			IG::SameLine();
 			IG::SetNextItemWidth(140.0f);
-			if (IG::SliderInt("Page size", &settings.quickPickerPageSize, 5, 500)) {
+			if (IG::SliderInt(I18n::TrId("Page size"), &settings.quickPickerPageSize, 5, 500)) {
 				settings.quickPickerPageSize = std::clamp(settings.quickPickerPageSize, 5, 500);
 				SaveSettingsThrottled();
 			}
@@ -786,28 +786,28 @@ namespace SOS::Menu
 					IG::PopID();
 				}
 				if (g_quickFiltered.empty()) {
-					IG::TextDisabled("No outfit matches the filter.");
+					IG::TextDisabled(I18n::Tr("No outfit matches the filter."));
 				}
 			}
 			IG::EndChild();
 
 			IG::Separator();
-			if (IG::Button("Random")) {
+			if (IG::Button(I18n::TrId("Random"))) {
 				QuickRandom(player);
 			}
 			IG::SameLine();
-			if (IG::Button("Remove outfit")) {
+			if (IG::Button(I18n::TrId("Remove outfit"))) {
 				QuickRemoveOutfit(player);
 			}
 			if (IG::IsItemHovered()) {
-				IG::SetTooltip("Removes the outfit from the player and shows the real armour again (X).");
+				IG::SetTooltip(I18n::Tr("Removes the outfit from the player and shows the real armour again (X)."));
 			}
 			IG::SameLine();
-			if (IG::Button("Close")) {
+			if (IG::Button(I18n::TrId("Close"))) {
 				CloseQuickPicker();
 			}
 
-			IG::TextDisabled("W/S: select   A/D: page   E: wear   R: random   X: remove   Esc: close");
+			IG::TextDisabled(I18n::Tr("W/S: select   A/D: page   E: wear   R: random   X: remove   Esc: close"));
 		}
 
 		void RenderQuickPicker()
@@ -830,7 +830,7 @@ namespace SOS::Menu
 
 			if (standalone) {
 				if (!IG::WindowPlumbingReady()) {
-					IG::TextDisabled("The menu framework does not expose the window functions; the quick picker cannot open.");
+					IG::TextDisabled(I18n::Tr("The menu framework does not expose the window functions; the quick picker cannot open."));
 					return;
 				}
 				const auto& settings = Settings::Get();
@@ -918,16 +918,16 @@ namespace SOS::Menu
 			auto& settings = Settings::Get();
 			const std::size_t outfitCount = outfit_service_get_singleton_ptr()->inner().outfit_count();
 
-			IG::Text("Outfits: %zu", outfitCount);
+			IG::Text(I18n::Tr("Outfits: %zu"), outfitCount);
 			IG::SameLine();
-			IG::TextDisabled("(double-click a name to apply it to %s)", TargetName());
+			IG::TextDisabled(I18n::Tr("(double-click a name to apply it to %s)"), TargetName());
 
 			IG::SetNextItemWidth(320.0f);
 			if (IG::InputTextWithHint("##search", "Search by name...", g_search, sizeof(g_search))) {
 				g_page = 1;
 			}
 			IG::SameLine();
-			if (IG::Checkbox("Favourites only", &g_searchFavoritesOnly)) {
+			if (IG::Checkbox(I18n::TrId("Favourites only"), &g_searchFavoritesOnly)) {
 				g_page = 1;
 			}
 			IG::SameLine();
@@ -951,7 +951,7 @@ namespace SOS::Menu
 			IG::SameLine();
 			if (IG::SmallButton("<")) { g_page = std::max(1, g_page - 1); }
 			IG::SameLine();
-			IG::Text("page %d / %d", g_page, pageCount);
+			IG::Text(I18n::Tr("page %d / %d"), g_page, pageCount);
 			IG::SameLine();
 			if (IG::SmallButton(">")) { g_page = std::min(pageCount, g_page + 1); }
 			IG::SameLine();
@@ -960,14 +960,14 @@ namespace SOS::Menu
 			// The page size is stored in the ini, so it does not reset every time
 			// the menu is opened.
 			IG::SetNextItemWidth(140.0f);
-			if (IG::SliderInt("Page size", &settings.outfitPageSize, 5, 500)) {
+			if (IG::SliderInt(I18n::TrId("Page size"), &settings.outfitPageSize, 5, 500)) {
 				settings.outfitPageSize = std::clamp(settings.outfitPageSize, 5, 500);
 				g_page = 1;
 				g_filterSignature.clear();
 				SaveSettingsThrottled();
 			}
 			IG::SameLine();
-			if (IG::BeginCombo("Apply to", TargetName())) {
+			if (IG::BeginCombo(I18n::TrId("Apply to"), TargetName())) {
 				if (IG::Selectable(I18n::T("Player", "玩家"), g_targetActor == 0)) {
 					g_targetActor = 0;
 				}
@@ -998,8 +998,8 @@ namespace SOS::Menu
 			IG::Separator();
 
 			if (!g_pendingDelete.empty()) {
-				IG::TextWrapped("Delete outfit \"%s\"? This also removes it from every actor and state assignment.", g_pendingDelete.c_str());
-				if (IG::Button("Delete")) {
+				IG::TextWrapped(I18n::Tr("Delete outfit \"%s\"? This also removes it from every actor and state assignment."), g_pendingDelete.c_str());
+				if (IG::Button(I18n::TrId("Delete"))) {
 					const bool removed = outfit_service_get_mut_singleton_ptr()->inner().delete_outfit(g_pendingDelete.c_str());
 					SKSE::log::info("Outfits: deleted '{}': {}.", g_pendingDelete, removed ? "yes" : "no");
 					if (g_selected == g_pendingDelete) {
@@ -1012,7 +1012,7 @@ namespace SOS::Menu
 					CreateRefreshAllArmorsTask();
 				}
 				IG::SameLine();
-				if (IG::Button("Cancel")) {
+				if (IG::Button(I18n::TrId("Cancel"))) {
 					g_pendingDelete.clear();
 				}
 				IG::Separator();
@@ -1176,7 +1176,7 @@ namespace SOS::Menu
 						ApplyTo(TargetActor(), name);
 					}
 					if (rowHovered) {
-						IG::SetTooltip("%zu armour pieces\nWear applies it to the actor chosen in \"Apply to\".", armorCount);
+						IG::SetTooltip(I18n::Tr("%zu armour pieces\nWear applies it to the actor chosen in \"Apply to\"."), armorCount);
 					}
 					if (isSelected && g_scrollToSelected) {
 						IG::SetScrollHereY(0.5f);
@@ -1184,7 +1184,7 @@ namespace SOS::Menu
 					}
 
 					IG::SameLine(buttonX);
-					if (IG::SmallButton("Wear")) {
+					if (IG::SmallButton(I18n::TrId("Wear"))) {
 						ApplyTo(TargetActor(), name);
 					}
 					IG::SameLine();
@@ -1193,14 +1193,14 @@ namespace SOS::Menu
 						g_filterSignature.clear();
 					}
 					IG::SameLine();
-					if (IG::SmallButton("Delete")) {
+					if (IG::SmallButton(I18n::TrId("Delete"))) {
 						g_pendingDelete = name;
 					}
 
 					IG::PopID();
 				}
 				if (g_filtered.empty()) {
-					IG::TextDisabled("No outfits yet - wear some armour and use 'Create from worn' below.");
+					IG::TextDisabled(I18n::Tr("No outfits yet - wear some armour and use 'Create from worn' below."));
 				}
 			}
 			IG::EndChild();
@@ -1208,7 +1208,7 @@ namespace SOS::Menu
 			IG::SameLine();
 			if (IG::BeginChild("##outfiteditor", ImVec2(0.0f, 470.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
 				if (g_selected.empty()) {
-					IG::TextDisabled("Select an outfit on the left to edit its armour pieces and slot policies.");
+					IG::TextDisabled(I18n::Tr("Select an outfit on the left to edit its armour pieces and slot policies."));
 				} else {
 					Editor::Render(g_selected, g_targetActor, [] { g_selected.clear(); });
 				}
@@ -1226,7 +1226,7 @@ namespace SOS::Menu
 			// so checking before it would validate the previous frame's text.
 			const bool nameTooLong = std::strlen(g_newName) > maxNameLength;
 			IG::SameLine();
-			if (IG::Button("Create from worn")) {
+			if (IG::Button(I18n::TrId("Create from worn"))) {
 				if (nameTooLong) {
 					RE::SendHUDMessage::ShowHUDMessage(I18n::T("That outfit name is too long.", "幻化名称过长。"), nullptr, false);
 				} else if (Features::CreateOutfitFromWorn(RE::PlayerCharacter::GetSingleton(), g_newName)) {
@@ -1236,7 +1236,7 @@ namespace SOS::Menu
 				}
 			}
 			IG::SameLine();
-			if (IG::Button("Create empty")) {
+			if (IG::Button(I18n::TrId("Create empty"))) {
 				if (nameTooLong) {
 					RE::SendHUDMessage::ShowHUDMessage(I18n::T("That outfit name is too long.", "幻化名称过长。"), nullptr, false);
 				} else if (g_newName[0] != 0 && outfit_service_get_mut_singleton_ptr()->inner().add_outfit(g_newName)) {
@@ -1246,7 +1246,7 @@ namespace SOS::Menu
 				}
 			}
 			IG::SameLine();
-			if (IG::Button("Copy")) {
+			if (IG::Button(I18n::TrId("Copy"))) {
 				if (g_selected.empty()) {
 					RE::SendHUDMessage::ShowHUDMessage(I18n::T("Select an outfit on the left first.", "请先在左侧选中一套幻化。"), nullptr, false);
 				} else if (OutfitClipboard::Copy(g_selected)) {
@@ -1256,7 +1256,7 @@ namespace SOS::Menu
 				}
 			}
 			IG::SameLine();
-			if (IG::Button("Paste")) {
+			if (IG::Button(I18n::TrId("Paste"))) {
 				// The clipboard object is the same JSON shape the legacy
 				// OutfitSystemData.json uses, so a preset copied from there (or
 				// from another player) pastes straight into a new outfit.
@@ -1290,13 +1290,13 @@ namespace SOS::Menu
 					break;
 				}
 			}
-			IG::TextDisabled("Max %zu bytes per name.", maxNameLength);
+			IG::TextDisabled(I18n::Tr("Max %zu bytes per name."), maxNameLength);
 
 			if (!g_selected.empty()) {
 				IG::SetNextItemWidth(240.0f);
 				IG::InputText("##rename", g_renameName, sizeof(g_renameName));
 				IG::SameLine();
-				if (IG::Button("Rename")) {
+				if (IG::Button(I18n::TrId("Rename"))) {
 					if (std::strlen(g_renameName) > maxNameLength) {
 						RE::SendHUDMessage::ShowHUDMessage(I18n::T("That outfit name is too long.", "幻化名称过长。"), nullptr, false);
 					} else {
@@ -1444,7 +1444,7 @@ namespace SOS::Menu
 			}
 
 			IG::Separator();
-			IG::TextDisabled("Plugin enabled: %s | Random hotkey: %s", outfit_service_get_singleton_ptr()->inner().enabled_c() ? I18n::T("yes", "是") : I18n::T("no", "否"), settings.randomOutfitHotkey.c_str());
+			IG::TextDisabled(I18n::Tr("Plugin enabled: %s | Random hotkey: %s"), outfit_service_get_singleton_ptr()->inner().enabled_c() ? I18n::T("yes", "是") : I18n::T("no", "否"), settings.randomOutfitHotkey.c_str());
 		}
 
 		// ---- actors panel ---------------------------------------------------
@@ -1475,8 +1475,8 @@ namespace SOS::Menu
 
 				const auto& names = OutfitNamesCache();
 
-				if (IG::BeginCombo("Outfit", currentName.empty() ? "<none>" : currentName.c_str())) {
-					if (IG::Selectable("<none>", currentName.empty())) {
+				if (IG::BeginCombo(I18n::TrId("Outfit"), currentName.empty() ? "<none>" : currentName.c_str())) {
+					if (IG::Selectable(I18n::TrId("<none>"), currentName.empty())) {
 						{
 							auto service = outfit_service_get_mut_singleton_ptr();
 							service->inner().set_outfit_c("", a_formId);
@@ -1496,7 +1496,7 @@ namespace SOS::Menu
 					IG::EndCombo();
 				}
 
-				if (IG::Checkbox("Location/state based switching", &autoSwitch)) {
+				if (IG::Checkbox(I18n::TrId("Location/state based switching"), &autoSwitch)) {
 					{
 						auto service = outfit_service_get_mut_singleton_ptr();
 						service->inner().set_state_based_switching_enabled(autoSwitch, a_formId);
@@ -1508,7 +1508,7 @@ namespace SOS::Menu
 					}
 				}
 
-				if (IG::TreeNode("State outfits")) {
+				if (IG::TreeNode(I18n::TrId("State outfits"))) {
 					// Copy the 13 names once instead of asking the store inside each
 					// combo, and reuse the cached outfit list for every state combo.
 					std::array<std::string, kStateTypeCount> stateNames;
@@ -1525,7 +1525,7 @@ namespace SOS::Menu
 						const bool  isRandom = (stateName == OutfitService::kRandomStateOutfit);
 						const char* preview = stateName.empty() ? "<inherit>" : (isRandom ? I18n::T("<random>", "<随机>") : stateName.c_str());
 						if (IG::BeginCombo(StateName(state), preview)) {
-							if (IG::Selectable("<inherit>", stateName.empty())) {
+							if (IG::Selectable(I18n::TrId("<inherit>"), stateName.empty())) {
 								{
 									auto service = outfit_service_get_mut_singleton_ptr();
 									service->inner().unset_state_outfit(state, a_formId);
@@ -1556,7 +1556,7 @@ namespace SOS::Menu
 				}
 
 				IG::SameLine();
-				if (IG::SmallButton("Refresh")) {
+				if (IG::SmallButton(I18n::TrId("Refresh"))) {
 					Features::RefreshActor(actor);
 				}
 				IG::SameLine();
@@ -1572,14 +1572,14 @@ namespace SOS::Menu
 
 		void RenderActors()
 		{
-			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && IG::Button("Add player")) {
+			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && IG::Button(I18n::TrId("Add player"))) {
 				outfit_service_get_mut_singleton_ptr()->inner().add_actor(player->GetFormID());
 			}
 			IG::SameLine();
 			if (IG::BeginCombo("##addnearby", "Add a nearby actor...")) {
 				const auto nearby = Features::ActorsNearPlayer();
 				if (nearby.empty()) {
-					IG::TextDisabled("No other actor in this cell.");
+					IG::TextDisabled(I18n::Tr("No other actor in this cell."));
 				}
 				for (auto* actor : nearby) {
 					if (!actor) {
@@ -1595,7 +1595,7 @@ namespace SOS::Menu
 				IG::EndCombo();
 			}
 			IG::SameLine();
-			if (IG::Button("Refresh all appearances")) {
+			if (IG::Button(I18n::TrId("Refresh all appearances"))) {
 				CreateRefreshAllArmorsTask();
 			}
 			IG::Separator();
@@ -1603,11 +1603,11 @@ namespace SOS::Menu
 			if (g_pendingActorRemove != 0) {
 				if (auto* actor = RE::TESForm::LookupByID<RE::Actor>(g_pendingActorRemove)) {
 					const char* name = actor->GetDisplayFullName();
-					IG::TextWrapped("Stop managing %s? The player cannot be removed.", name ? name : I18n::T("<not loaded>", "<未加载>"));
+					IG::TextWrapped(I18n::Tr("Stop managing %s? The player cannot be removed."), name ? name : I18n::T("<not loaded>", "<未加载>"));
 				} else {
-					IG::TextWrapped("Stop managing that actor?");
+					IG::TextWrapped(I18n::Tr("Stop managing that actor?"));
 				}
-				if (IG::Button("Remove")) {
+				if (IG::Button(I18n::TrId("Remove"))) {
 					auto* removedActor = RE::TESForm::LookupByID<RE::Actor>(g_pendingActorRemove);
 					outfit_service_get_mut_singleton_ptr()->inner().remove_actor(g_pendingActorRemove);
 					if (g_targetActor == g_pendingActorRemove) {
@@ -1619,7 +1619,7 @@ namespace SOS::Menu
 					}
 				}
 				IG::SameLine();
-				if (IG::Button("Cancel")) {
+				if (IG::Button(I18n::TrId("Cancel"))) {
 					g_pendingActorRemove = 0;
 				}
 			}
@@ -1633,7 +1633,7 @@ namespace SOS::Menu
 			}
 
 			if (actors.empty()) {
-				IG::TextDisabled("No actors configured yet.");
+				IG::TextDisabled(I18n::Tr("No actors configured yet."));
 			}
 			for (const auto id : actors) {
 				RenderOneActor(id);
@@ -1646,28 +1646,28 @@ namespace SOS::Menu
 			FlushSettingsIfDue();
 			auto& settings = Settings::Get();
 
-			IG::SeparatorText("General");
+			IG::SeparatorText(I18n::Tr("General"));
 			// The runtime state lives in OutfitService (it is persisted in the co-save),
 			// so derive the checkbox from it instead of the stale Settings mirror.
 			bool enabled = outfit_service_get_singleton_ptr()->inner().enabled_c();
-			if (IG::Checkbox("Enable outfit overrides", &enabled)) {
+			if (IG::Checkbox(I18n::TrId("Enable outfit overrides"), &enabled)) {
 				settings.enabled = enabled;
 				outfit_service_get_mut_singleton_ptr()->inner().set_enabled(enabled);
 				CreateRefreshAllArmorsTask();
 				Settings::Get().Save();
 			}
 			bool quickslots = settings.quickslotsEnabled;
-			if (IG::Checkbox("Give the player the \"Change Outfit\" power", &quickslots)) {
+			if (IG::Checkbox(I18n::TrId("Give the player the \"Change Outfit\" power"), &quickslots)) {
 				settings.quickslotsEnabled = quickslots;
 				Features::ApplyQuickslotSpell();
 				Settings::Get().Save();
 			}
-			IG::TextDisabled("Version %s", SKYRIMOUTFITSYSTEMSE_VERSION_VERSTRING);
+			IG::TextDisabled(I18n::Tr("Version %s"), SKYRIMOUTFITSYSTEMSE_VERSION_VERSTRING);
 			IG::TextDisabled("Settings are stored in Data\\SKSE\\Plugins\\SkyrimOutfitSystemSE.ini");
 
-			IG::SeparatorText("Outfit data");
+			IG::SeparatorText(I18n::Tr("Outfit data"));
 			IG::TextDisabled("Data\\SKSE\\Plugins\\OutfitSystemData.json - the same file the original mod reads and writes.");
-			if (IG::Button("Export outfits to OutfitSystemData.json")) {
+			if (IG::Button(I18n::TrId("Export outfits to OutfitSystemData.json"))) {
 				g_dataStatus.clear();
 				std::string message;
 				const bool ok = Features::ExportOutfitsToJson(message);
@@ -1676,7 +1676,7 @@ namespace SOS::Menu
 				SKSE::log::info("Menu: export to OutfitSystemData.json {}.", ok ? "succeeded" : "failed");
 			}
 			IG::SameLine();
-			if (IG::Button("Import outfits from OutfitSystemData.json")) {
+			if (IG::Button(I18n::TrId("Import outfits from OutfitSystemData.json"))) {
 				g_dataStatus.clear();
 				std::string message;
 				const bool ok = Features::ImportOutfitsFromJson(message);
@@ -1703,15 +1703,15 @@ namespace SOS::Menu
 				IG::TextDisabled(I18n::T("Generated outfits take ordinary clothing only: FX-only records, records with no readable name, and records with no model are skipped. Golden items are not filtered.", "生成的幻化预设只收录正常服装：跳过纯 FX 特效、无可读名称或无模型的记录；金件不做这个过滤。"));
 			}
 
-			IG::SeparatorText("Language");
+			IG::SeparatorText(I18n::Tr("Language"));
 			{
 				// Every file in Data/interface/translations becomes a choice, so a
 				// translator can add a language without touching the plugin.
 				const std::string mode(I18n::ModeName());
 				const bool        isAuto = mode == "auto";
 				const char*       preview = isAuto ? I18n::Tr("Auto (game language)") : I18n::LabelForCode(I18n::CurrentCode());
-				if (IG::BeginCombo("Language", preview)) {
-					if (IG::Selectable("Auto (game language)", isAuto)) {
+				if (IG::BeginCombo(I18n::TrId("Language"), preview)) {
+					if (IG::Selectable(I18n::TrId("Auto (game language)"), isAuto)) {
 						I18n::SetLanguage("auto");
 						Settings::Get().Save();
 					}
@@ -1727,71 +1727,71 @@ namespace SOS::Menu
 				if (!I18n::ChineseAvailable()) {
 					IG::TextDisabled("Chinese needs [Fonts] EnableChinese = true and a CJK font (CN.ttf) in Data\\SKSE\\Plugins\\Fonts of the SKSE Menu Framework.");
 				}
-				if (IG::Button("Reload the language files")) {
+				if (IG::Button(I18n::TrId("Reload the language files"))) {
 					I18n::ReloadFile();
 					RE::SendHUDMessage::ShowHUDMessage(I18n::T("Translation file reloaded.", "语言文件已重新加载。"), nullptr, false);
 				}
 				IG::SameLine();
-				IG::TextDisabled("Translation file: %s", I18n::FileStatus());
+				IG::TextDisabled(I18n::Tr("Translation file: %s"), I18n::FileStatus());
 				IG::TextDisabled("Data\\interface\\translations\\SkyrimOutfitSystemNG_<language>.txt - one file per language.");
-				IG::TextDisabled("Menu titles update after a game restart (the framework caches them).");
+				IG::TextDisabled(I18n::Tr("Menu titles update after a game restart (the framework caches them)."));
 			}
 
-			IG::SeparatorText("Mod compatibility");
+			IG::SeparatorText(I18n::Tr("Mod compatibility"));
 			const auto& compat = Compat::GetStatus();
 			bool andEnabled = settings.compatAdvancedNudityDetection;
-			if (IG::Checkbox("Advanced Nudity Detection sees the outfit", &andEnabled)) {
+			if (IG::Checkbox(I18n::TrId("Advanced Nudity Detection sees the outfit"), &andEnabled)) {
 				settings.compatAdvancedNudityDetection = andEnabled;
 				Settings::Get().Save();
 			}
 			if (!compat.andDetected) {
-				IG::TextDisabled("Advanced Nudity Detection: not installed.");
+				IG::TextDisabled(I18n::Tr("Advanced Nudity Detection: not installed."));
 			} else if (!compat.andHooked) {
-				IG::TextDisabled("Advanced Nudity Detection %s: its nudity factions were not found, detection keeps the vanilla behaviour.",
+				IG::TextDisabled(I18n::Tr("Advanced Nudity Detection %s: its nudity factions were not found, detection keeps the vanilla behaviour."),
 					compat.andVersion.empty() ? "" : compat.andVersion.c_str());
 			} else {
-				IG::TextDisabled("Advanced Nudity Detection %s: nudity, topless and bottomless follow the outfit.",
+				IG::TextDisabled(I18n::Tr("Advanced Nudity Detection %s: nudity, topless and bottomless follow the outfit."),
 					compat.andVersion.empty() ? "" : compat.andVersion.c_str());
 			}
-			IG::TextDisabled("An empty outfit counts as bare skin.");
+			IG::TextDisabled(I18n::Tr("An empty outfit counts as bare skin."));
 			bool padEnabled = settings.compatProceduralArmorDamage;
-			if (IG::Checkbox("Procedural Armor Damage tears the outfit", &padEnabled)) {
+			if (IG::Checkbox(I18n::TrId("Procedural Armor Damage tears the outfit"), &padEnabled)) {
 				settings.compatProceduralArmorDamage = padEnabled;
 				Settings::Get().Save();
 			}
 			if (!compat.padDetected) {
-				IG::TextDisabled("Procedural Armor Damage: not installed.");
+				IG::TextDisabled(I18n::Tr("Procedural Armor Damage: not installed."));
 			} else {
-				IG::TextDisabled("Procedural Armor Damage %s: damage is stored on the real armour worn in the same slot.",
+				IG::TextDisabled(I18n::Tr("Procedural Armor Damage %s: damage is stored on the real armour worn in the same slot."),
 					compat.padVersion.empty() ? "" : compat.padVersion.c_str());
 			}
-			IG::TextDisabled("Pieces shown over a slot with no real armour underneath cannot be damaged.");
+			IG::TextDisabled(I18n::Tr("Pieces shown over a slot with no real armour underneath cannot be damaged."));
 			bool smpReset = settings.autoResetSmp;
-			if (IG::Checkbox("Reset SMP physics when the outfit changes", &smpReset)) {
+			if (IG::Checkbox(I18n::TrId("Reset SMP physics when the outfit changes"), &smpReset)) {
 				settings.autoResetSmp = smpReset;
 				Settings::Get().Save();
 			}
-			IG::TextDisabled("Only the actor whose outfit changed is reset.");
+			IG::TextDisabled(I18n::Tr("Only the actor whose outfit changed is reset."));
 			if (!SMP::IsAvailable()) {
-				IG::TextDisabled("Faster HDT-SMP (DynamicHDT): not detected; this switch has no effect.");
+				IG::TextDisabled(I18n::Tr("Faster HDT-SMP (DynamicHDT): not detected; this switch has no effect."));
 			} else {
-				IG::TextDisabled("Faster HDT-SMP (DynamicHDT): detected.");
+				IG::TextDisabled(I18n::Tr("Faster HDT-SMP (DynamicHDT): detected."));
 			}
 			bool sceneOutfits = settings.sceneOutfitSwitching;
-			if (IG::Checkbox("Wear <current outfit>_sex during SexLab / OStim scenes", &sceneOutfits)) {
+			if (IG::Checkbox(I18n::TrId("Wear <current outfit>_sex during SexLab / OStim scenes"), &sceneOutfits)) {
 				settings.sceneOutfitSwitching = sceneOutfits;
 				Settings::Get().Save();
 			}
-			IG::TextDisabled("If the current outfit already ends with _sex it is kept unchanged.");
-			IG::TextDisabled("The previous outfit is restored when the scene ends.");
-			if (IG::Button("Log slot report")) {
+			IG::TextDisabled(I18n::Tr("If the current outfit already ends with _sex it is kept unchanged."));
+			IG::TextDisabled(I18n::Tr("The previous outfit is restored when the scene ends."));
+			if (IG::Button(I18n::TrId("Log slot report"))) {
 				Compat::Pad::Diagnose(RE::PlayerCharacter::GetSingleton());
 				RE::SendHUDMessage::ShowHUDMessage(I18n::T("Slot report written to SkyrimOutfitSystemNG.log", "槽位报告已写入 SkyrimOutfitSystemNG.log"), nullptr, false);
 			}
 			IG::SameLine();
-			IG::TextDisabled("Lists every slot: what the outfit shows, what is really worn.");
+			IG::TextDisabled(I18n::Tr("Lists every slot: what the outfit shows, what is really worn."));
 
-			IG::SeparatorText("Hotkeys");
+			IG::SeparatorText(I18n::Tr("Hotkeys"));
 			static char        hotkeyBuffer[64]{};
 			static char        quickHotkeyBuffer[64]{};
 			static std::string hotkeyShown;
@@ -1814,7 +1814,7 @@ namespace SOS::Menu
 				SaveSettingsThrottled();
 			}
 			IG::SameLine();
-			IG::TextDisabled("random outfit - example: ctrl+shift+O, alt+F5");
+			IG::TextDisabled(I18n::Tr("random outfit - example: ctrl+shift+O, alt+F5"));
 			IG::SetNextItemWidth(200.0f);
 			if (IG::InputTextWithHint("##quickhotkey", "ctrl+shift+L", quickHotkeyBuffer, sizeof(quickHotkeyBuffer))) {
 				settings.quickPickerHotkey = quickHotkeyBuffer;
@@ -1823,56 +1823,56 @@ namespace SOS::Menu
 				SaveSettingsThrottled();
 			}
 			IG::SameLine();
-			IG::TextDisabled("quick picker window");
+			IG::TextDisabled(I18n::Tr("quick picker window"));
 
-			IG::SeparatorText("Random outfit");
-			if (IG::Checkbox("Favourites only", &settings.randomFavoritesOnly)) {
+			IG::SeparatorText(I18n::Tr("Random outfit"));
+			if (IG::Checkbox(I18n::TrId("Favourites only"), &settings.randomFavoritesOnly)) {
 				Settings::Get().Save();
 			}
-			if (IG::Checkbox("Never pick the outfit that is already worn", &settings.randomExcludeCurrent)) {
+			if (IG::Checkbox(I18n::TrId("Never pick the outfit that is already worn"), &settings.randomExcludeCurrent)) {
 				Settings::Get().Save();
 			}
 			bool quickslotRandom = settings.quickslotRandom;
-			if (IG::Checkbox("The \"Change Outfit\" power rolls a random outfit", &quickslotRandom)) {
+			if (IG::Checkbox(I18n::TrId("The \"Change Outfit\" power rolls a random outfit"), &quickslotRandom)) {
 				settings.quickslotRandom = quickslotRandom;
 				Settings::Get().Save();
 			}
-			IG::TextDisabled("Off (default) opens the quick picker window instead.");
-			if (IG::Button("Roll now")) {
+			IG::TextDisabled(I18n::Tr("Off (default) opens the quick picker window instead."));
+			if (IG::Button(I18n::TrId("Roll now"))) {
 				const auto chosen = Features::PickRandomOutfit(RE::PlayerCharacter::GetSingleton(), settings.randomFavoritesOnly);
 				const auto message = chosen.empty() ? std::string(I18n::T("No outfits available.", "没有可用幻化。")) : (std::string(I18n::T("Outfit: ", "幻化：")) + chosen);
 				RE::SendHUDMessage::ShowHUDMessage(message.c_str(), nullptr, false);
 			}
 
-			IG::SeparatorText("Interface");
+			IG::SeparatorText(I18n::Tr("Interface"));
 			{
 				bool layoutChanged = false;
-				if (IG::SliderInt("List width", &settings.outfitListWidth, 240, 1200)) {
+				if (IG::SliderInt(I18n::TrId("List width"), &settings.outfitListWidth, 240, 1200)) {
 					settings.outfitListWidth = std::clamp(settings.outfitListWidth, 240, 1200);
 					layoutChanged = true;
 				}
-				if (IG::SliderInt("Outfit page size", &settings.outfitPageSize, 5, 500)) {
+				if (IG::SliderInt(I18n::TrId("Outfit page size"), &settings.outfitPageSize, 5, 500)) {
 					settings.outfitPageSize = std::clamp(settings.outfitPageSize, 5, 500);
 					g_filterSignature.clear();
 					layoutChanged = true;
 				}
-				if (IG::SliderInt("Quick picker page size", &settings.quickPickerPageSize, 5, 500)) {
+				if (IG::SliderInt(I18n::TrId("Quick picker page size"), &settings.quickPickerPageSize, 5, 500)) {
 					settings.quickPickerPageSize = std::clamp(settings.quickPickerPageSize, 5, 500);
 					layoutChanged = true;
 				}
 				if (layoutChanged) {
 					SaveSettingsThrottled();
 				}
-				IG::TextDisabled("List width and page sizes are stored in the ini and shared by the quick picker.");
+				IG::TextDisabled(I18n::Tr("List width and page sizes are stored in the ini and shared by the quick picker."));
 			}
 
-			IG::SeparatorText("Diagnostics");
+			IG::SeparatorText(I18n::Tr("Diagnostics"));
 			bool extraLogging = settings.extraLogging;
-			if (IG::Checkbox("Verbose logging (takes effect on the next start)", &extraLogging)) {
+			if (IG::Checkbox(I18n::TrId("Verbose logging (takes effect on the next start)"), &extraLogging)) {
 				settings.extraLogging = extraLogging;
 				Settings::Get().Save();
 			}
-			IG::TextDisabled("ImGui host: %s", ImGuiApi::HostName());
+			IG::TextDisabled(I18n::Tr("ImGui host: %s"), ImGuiApi::HostName());
 		}
 
 		void UpdateTextInputState()

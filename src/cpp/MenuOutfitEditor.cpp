@@ -367,9 +367,9 @@ namespace SOS::Menu::Editor
 			if (!g_pending) {
 				return;
 			}
-			IG::TextWrapped("%s uses a body slot that is already covered by this outfit. Replace the conflicting pieces?",
+			IG::TextWrapped(I18n::Tr("%s uses a body slot that is already covered by this outfit. Replace the conflicting pieces?"),
 				ArmorName(g_pending).c_str());
-			if (IG::Button("Replace the conflicting pieces")) {
+			if (IG::Button(I18n::TrId("Replace the conflicting pieces"))) {
 				auto  service = outfit_service_get_mut_singleton_ptr();
 				auto* outfit = service->inner().get_mut_outfit_ptr(g_pendingOutfit.c_str());
 				if (outfit) {
@@ -390,7 +390,7 @@ namespace SOS::Menu::Editor
 				g_pending = nullptr;
 			}
 			IG::SameLine();
-			if (IG::Button("Cancel")) {
+			if (IG::Button(I18n::TrId("Cancel"))) {
 				g_pending = nullptr;
 			}
 		}
@@ -426,12 +426,12 @@ namespace SOS::Menu::Editor
 
 		void RenderAddSection(const std::string& a_outfit)
 		{
-			IG::SeparatorText("Add armour");
+			IG::SeparatorText(I18n::Tr("Add armour"));
 
-			if (IG::CollapsingHeader("From the inventory")) {
+			if (IG::CollapsingHeader(I18n::TrId("From the inventory"))) {
 				const auto& carried = GetArmorList(false);
 				if (carried.armors.empty()) {
-					IG::TextDisabled("The player carries no armour.");
+					IG::TextDisabled(I18n::Tr("The player carries no armour."));
 				} else {
 					// BeginChild has to be paired with EndChild even when it returns
 					// false (collapsed/clipped). With the empty list the old code
@@ -450,10 +450,10 @@ namespace SOS::Menu::Editor
 				}
 			}
 
-			if (IG::CollapsingHeader("From the worn armour")) {
+			if (IG::CollapsingHeader(I18n::TrId("From the worn armour"))) {
 				const auto& worn = GetArmorList(true);
 				if (worn.armors.empty()) {
-					IG::TextDisabled("The player wears no armour.");
+					IG::TextDisabled(I18n::Tr("The player wears no armour."));
 				} else {
 					if (IG::BeginChild("##worn", ImVec2(0.0f, 150.0f), true)) {
 						for (std::size_t i = 0; i < worn.armors.size(); ++i) {
@@ -468,12 +468,12 @@ namespace SOS::Menu::Editor
 				}
 			}
 
-			if (IG::CollapsingHeader("By form ID")) {
-				IG::TextDisabled("Hexadecimal, for example 00012EB7.");
+			if (IG::CollapsingHeader(I18n::TrId("By form ID"))) {
+				IG::TextDisabled(I18n::Tr("Hexadecimal, for example 00012EB7."));
 				IG::SetNextItemWidth(160.0f);
 				IG::InputText("##formid", g_formId, sizeof(g_formId));
 				IG::SameLine();
-				if (IG::Button("Add")) {
+				if (IG::Button(I18n::TrId("Add"))) {
 					const auto value = std::strtoul(g_formId, nullptr, 16);
 					if (value == 0) {
 						SetStatus(I18n::T("Enter a form ID such as 00012EB7.", "请输入 FormID，例如 00012EB7。"));
@@ -491,15 +491,15 @@ namespace SOS::Menu::Editor
 				}
 			}
 
-			if (IG::CollapsingHeader("From the full armour list")) {
+			if (IG::CollapsingHeader(I18n::TrId("From the full armour list"))) {
 				IG::SetNextItemWidth(280.0f);
 				IG::InputTextWithHint("##armorsearch", "Filter by armour name or plugin...", g_search, sizeof(g_search));
 				IG::SameLine();
-				if (IG::Checkbox("Playable only", &g_playableOnly)) {
+				if (IG::Checkbox(I18n::TrId("Playable only"), &g_playableOnly)) {
 					g_searchSignature.clear();
 				}
 				RefreshSearch();
-				IG::TextDisabled("%zu pieces match.", g_results.size());
+				IG::TextDisabled(I18n::Tr("%zu pieces match."), g_results.size());
 				if (IG::BeginChild("##armorresults", ImVec2(0.0f, 220.0f), true)) {
 					constexpr std::size_t kMaxRows = 400;
 					const auto            count = std::min(g_results.size(), kMaxRows);
@@ -511,7 +511,7 @@ namespace SOS::Menu::Editor
 						IG::PopID();
 					}
 					if (g_results.size() > count) {
-						IG::TextDisabled("Showing the first %zu of %zu pieces - refine the filter.", count, g_results.size());
+						IG::TextDisabled(I18n::Tr("Showing the first %zu of %zu pieces - refine the filter."), count, g_results.size());
 					}
 				}
 				IG::EndChild();
@@ -663,7 +663,7 @@ namespace SOS::Menu::Editor
 
 	void RenderSlotList(const std::string& a_outfit, const std::vector<const RE::TESObjectARMO*>& a_armors)
 	{
-		IG::SeparatorText("Body slots");
+		IG::SeparatorText(I18n::Tr("Body slots"));
 		if (!g_pendingRemoveOutfit.empty() && g_pendingRemoveOutfit != a_outfit) {
 			g_pendingRemove = nullptr;
 			g_pendingRemoveSlot = 0;
@@ -682,7 +682,7 @@ namespace SOS::Menu::Editor
 			}
 		}
 		if (rows.empty()) {
-			IG::TextDisabled("This outfit is empty.");
+			IG::TextDisabled(I18n::Tr("This outfit is empty."));
 			return;
 		}
 		if (IG::BeginChild("##slotlist", ImVec2(0.0f, 180.0f), true, ImGuiWindowFlags_HorizontalScrollbar)) {
@@ -692,7 +692,7 @@ namespace SOS::Menu::Editor
 				const std::string rowText = SlotLabelFor(rows[i].first) + ": " + ArmorName(rows[i].second);
 				const bool confirming = g_pendingRemove == rows[i].second && g_pendingRemoveSlot == rows[i].first;
 				if (confirming) {
-					IG::TextDisabled("Remove \"%s\" from the outfit?", ArmorName(rows[i].second).c_str());
+					IG::TextDisabled(I18n::Tr("Remove \"%s\" from the outfit?"), ArmorName(rows[i].second).c_str());
 				}
 				IG::Text("%s", rowText.c_str());
 				// Keep the buttons inside the visible child even when the armour name is long.
@@ -702,7 +702,7 @@ namespace SOS::Menu::Editor
 				const float buttonX = rowWidth > buttonWidth ? std::max(0.0f, std::min(wantedX, rowWidth - buttonWidth - 8.0f)) : 0.0f;
 				IG::SameLine(buttonX);
 				if (confirming) {
-					if (IG::SmallButton("Remove")) {
+					if (IG::SmallButton(I18n::TrId("Remove"))) {
 						const auto* armor = rows[i].second;
 						const std::string outfit = a_outfit;
 						g_pendingRemove = nullptr;
@@ -712,12 +712,12 @@ namespace SOS::Menu::Editor
 						removedThisFrame = true;
 					}
 					IG::SameLine();
-					if (IG::SmallButton("Cancel")) {
+					if (IG::SmallButton(I18n::TrId("Cancel"))) {
 						g_pendingRemove = nullptr;
 						g_pendingRemoveSlot = 0;
 						g_pendingRemoveOutfit.clear();
 					}
-				} else if (IG::SmallButton("Remove")) {
+				} else if (IG::SmallButton(I18n::TrId("Remove"))) {
 					g_pendingRemove = rows[i].second;
 					g_pendingRemoveSlot = rows[i].first;
 					g_pendingRemoveOutfit = a_outfit;
@@ -733,11 +733,11 @@ namespace SOS::Menu::Editor
 
 	void RenderPolicies(const std::string& a_outfit, const OutfitView& a_view)
 	{
-		IG::SeparatorText("Slot policies");
+		IG::SeparatorText(I18n::Tr("Slot policies"));
 
 		const std::string base = a_view.blanket;
 		IG::SetNextItemWidth(520.0f);
-		if (IG::BeginCombo("Base policy", PolicyLabelFor(base))) {
+		if (IG::BeginCombo(I18n::TrId("Base policy"), PolicyLabelFor(base))) {
 			for (const auto& label : kPolicyLabels) {
 				const bool selected = base == label.code;
 				if (IG::Selectable(PolicyLabelFor(label.code), selected)) {
@@ -755,10 +755,10 @@ namespace SOS::Menu::Editor
 			}
 			IG::EndCombo();
 		}
-		IG::TextDisabled("Policies decide what is drawn when the outfit and the real equipment disagree.");
+		IG::TextDisabled(I18n::Tr("Policies decide what is drawn when the outfit and the real equipment disagree."));
 
 		bool showSlotPolicies = g_slotPolicyOpen.find(a_outfit) != g_slotPolicyOpen.end();
-		if (IG::Checkbox("Per-slot policy editor", &showSlotPolicies)) {
+		if (IG::Checkbox(I18n::TrId("Per-slot policy editor"), &showSlotPolicies)) {
 			// Remember the choice per outfit: the menu shows one outfit at a
 			// time, and switching to another outfit must not inherit it.
 			if (showSlotPolicies) {
@@ -808,7 +808,7 @@ namespace SOS::Menu::Editor
 			IG::EndChild();
 		}
 
-		if (IG::Button("Reset all policies to the defaults")) {
+		if (IG::Button(I18n::TrId("Reset all policies to the defaults"))) {
 			{
 				auto service = outfit_service_get_mut_singleton_ptr();
 				auto* outfit = service->inner().get_mut_outfit_ptr(a_outfit.c_str());
@@ -826,15 +826,15 @@ namespace SOS::Menu::Editor
 	{
 		OutfitView view;
 		if (!SnapshotOutfit(a_outfit, view)) {
-			IG::TextDisabled("That outfit no longer exists.");
+			IG::TextDisabled(I18n::Tr("That outfit no longer exists."));
 			return;
 		}
 
-		IG::Text("Editing: %s", view.name.c_str());
+		IG::Text(I18n::Tr("Editing: %s"), view.name.c_str());
 		IG::SameLine();
-		IG::TextDisabled("%zu pieces", view.armors.size());
+		IG::TextDisabled(I18n::Tr("%zu pieces"), view.armors.size());
 
-		if (IG::Button("Back to the list")) {
+		if (IG::Button(I18n::TrId("Back to the list"))) {
 			if (a_onClose) {
 				a_onClose();
 			}
@@ -846,15 +846,15 @@ namespace SOS::Menu::Editor
 			targetName = I18n::T("<not loaded>", "<未加载>");
 		}
 		IG::SameLine();
-		IG::TextDisabled("Target: %s", targetName);
-		if (IG::Button("Wear")) {
+		IG::TextDisabled(I18n::Tr("Target: %s"), targetName);
+		if (IG::Button(I18n::TrId("Wear"))) {
 			if (target) {
 				Features::AssignOutfit(target, a_outfit.c_str());
 				SetStatus(std::string(I18n::T("Outfit applied to ", "已为以下对象穿上幻化：")) + targetName + ".");
 			}
 		}
 		IG::SameLine();
-		if (IG::Button("Take off")) {
+		if (IG::Button(I18n::TrId("Take off"))) {
 			if (target) {
 				Features::AssignOutfit(target, "");
 				SetStatus(std::string(I18n::T("Outfit removed from ", "已为以下对象取消幻化：")) + targetName + ".");
@@ -862,7 +862,7 @@ namespace SOS::Menu::Editor
 		}
 		IG::SameLine();
 		bool favorite = view.favorite;
-		if (IG::Checkbox("Favourite", &favorite)) {
+		if (IG::Checkbox(I18n::TrId("Favourite"), &favorite)) {
 			{
 				auto service = outfit_service_get_mut_singleton_ptr();
 				service->inner().set_favorite(a_outfit.c_str(), favorite);

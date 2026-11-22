@@ -317,6 +317,68 @@ namespace SOS::I18n
 			{ "%zu slot armour record(s) in this plugin; click a piece to add it.", "该 ESP 共有 %zu 条槽位护甲记录；点一件即可加入。" },
 			{ "No piece of this plugin matches that search.", "该 ESP 里没有匹配的装备。" },
 			{ "[in the list] %s  %s", "[已加入] %s  %s" },
+			// 1.5.56: bulk delete, adding a single piece from a plugin, golden items
+			// and the ESP preview reasons were missing from the dictionary, so those
+			// screens stayed English in a Chinese interface.
+			{ "From a plugin (ESP)", "从 ESP 添加单个部件" },
+			{ "Choose a plugin, then click one of its pieces. One piece per body slot: a piece that collides with a slot this outfit already covers is marked and can only be added by replacing the other piece.", "先选一个 ESP，再点它的某件装备。一个槽位只能放一件：与这套幻化已有槽位冲突的装备会带标记，只能用替换的方式加入。" },
+			{ "(no plugin chosen)", "（未选择 ESP）" },
+			{ "%s  (%zu pieces, %zu wearable)", "%s （共 %zu 件，%zu 件可穿）" },
+			{ "Only free slots", "只显示槽位空闲的" },
+			{ "Showing the first %zu of %zu pieces - refine the search or tick 「only free slots」.", "只显示前 %zu 件（共 %zu 件），请细化搜索或勾选「只显示槽位空闲的」。" },
+			{ "[slot taken] ", "[槽位已占用] " },
+			{ "Bulk delete", "批量删除" },
+			{ "%zu preset(s) ticked", "已勾选 %zu 套幻化" },
+			{ "Tick this page", "本页全选" },
+			{ "Untick this page", "本页取消" },
+			{ "Tick every match", "全部筛选结果" },
+			{ "Untick all", "清空勾选" },
+			{ "Tick presets in the list, then confirm the delete.", "先在列表里勾选幻化，再确认删除。" },
+			{ "Delete the ticked presets", "删除已勾选的幻化" },
+			{ "Delete %zu preset(s)? This also removes them from every actor and state assignment.", "删除 %zu 套幻化？这也会把它们从所有角色与状态指派里移除。" },
+			{ "Yes, delete them", "确认删除" },
+			{ "Deleted %zu preset(s).", "已删除 %zu 套幻化。" },
+			{ "Select a plugin to preview its outfits. Uncertain matches are not created.", "选一个 ESP 预览它能生成的幻化。判断不出来的组合不会生成。" },
+			{ "Only ordinary clothing is taken: FX-only records, records with no readable name, and records with no model are left out.", "只收普通服装：只有 FX 槽、名称读不出来、没有模型的记录都会被排除。" },
+			{ "%s  (%zu piece(s), %zu skipped as not clothing)", "%s （%zu 件，%zu 件非服装已跳过）" },
+			{ "%s  (%zu piece(s))", "%s （%zu 件）" },
+			{ "%s: %zu proposed, %zu pieces pending, %zu non-clothing records filtered.", "%s：可生成 %zu 套，%zu 件待判断，过滤掉 %zu 条非服装记录。" },
+			{ "The preset limit was reached; some groups were left pending.", "已达幻化数量上限，有款式只剩部分收录。" },
+			{ "no shared style name", "没有同款式的名称前缀" },
+			{ "shares a slot with another piece", "与其他件占用同一槽位" },
+			{ "several pieces on one slot look the same", "同槽多件无法区分" },
+			{ "the variant marks do not line up", "同款各槽的差目标号对不上" },
+			{ "every piece covers the same slot", "所有件都占同一槽位" },
+			{ "not enough pieces for a full outfit", "凑不成成套件" },
+			{ "this style can never fill its slots", "这套的槽位凑不齐" },
+			{ "another option of a slot already filled", "同一槽位已有别的件，这件未采用" },
+			{ "too many variants on one slot", "同一槽位的变体过多" },
+			{ "preset limit reached", "已达幻化数量上限" },
+			{ "a preset with that name already exists", "已有同名幻化" },
+			{ "the name cannot be used for a preset", "名称不能用作幻化名" },
+			{ "not enough evidence", "证据不足" },
+			{ "%s (slots %s) [%08X]", "%s（槽位 %s）[%08X]" },
+			{ "in '%s' (%s)", "在「%s」（%s）中" },
+			{ " (already exists; will skip)", "（已存在，将跳过）" },
+			{ "Pending pieces (will not be created)", "待判断的件（不会生成）" },
+			{ "Create previewed outfits", "生成预览的幻化" },
+			{ "Created %zu outfits; skipped %zu. Existing presets were not replaced.", "已生成 %zu 套幻化，跳过 %zu 套；已存在的幻化没有被覆盖。" },
+			{ "Close outfit preview", "关闭幻化预览" },
+			{ "Outfit generation", "幻化生成" },
+			{ "Mark outfits generated from a plugin as favourites", "生成的幻化自动收藏" },
+			{ "Generated outfits take ordinary clothing only: FX-only records, records with no readable name, and records with no model are skipped. Golden items are not filtered.", "生成的幻化只收普通服装：只有 FX 槽、名称读不出来、没有模型的记录会被跳过；金件不做过滤。" },
+			{ "Added %s.", "已加入 %s。" },
+			{ "Golden items take any record: FX effects, unnamed records and records without a model are allowed here.", "金件接受任何记录：FX 效果、没有名称的记录、没有模型的记录都可以加进来。" },
+			{ "[not saved] The changes live in memory only; press Export to write OutfitSystemGoldenItems.json.", "[未保存] 改动只在内存里；按「导出」才会写入 OutfitSystemGoldenItems.json。" },
+			{ "Changes reach the file only when you press Export.", "只有按「导出」才会写进文件。" },
+			{ "Exported %zu piece(s) to %s", "已导出 %zu 件到 %s" },
+			{ "The golden item file could not be written; see the log.", "金件文件写入失败，详情见日志。" },
+			{ "Imported %zu piece(s) from %s", "已导入 %zu 件（来自 %s）" },
+			{ "The golden item file could not be read; see the log.", "金件文件读取失败，详情见日志。" },
+			{ "%zu piece(s) of %s added.", "已加入 %zu 件（来自 %s）。" },
+			{ "Removed the %s group.", "已移除 %s 分组。" },
+			{ "<not in this load order>", "<不在当前加载顺序里>" },
+			{ "Removed %s:%s.", "已移除 %s:%s。" },
 		};
 
 		constexpr std::string_view kFilePrefix = "SkyrimOutfitSystemNG_";
@@ -402,6 +464,15 @@ namespace SOS::I18n
 			}
 			while (!a_text.empty() && IsSpace(a_text.back())) {
 				a_text.remove_suffix(1);
+			}
+			return a_text;
+		}
+		// Keys may end with a space on purpose ("Outfit: " is followed by a name),
+		// so a key is only trimmed on the left.
+		std::string_view TrimLeft(std::string_view a_text)
+		{
+			while (!a_text.empty() && IsSpace(a_text.front())) {
+				a_text.remove_prefix(1);
 			}
 			return a_text;
 		}
@@ -535,10 +606,13 @@ namespace SOS::I18n
 				auto       line = a_text.substr(pos, end == std::string_view::npos ? std::string_view::npos : end - pos);
 				pos = (end == std::string_view::npos) ? a_text.size() + 1 : end + 1;
 
-				while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+				// Only the line ending is stripped: a key may end with a space
+				// ("Outfit: "), and trimming it away made such a key impossible to
+				// override from the file.
+				while (!line.empty() && line.back() == '\r') {
 					line.remove_suffix(1);
 				}
-				line = TrimView(line);
+				line = TrimLeft(line);
 				if (line.empty() || line.front() == '#' || line.front() == ';') {
 					continue;
 				}
@@ -546,17 +620,22 @@ namespace SOS::I18n
 				std::string_view value;
 				if (line.front() == '$') {
 					line.remove_prefix(1);
-					// A tab is the canonical separator; '=' is only a fallback so
-					// that keys may contain '=' themselves.
-					auto sep = line.find('\t');
-					if (sep == std::string_view::npos) {
-						sep = line.find('=');
+					// A tab is the canonical separator and both columns are taken
+					// verbatim, because Escape() writes them verbatim and a few keys and
+					// translations really do end with a space. '=' stays a fallback for
+					// hand written lines, where trimming around the sign is convenient.
+					const auto tab = line.find('\t');
+					if (tab != std::string_view::npos) {
+						key = line.substr(0, tab);
+						value = line.substr(tab + 1);
+					} else {
+						const auto eq = line.find('=');
+						if (eq == std::string_view::npos) {
+							continue;
+						}
+						key = TrimView(line.substr(0, eq));
+						value = TrimView(line.substr(eq + 1));
 					}
-					if (sep == std::string_view::npos) {
-						continue;
-					}
-					key = TrimView(line.substr(0, sep));
-					value = TrimView(line.substr(sep + 1));
 				} else {
 					const auto sep = line.find('=');
 					if (sep == std::string_view::npos) {

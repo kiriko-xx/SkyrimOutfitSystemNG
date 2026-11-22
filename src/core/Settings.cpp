@@ -109,6 +109,9 @@ namespace SOS
 		if (const char* hotkey = ini.GetValue("RandomOutfit", "QuickPickerHotkey", quickPickerHotkey.c_str())) {
 			quickPickerHotkey = hotkey;
 		}
+		if (const char* key = ini.GetValue("RandomOutfit", "QuickPickerKey", quickPickerKey.c_str())) {
+			quickPickerKey = key;
+		}
 
 		if (const char* value = ini.GetValue("UI", "Language", this->language.c_str())) {
 			this->language = value;
@@ -200,6 +203,7 @@ namespace SOS
 		ini.SetBoolValue("Compatibility", "MorphProviderFirst", morphProviderFirst);
 		ini.SetValue("RandomOutfit", "Hotkey", randomOutfitHotkey.c_str());
 		ini.SetValue("RandomOutfit", "QuickPickerHotkey", quickPickerHotkey.c_str());
+		ini.SetValue("RandomOutfit", "QuickPickerKey", quickPickerKey.c_str());
 		ini.SetBoolValue("RandomOutfit", "FavoritesOnly", randomFavoritesOnly);
 		ini.SetBoolValue("RandomOutfit", "ExcludeCurrent", randomExcludeCurrent);
 		ini.SetBoolValue("RandomOutfit", "QuickSlotRandom", quickslotRandom);

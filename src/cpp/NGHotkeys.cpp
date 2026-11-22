@@ -39,9 +39,18 @@ namespace SOS::Hotkeys
 
 		Combo      g_combo;
 		Combo      g_quickCombo;
+		// Plain key that mirrors the quickslot power (default Z).
+		Combo      g_quickslotCombo;
 		std::mutex g_comboMutex;
 		std::atomic<bool> g_latched{ false };
 		std::atomic<bool> g_quickLatched{ false };
+		std::atomic<bool> g_quickslotLatched{ false };
+		std::atomic<std::int64_t> g_lastQuickslotOpenMs{ 0 };
+
+		// The quickslot power only opens the window once its cast animation has
+		// finished, which feels like a cooldown on the Z key. The mirrored key
+		// skips that wait and is limited to one open every 0.5 s.
+		constexpr std::int64_t kQuickslotOpenCooldownMs = 500;
 		bool       g_installed{ false };
 		std::atomic<bool> g_textInput{ false };
 		std::atomic<std::int64_t> g_textInputStamp{ 0 };
@@ -58,6 +67,12 @@ namespace SOS::Hotkeys
 				std::chrono::steady_clock::now().time_since_epoch()).count();
 			const auto stamp = g_textInputStamp.load(std::memory_order_relaxed);
 			return stamp != 0 && now - stamp < 500;
+		}
+
+		std::int64_t NowMs()
+		{
+			return std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
 		}
 
 		std::string_view Trim(std::string_view a_text)
@@ -240,6 +255,33 @@ namespace SOS::Hotkeys
 			});
 		}
 
+		// The shipped esp grants the "Change Outfit" lesser power. Pressing its
+		// quickslot key only reaches the effect script after the cast animation of
+		// the power, so the window shows up with a delay that users read as a
+		// cooldown. This runs on the key press itself; the power then casts as
+		// usual and its OpenQuickPicker() call does nothing because the window is
+		// already open.
+		void FireQuickslotKey()
+		{
+			auto* tasks = SKSE::GetTaskInterface();
+			if (!tasks) {
+				return;
+			}
+			tasks->AddTask([]() {
+				const auto& settings = Settings::Get();
+				if (settings.quickslotRandom) {
+					// That mode rolls a random outfit through the power itself; do
+					// nothing here so nothing is rolled twice.
+					return;
+				}
+				if (Menu::QuickPickerVisible()) {
+					return;
+				}
+				Menu::ShowQuickPicker(true);
+				SKSE::log::debug("Hotkeys: quick picker opened by the quickslot key '{}'.", settings.quickPickerKey);
+			});
+		}
+
 		class InputSink : public RE::BSTEventSink<RE::InputEvent*>
 		{
 		public:
@@ -255,17 +297,23 @@ namespace SOS::Hotkeys
 
 				Combo combo;
 				Combo quickCombo;
+				Combo quickslotCombo;
 				{
 					std::lock_guard lock(g_comboMutex);
 					combo = g_combo;
 					quickCombo = g_quickCombo;
+					quickslotCombo = g_quickslotCombo;
 				}
-				if (!a_event || (!combo.valid && !quickCombo.valid)) {
+				if (!a_event || (!combo.valid && !quickCombo.valid && !quickslotCombo.valid)) {
 					return RE::BSEventNotifyControl::kContinue;
 				}
 				const bool inputBlocked = CachedTextInputActive();
 				auto* ui = RE::UI::GetSingleton();
 				const bool consoleOpen = ui && ui->IsMenuOpen(RE::Console::MENU_NAME);
+				// The mirrored quickslot key must not fire from a paused menu
+				// (inventory, map, container) where the power itself cannot be
+				// cast.
+				const bool menuOpen = ui && ui->GameIsPaused();
 
 				for (auto* event = *a_event; event; event = event->next) {
 					auto* button = event->AsButtonEvent();
@@ -294,6 +342,25 @@ namespace SOS::Hotkeys
 							g_quickLatched.store(true, std::memory_order_relaxed);
 							if (ModifiersHeld(quickCombo)) {
 								FireQuickPicker();
+							}
+						}
+					}
+
+					// Quickslot power key (default Z): opens the window on the key
+					// press instead of after the power's cast animation. The event is
+					// not consumed, so the quickslot itself still casts the power.
+					if (quickslotCombo.valid && code == quickslotCombo.key) {
+						if (button->IsUp()) {
+							g_quickslotLatched.store(false, std::memory_order_relaxed);
+						} else if (button->IsDown() && !g_quickslotLatched.load(std::memory_order_relaxed) && !inputBlocked && !consoleOpen && !menuOpen) {
+							g_quickslotLatched.store(true, std::memory_order_relaxed);
+							if (ModifiersHeld(quickslotCombo)) {
+								const auto now = NowMs();
+								const auto last = g_lastQuickslotOpenMs.load(std::memory_order_relaxed);
+								if (!Menu::QuickPickerVisible() && (last == 0 || now - last >= kQuickslotOpenCooldownMs)) {
+									g_lastQuickslotOpenMs.store(now, std::memory_order_relaxed);
+									FireQuickslotKey();
+								}
 							}
 						}
 					}
@@ -329,18 +396,27 @@ namespace SOS::Hotkeys
 		const auto& settings = Settings::Get();
 		const auto combo = Parse(settings.randomOutfitHotkey);
 		const auto quickCombo = Parse(settings.quickPickerHotkey);
+		const auto quickslotCombo = Parse(settings.quickPickerKey);
 		{
 			std::lock_guard lock(g_comboMutex);
 			g_combo = combo;
 			g_quickCombo = quickCombo;
+			g_quickslotCombo = quickslotCombo;
 		}
 		g_latched.store(false, std::memory_order_relaxed);
 		g_quickLatched.store(false, std::memory_order_relaxed);
+		g_quickslotLatched.store(false, std::memory_order_relaxed);
+		g_lastQuickslotOpenMs.store(0, std::memory_order_relaxed);
 		if (!combo.valid) {
 			SKSE::log::debug("Hotkeys: random outfit hotkey is disabled.");
 		}
 		if (!quickCombo.valid) {
 			SKSE::log::debug("Hotkeys: quick picker hotkey is disabled.");
+		}
+		if (quickslotCombo.valid) {
+			SKSE::log::info("Hotkeys: '{}' opens the quick picker right away (the quickslot power needs its cast animation).", settings.quickPickerKey);
+		} else {
+			SKSE::log::debug("Hotkeys: the quickslot quick picker key is disabled.");
 		}
 	}
 

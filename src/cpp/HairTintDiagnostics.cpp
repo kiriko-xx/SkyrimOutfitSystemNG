@@ -233,7 +233,7 @@ namespace SOS::HairTintDiagnostics
 		if (!g_haveSample || events || sample != g_lastSample) {
 			const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::steady_clock::now().time_since_epoch()).count();
-			SKSE::log::info("HairTintDiagnostics: seq={} steadyMs={} events={} (open=1 close=2 slider=4; coalesced, not completion) {}",
+			SKSE::log::debug("HairTintDiagnostics: seq={} steadyMs={} events={} (open=1 close=2 slider=4; coalesced, not completion) {}",
 				++g_sequence, milliseconds, events, sample);
 		}
 		g_lastSample = std::move(sample);

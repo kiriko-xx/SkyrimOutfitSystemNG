@@ -1,8 +1,8 @@
 # HANDOFF — SkyrimOutfitSystemNG（SOS-NG）交接文档
 
-生成时间：2026-11-21 19:10（Asia/Shanghai）
-交接原因：用户 m11335 原话「完全搞砸了，生成的预设简直是不按名称乱组，退回1.5.45，写下交接文档吧由下个agent接手」。
-本文件是给下一位 agent 的入口：先读第 0、3、5、6 节，再动手。
+生成时间：2026-11-22 11:20（Asia/Shanghai），对应版本 **1.5.56**（已并入 `main`，tag `v1.5.56`）。
+上一版交接写于 2026-11-21 19:10（1.5.45 回退那一刻）；本版把 ESP 生成算法定稿、1.5.54–1.5.56 的改动、i18n 全量落地与发布收尾一并写清。
+本文件是给下一位 agent 的入口：先读第 0、3、4 节，再动手。
 
 ---
 
@@ -11,131 +11,118 @@
 | 项 | 值 |
 | --- | --- |
 | 工程 | `D:/Skyrim-dev/src/SkyrimOutfitSystemSE-NG`（git 仓库） |
-| 当前分支 | `feature/slot-policy-esp-outfits-golden` |
-| 当前 HEAD | `591e437` = tag **v1.5.45**（已按用户要求退回） |
-| 发布线 main | `fad3e64` = tag **v1.5.34**（用户唯一验收过的发布版，场景套装切换） |
-| 产物 | `dist/SKSE/Plugins/OutfitSystemNG.dll` 2,074,112 B / sha256 `075e211e59f1b6ad87b949eb8747bdcfeff73a231cf900ecf089625f34d4928f` / FileVersion 1.5.45.0 |
-| dist | 31 文件 / 3,093,035 B，`dist/SHA256SUMS.txt` 30 条全通过 |
-| 成品包 | `SkyrimOutfitSystemNG-1.5.45.zip` 1,341,328 B / sha256 `5c699ce05b6cbb4d3e5c99a83da5453b02ded651b38e248e78a41bbf85d782de` |
-| MO2 测试包 | `SkyrimOutfitSystemNG-1.5.45-test.zip` 932,019 B / sha256 `0bed4f3ecb18f83451386cc664f7d883aa500e2430cff7bf16682c532e805f11`（2 条目：DLL + 说明） |
-| 1.5.46 | **已废弃**：tag `v1.5.46` = `c7202b4`，另加语义 tag `abandoned/esp-outfits-trie-1.5.46`；其代码「按名字分组」被用户否掉，不要沿用 |
-| 本机环境 | **没有 Skyrim**（`D:/Games` 不存在），所有游戏内行为都靠用户实机日志验证；日志在 `D:/Skyrim-dev/bug/` |
+| 发布线 | `main` = **v1.5.56**（本次一次性收尾 1.5.47–1.5.56 全部测试分支）；上一个发布 tag 是 `v1.5.34` |
+| 产物 DLL | `dist/SKSE/Plugins/OutfitSystemNG.dll` 2,207,232 B / sha256 `42dcf428d3035e18852be3ba409f59f1980319e5d5fff7e14767b5501c4c2a47` / FileVersion 1.5.56.0 |
+| dist | 31 文件 / 3,264,062 B，`dist/SHA256SUMS.txt` 30 条逐条通过 |
+| 成品包 | `SkyrimOutfitSystemNG-1.5.56.zip` 1,413,907 B / sha256 `82203e35ebbb35c14ca9f23e09618ed58c189fd2323bc21dedfc82486f24194c`（31 条目、0 反斜杠条目名、解包逐文件哈希与 dist 全等） |
+| 用户验收状态 | 1.5.55 由用户 m01923 首句确认「实测可通过」；1.5.56 的 Z 键 / 日志 / i18n 三项**尚未实机验证**，判据见第 4 节末 |
+| 本机环境 | **没有 Skyrim**（`D:/Games` 不存在），游戏内行为只能靠用户实机日志验证；日志在 `D:/Skyrim-dev/bug/` |
 
 ---
 
 ## 1. 这个项目是什么
 
-- 把上游 Skyrim Outfit System（原仓库 `D:/Skyrim-dev/src/SkyrimOutfitSystemSE`）迁移到 **CommonLibSSE-NG**，单个 DLL 同时支持 SE（1.5.97）与 AE（1.6.x）。
-- 磁盘文件名 `OutfitSystemNG.dll`，但插件内部名 / 日志名 `SkyrimOutfitSystemNG.log` / 翻译文件前缀 / INI 标识**一律不变**；**旧名 `SkyrimOutfitSystemNG.dll` 必须从 Data 删除**，两个同时在会双加载。
+- 把上游 Skyrim Outfit System（原仓库 `D:/Skyrim-dev/src/SkyrimOutfitSystemSE`）迁移到 **CommonLibSSE-NG**，单个 DLL 同时支持 SE（1.5.97）与 AE（1.6.1170+）。
+- 磁盘文件名 `OutfitSystemNG.dll`，但插件内部名 / 日志名 `SkyrimOutfitSystemNG.log` / 翻译文件前缀 / INI 标识**一律不变**；旧名 `SkyrimOutfitSystemNG.dll` 不许出现在包里。
 - 核心机制：用 SKSE 注入钩子，在引擎蒙皮流程里把「幻化套装」的护甲件当作视觉克隆贴到角色身上，真装备的可见性由另一个钩子隐藏。
-- 用户是中文母语、非专业 modder 的测试者会发日志；用户本人会主动改 ini、连续切换预设做压力测试。
+- 用户是中文母语、偏实操的测试者，会发日志、会手改 ini、会连续切换预设做压力测试。
 
 ### 目录职责
 
 | 路径 | 内容 |
 | --- | --- |
-| `src/cpp/hooking/` | `Hooks.cpp`（注入壳与站点安装）、`HookSupport.cpp`（地址库 + E8 扫描/自定位）、`Patches.cpp`（贴件、ShouldOverrideSkinning、槽位状态） |
-| `src/cpp/MorphRefresh.cpp` | 实时形变（BodyMorphs / .tri 跟随）全部逻辑，约 100 KB，最复杂的文件 |
-| `src/cpp/MenuUI.cpp` | SMF 菜单全部页面（幻化 / 金件 / 设置），约 87 KB |
+| `src/cpp/hooking/` | `Hooks.cpp`（注入壳与站点安装）、`HookSupport.cpp`（地址库 + E8 扫描/自定位）、`Patches.cpp`（贴件、ShouldOverrideSkinning、藏真甲） |
+| `src/cpp/MorphRefresh.cpp` | 实时形变（BodyMorphs / .tri 跟随），约 100 KB，最复杂的文件 |
+| `src/cpp/MenuUI.cpp` | SMF 菜单（幻化 / 金件 / 设置 / 快速选择窗口），约 100 KB；1.5.55 加了批量删除 |
+| `src/cpp/MenuOutfitEditor.cpp` | 套装编辑器：逐槽策略、添加单件、1.5.55 新增「从 ESP 添加单个部件」 |
+| `src/cpp/NGHotkeys.cpp` | 键盘热键（随机换装 / 快速选择 / 1.5.56 的 Z 键即时开窗 + 0.5 s 限流） |
+| `src/cpp/I18n.cpp` | 内置词典 `kDictionary`（1.5.56 起 **341 条**）+ 翻译文件解析 / 写模板 |
 | `src/cpp/SceneOutfits.cpp` | OStim / SexLab 场景 `_sex` 套装自动切换（1.5.34 起） |
-| `src/cpp/AutoSwitch.cpp` | 按地点/状态自动切换（1.5.29–1.5.34 一行未改，可作为「切换怎么写」的参考实现） |
-| `src/core/` | `OutfitService`（套装存储）、`PluginScan`（插件/护甲索引）、`EspOutfits`（从 ESP 生成套装，**本次出问题的模块**）、`GoldenItems`（金件 JSON 库）、`LegacySave`（存档兼容）、`Policy`（槽位策略） |
-| `docs/` | 少量内部审计文档（`RACEMENU_V4_AUDIT.md` 是 DLL 改名的依据） |
-| `dist/docs/` | 发给用户的 10 篇正式文档：ARCHITECTURE / BUILD / CHANGELOG / DELIVERY / HOOKS / I18N / MCM_PARITY / PAPYRUS_API / TESTING / THIRD_PARTY。**改动前必须先读，用户明确要求过** |
-| `tests/*.ps1` | 23 个守卫脚本（源码字面量/结构断言，不做游戏内测试） |
-| `bug/` | 用户发来的日志（崩溃 CrashLogger、SOS 日志、skee64、skse64、SLIF、PAD、OBody） |
+| `src/core/` | `OutfitService`（套装存储）、`PluginScan`（插件/护甲索引）、`EspOutfits` + `EspOutfitMatch.h`（从 ESP 生成幻化）、`EspOutfitNames.h`（名称键与预设命名）、`SlotRules.h`（一槽一件的纯逻辑规则）、`GoldenItems`、`Settings` |
+| `src/papyrus/` | 7 个 .psc（编译产物在 `dist/Scripts`，Papyrus API 见 `dist/docs/PAPYRUS_API.md`） |
+| `dist/` | 发给用户的 31 个文件；`dist/docs/` 是 10 篇正式文档（ARCHITECTURE / BUILD / CHANGELOG / DELIVERY / HOOKS / I18N / MCM_PARITY / PAPYRUS_API / TESTING / THIRD_PARTY） |
+| `tests/` | 守卫脚本（源码字面量 / 结构断言）+ `tests/esp_outfits_match.cpp` 与 `tests/slot_rules.cpp`（纯逻辑单测，用 cl 编） |
+| `bug/` | 用户发来的日志（SOS / CrashLogger / skee64 / skse64 / SLIF / PAD / OBody） |
 
 ---
 
 ## 2. 版本台账（回退靠 git tag，不要靠改代码猜）
 
-| tag | commit | 内容 | 状态 |
-| --- | --- | --- | --- |
-| `rollback-1.5.17` | `4b2339a` | 用户实测「全功能正常，只有 BodyMorph 实时形变不跟随」的黄金基线 | 可回退点 |
-| `v1.5.22-archive` | `3c0b118` | 1.5.20–1.5.22 钩子校验过强导致幻化失效的实验线 | 归档 |
-| `v1.5.23` – `v1.5.29` | 见 `git log` | 恢复贴件站点、ActorWeightModel 契约、禁清槽、.tri 贴 BODYTRI、残留克隆窄清 | 历史 |
-| `v1.5.30` – `v1.5.33` | — | 场景套装「补跑 pass / 重建 3D」路线，被用户连续否决 | 历史，勿复用 |
-| `v1.5.34` | `fad3e64` | 场景事件一次 AddTask 交接 —— **用户 m08008 验收通过**；= main 当前发布版 | 已验收 |
-| `abandoned/menu-morph-live-1.5.38` | `58c7199` | 1.5.35–1.5.38 实时形变分支（SAM 拖滑条跟随 + OBody 连切 26 次不崩，但 SLIF 清除膨胀时零采样），用户当测试分支废弃 | 封存，可复用点见第 11 节 |
-| `v1.5.39` | `fbcba9b` | 菜单三件 + 服装过滤 | 作废（ESP 列表空 + 金件页闪退） |
-| `v1.5.40` – `v1.5.44` | — | 修 1.5.39 两处回归、启动闪退（自死锁）、删除套装 CTD（size_t 下溢）、金件页三处、组行 ImGui id | 历史，前两项已由用户确认修好 |
-| `v1.5.45` | `591e437` | 金件「按 ESP 添加单件」两级列表 + ESP 生成套装「按服装名分组」 | **当前**；金件部分正常，**分组部分有已知风险（见第 5 节）** |
-| `v1.5.46` / `abandoned/esp-outfits-trie-1.5.46` | `c7202b4` | 分组改为 Trie + 字符级公共前缀 + 槽位约束组合 | **用户否决：生成的预设乱组** |
+| tag / 版本 | 内容 | 状态 |
+| --- | --- | --- |
+| `rollback-1.5.17`、`v1.5.22`–`v1.5.33` | 钩子站点、ActorWeightModel 契约、禁清槽、.tri 贴 BODYTRI、残留克隆窄清、场景套装（1.5.30–1.5.33 的「补跑 pass / 重建 3D」路线被用户连续否决，勿复用） | 历史 |
+| `v1.5.34` | 场景事件一次 AddTask 交接，用户 m08008 验收 | 已验收（上一个发布线） |
+| `abandoned/menu-morph-live-1.5.38` | 1.5.35–1.5.38 实时形变分支，用户要求废弃 | 归档 |
+| `v1.5.39`–`v1.5.45` | 菜单三件 + 金件页 + ESP 生成（1.5.45 的分组仍是启发式，被用户判「乱组」） | 历史 |
+| `v1.5.46` / `abandoned/esp-outfits-trie-1.5.46` | Trie + 字符级公共前缀 | 反面参考，用户否决 |
+| 1.5.47 – 1.5.53 | 开发线在 `test/esp-outfit-*` 分支链上：预览-确认、宽容分桶、占齐槽位、随机补位、待判断并入、全库离线复算、同名副本崩溃修复 | 已被 1.5.54 取代 |
+| `v1.5.54` | 标签组整装优先（不再把一套拆成单件）、单槽不截断、96 上限部分收录 | **用户 m01585 验收：「ESP自动生成套装算法保持目前这样吧，可用。」算法定稿** |
+| `v1.5.55` | 批量删除、编辑器「从 ESP 添加单个部件」、全路径一槽一件（SlotRules） | 用户 m01923 验收「实测可通过」 |
+| `v1.5.56` | Z 键即时开窗 0.5 s 限流、日志瘦身、i18n 341 条全量落地 + 翻译文件解析逐字 + 守卫脚本 | **当前发布版**，待实机 |
 
-`VERSIONS.md`（仓库根）是 zip 台账：每版的包大小 / sha256 / 源码 tag / 状态 / 回退与合并规则。
+`VERSIONS.md`（仓库根）是成品包台账：包大小 / sha256 / 源码 tag / 回退与合并规则 / 每次发布的固定顺序。
 
 ---
 
 ## 3. 用户核心要求（硬约束，违反会被退回重做）
 
-1. **迁移/升级类需求在原仓库上演进**，不要另起炉灶重写（用户 m03417 原话教训：v1 重写版最后整体废弃）。
-2. **单 DLL 支持 SE + AE**：换 CommonLibSSE-NG 基座，`REL::RelocationID(seID, aeID)` 单表，绝不搞两套平行钩子实现或两套 ID 表。
-3. **长任务自己拍板**：不要为可自主决定的技术方案反复征询；直接改代码 → 编译 → 出交付物 → 一次性中文汇报（用户 m04985 原话）。
-4. **已验收功能不许回归**：①1.5.25 起基础幻化（含空幻化）用户实测正常；②1.5.34 场景 `_sex` 套装切换用户验收；③1.5.41 启动不闪退、1.5.42 删除套装不崩、1.5.43/1.5.44 金件页可用。
-5. **第三方 mod 兼容只走公开契约**（Papyrus / 原生 API / 状态），不许 hook 别人的函数入口或内存结构；找不到就降级并记日志，绝不改第三方 ini。
-6. **幻化件必须跟随 RaceMenu BodyMorphs / OBody / SLIF**：不许露原版装备中间态，不许要求用户重穿或先关幻化；判据要覆盖所有写路径，走通用信号不靠单一 mod 的离散事件。
-7. **UI 口径**：术语用「幻化」不用「套装」；槽位文案的号 = 内部 BIPED_OBJECT 索引 + 30（头部=槽位 30）；长按要灵敏（首延迟 0.22 s / 间隔 0.030 s）；窗口几何必须存 ini 且改 ini 直接生效。
-8. **菜单编辑纪律**：带导出/导入按钮的编辑器**只有 Export 写盘**，内存改动要常显 `[not saved]` 提示；ImGui 控件 id 必须跨帧稳定；逐槽策略展开状态按套装独立且不进 JSON。
-9. **结论必须有证据**：不许把压缩摘要里的转述当用户原话（我犯过，用户 m10183 否认）；不许在没有帧级证据时写「防崩」逻辑。
+1. **迁移/升级类需求在原仓库上演进**，不要另起炉灶重写（m03417 的教训：v1 重写版最后整体废弃）。
+2. **单 DLL 支持 SE + AE**：CommonLibSSE-NG 基座 + `REL::RelocationID(seID, aeID)` 单表；绝不搞两套平行钩子实现或两套 ID 表。
+3. **长任务自己拍板**：不要为可自主决定的技术方案反复征询；直接改代码 → 编译 → 出交付物 → 一次性中文汇报（m04985）。
+4. **已验收功能不许回归**：基础幻化（含空幻化，1.5.25）、场景 `_sex` 套装切换（1.5.34）、启动不闪退（1.5.41）、删除套装不崩（1.5.42）、金件页可用（1.5.43/44）、ESP 生成算法（1.5.54）。
+5. **第三方 mod 兼容只走公开契约**（Papyrus / 原生 API / 状态），不许 hook 别人的函数入口或内存结构；找不到就降级并记日志，绝不改第三方 ini / esp。
+6. **幻化件必须跟随 RaceMenu BodyMorphs / OBody / SLIF**，不许露原版装备中间态，不许要求用户重穿或先关幻化。
+7. **UI 口径**：术语用「幻化」不用「套装」；槽位号 = 内部 BIPED_OBJECT 索引 + 30（头部 = 槽位 30）；长按要灵敏（首延迟 0.22 s / 间隔 0.030 s）；窗口几何必须存 ini 且手改 ini 也生效；窗口标题不许出现 Debug。
+8. **菜单编辑纪律**：带导出/导入按钮的编辑器**只有 Export 写盘**，内存改动常显 `[not saved]`；ImGui 控件 id 必须跨帧稳定；逐槽策略展开状态按套装独立且不进 JSON。
+9. **一槽一件**（1.5.55 起是全路径硬规则）：任何入口往一套幻化里放件，一个身体槽位只能有一件；掉件必须进日志。
+10. **结论必须有证据**：不许把压缩摘要里的转述当用户原话；不许在没有帧级证据时写「防崩」逻辑；不许声称已实机验证。
 
 ---
 
-## 4. 已验收 / 未验收
+## 4. 已验收 / 未验收 / 1.5.56 判据
 
 **已由用户亲口验收**
-- 基础幻化显示（含空幻化套装）：1.5.25。
-- 场景套装自动切换（OStim / SexLab `_sex`，不需要按 Tab/Z 弹窗）：1.5.34，m08008。
-- 启动不闪退：1.5.41 由 m10183 确认；删除第 2 页及以后套装不崩：1.5.42 由 m10387 首句确认。
-- 金件页可用（组行点得中、手动导出）：1.5.43/1.5.44 之后用户在 m10387 / m10869 语境下继续使用；1.5.45 的金件两级列表尚未单独确认。
+- 基础幻化显示（含空幻化）：1.5.25。
+- 场景套装自动切换（OStim / SexLab `_sex`）：1.5.34，m08008。
+- 启动不闪退：1.5.41；删除第 2 页及以后套装不崩：1.5.42。
+- 金件页可用：1.5.43 / 1.5.44；1.5.45 的「按 ESP 添加单件」两级列表随 1.5.55 一并在 m01923 语境下使用。
+- **ESP 自动生成幻化**：1.5.54 起定稿（m01585「保持目前这样吧，可用」）——不要再改算法。
+- 批量删除 / 从 ESP 添加单件 / 一槽一件：1.5.55，m01923「实测可通过」。
 
-**未验收 / 有已知问题**
-- **ESP 生成套装的分组正确性**（本次交接的主因）：1.5.45 的启发式与 1.5.46 的 Trie 都被用户判为「乱组」。
-- BodyMorphs 实时形变（拖滑条实时跟随）：1.5.38 曾验收（SAM 拖滑条 + OBody 连切 26 次不崩），但整套分支已被用户废弃；SLIF 清除膨胀场景被证明**零采样**（引擎不改装备时轮询根本不跑）。
-- SLIF 的骨骼节点缩放通道（kKeys / Fill Her Up 的节点 scale）与幻化克隆不连通，只做顶点级 .tri 才会跟随。
-- 场景中约 18 秒无蒙皮 pass（OStim 场景内 18 s 内没有任何 Custom 贴件）未修。
-- AE 1.6.x 从未实机验收（只有 SE 1.5.97 的日志）。
-- 第一人称单独配 `.tri` 未覆盖。
-- 两起 CTD 因果未实证：OStim 结束回普通幻化闪退（崩在 `SkyrimSE.exe+12BACD7` 渲染期）、另一位用户删除膨胀时崩在 `+0D419DD` 且栈上是 ImmersiveEquipmentDisplays —— 都按瞬态处理，**不许据此写防崩逻辑**。
+**未验证 / 已知缺口**
+- BodyMorphs 实时形变：1.5.38 曾验收，但分支被废弃；SLIF 清除膨胀时引擎不改装备 ⇒ 轮询零采样（未修）。
+- SLIF 骨骼节点缩放通道（kKeys）不与幻化克隆连通；只做顶点级 .tri 才会跟随。
+- OStim 场景内约 18 秒无蒙皮 pass；AE 1.6.x 从未实机验收；第一人称单独 .tri 未覆盖。
+- ESP 生成的三处口径缺口（暂不修，用户已认可现状）：本地化插件缺 .STRINGS 时 490 件读不到名字、1199 件没有 FULL、只认前缀式共同词（后缀式如「…戒指」不成族）；全库 87 个插件因此零预设。
+- 三个产品参数用户未拍板：kMaxVariants 32→64、2214 条同名同槽冗余记录是否在列表隐藏、是否支持后缀式共同词成族。
+
+**1.5.56 实机判据（等用户回报）**
+- 成功：①按 Z 立刻弹出快速选择（不再等施法动画），连按 0.5 s 内只开一次；②QuickSlotRandom = on 时按 Z 仍走随机换装、不开窗；③背包 / 地图 / 控制台打开时按 Z 不触发；④中文界面无英文残留（批量删除工具栏、ESP 预览、编辑器「从 ESP 添加单个部件」、设置页）；⑤未开 `[Debug] ExtraLogging` 时日志里每插件只剩一行 `ESP outfits: preview [...] pending=N (原因 计数…)`，没有逐件 `input [...]` / `candidate [...]` 行。
+- 失败：日志出现新报错、窗口开两次、暂停菜单里被触发、界面出现英文、某条译文回落到英文。
+---
+
+## 5. ESP 自动生成幻化的最终形态（1.5.54 定稿，别再动算法）
+
+代码：`src/core/EspOutfitMatch.h`（纯逻辑，可离线编译单测）、`src/core/EspOutfits.cpp`（读 PluginScan 的件、写预览/应用）、`src/core/EspOutfitNames.h`（ComparisonKey 与预设命名）。
+
+- **分组**：候选族 = 槽位互补 + 名称公共前缀（trie 节点，ascii 至少 3 字符、非 ascii 至少 2 字符）的组；打分先比 aligned（对齐件数）再比 placed，宽前缀族不能靠补位压过窄前缀族。
+- **分桶**：同槽多件按「同槽 LCP 差目标号」分类，互斥桶按 popcount 升序贪心占槽；撞槽只影响该件，不毁整族（1.5.53 起）。key 完全相同的记录视为可互换副本（Group::duplicates）——旧版在这里对空 shared 取 front()，曾让 12 个插件必崩（USSEP / Vigilant / Glenmoril / Unslaad / DAc0da 等）。
+- **占齐槽位**：coverage 取族内争到槽的桶的并集，每个变体必须覆盖全部槽位；空槽从同款候选里**随机抽签**补一件（每个空槽只补一件，不叉乘），随机流可按种子复现。
+- **待判断清零**（1.5.52）：剩下的件用「换装并入」——复制一份现成预设、换掉撞槽的那件；每件最多多一个预设，绝不指数膨胀。
+- **标签组整装优先**（1.5.54）：`[URGF]`、`[Rabbit404]` 这类方括号标签组先按整组试算一套，只有拆开能摆下更多件且预设更少（StyleBetter）时才拆。方向写反就会把 96 件拆成 33 个单件预设（1.5.53 事故）。
+- **上限**：只占单槽的款式（发型 / 鞋 / 眼镜包）上限 = 该族件数，其余 kMaxVariants = 32；预设总数 96 满了改为部分收录，其余记 `preset-limit`。
+- **原因自解释**：进不了预设的件在菜单里逐件显示原因（reasonLabel 13 条，1.5.56 已全部走 i18n）。
+- 复算工具（`D:/Skyrim-dev/build/` 下，不入库）：`esp_scan.mjs`（Node 解析 ESM/ESP/ESL → `build/esp-scan/scenario-all.txt`）、`esp_dbg`（单插件明细）、`esp_scan_run`（全库跑不变量）。**改 `src/core/*.h` 后必须重编这两个 exe**，否则拿旧算法得错误结论。
 
 ---
 
-## 5. 这次的失败：为什么 1.5.46 被否（必读）
+## 6. 1.5.55 / 1.5.56 新增机制速查
 
-用户原话（m11335）：「完全搞砸了，生成的预设简直是不按名称乱组，退回1.5.45」。
-
-两个版本分别做了什么：
-
-- **1.5.45**（`src/core/EspOutfits.cpp`，15,519 B）：断词 → 剔除 `[]`/`()` 标签词 → 取「≥2 件共享的最长前缀（≤4 词）」当组名 → 组内按槽位冲突拆变体 → 首变体补齐槽位。
-- **1.5.46**（同文件重写，27,098 B）：字符级前缀树 + 分支成组判定 + 槽内剥共同前缀取差分标识 + 按同标识跨槽组合；无法唯一匹配的整套不生成。
-
-两者共同的根问题（下一版必须先解决这个，而不是继续换算法）：
-
-1. **判据只有「名字像」，没有验证同槽候选真的互为替代**。两件都叫「上衣」的东西可能一件是给 A 体型、一件是另一个作者的另一套；名字相似 ≠ 同一套服装的替代件。
-2. **我们从未见过用户真实的 ESP 名字样本**。作者的命名风格（前置 tag、中英混排、`[]`/`()`、版本后缀、槽位缩写）决定了任何启发式的成败，而这些只能从用户数据里看到。全部设计都停在猜测上。
-3. **失败代价太高**：一次点击就往套装列表灌进几十个错套装，用户要手工删，体验直接崩溃。
-
----
-
-## 6. 建议的下一步（按优先级）
-
-### A. 先取证，不要先改算法
-拿一份真实数据再设计：让用户指定**一个出问题的 ESP 名**，然后我们用一份**只加日志的诊断构建**（不改行为，无版本号变更、不打 tag、只出测试 DLL）把该 ESP 里每件护甲的 `GetFormEditorID()` / `GetFullName()` / 槽位掩码（CK 槽号 = bit + 30）/ FormID 逐条打出来，请用户把那段日志发回。
-理由：分组判据是否正确只能对着真实名字验证；1.5.45 和 1.5.46 都是凭空设计的。
-
-### B. 判据改造方向：先槽位互补，再名字
-同一套服装的件通常**恰好覆盖互补槽位**（身体/双手/双脚/头/发/颈/耳/项链…），而替代款式**集中在同一个槽位**。所以更稳的顺序是：
-1. 先按「槽位互斥」做一次最大匹配，得到若干互不冲突的候选组合（这一步完全不用名字）；
-2. 只有必须多候选的槽（典型是身体/胸），才用名字差异去配对；
-3. 名字只作为**第二判据、且只在同槽内比较**（1.5.46 的 CommonEnd 方向对，但把它当主判据就错了）。
-
-### C. 保持「宁缺勿错」
-无法唯一确定时**只生成最保守的一级套装**（每槽取第一件），并在结果消息里写明 `N piece(s) were left out because they cannot be matched`，不要把猜出来的组合塞进列表。
-
-### D. 给用户可控性
-生成前给一个「预览 / 只生成不收藏（或只收藏不生成）」的开关；或生成到独立前缀（例如 `[ESP] `）便于一次识别与批量删除。这是降低乱组破坏的最便宜手段。
-
-### E. 之后再回到实时形变
-按 tag `abandoned/menu-morph-live-1.5.38` 取回（`git checkout abandoned/menu-morph-live-1.5.38 -- src`，**注意会覆盖 tag 之后的独立修复，先 `git log <tag>..HEAD -- src` 列清单**），优先补「采样锚点」这条：引擎不改装备时轮询必须仍能采样（1.5.38 的采样只在主线程身份成立时做，bake 只挂在 worn pass 的 `SkinTick()` 上，所以 SLIF 清除膨胀的那 94 秒一次采样都没有）。
+- **一槽一件**：`src/core/SlotRules.h`（BodySlotsOf / SlotsCollide / KeepOnePiecePerSlot，FX 位 bit31 不算身体槽）。全入口接线：OutfitService 的 create_outfit_preset / replace_outfit_armors / modify_outfit（insert_armor_slot_checked）、Papyrus AddArmorToOutfit、OutfitClipboard::Paste、OutfitSystem::OverwriteOutfit、编辑器 AddArmor、EspOutfits::ApplyPreview。掉件日志 `Slot rule: [..] preset=... dropped XXXXXXXX ...`。旧存档导入（LegacySave.cpp）故意不裁剪，保真优先。
+- **批量删除**：MenuUI.cpp 的 g_bulkMode / g_bulkSelected / g_bulkConfirm，工具栏实时显示「已勾选 N 套幻化」，删除走 `OutfitService::delete_outfits()`（一次 ++_revision，同步清角色与状态的指派）。删除后必须把 total/begin/end 归零再刷新，否则重演 1.5.42 的 size_t 下溢 length_error。
+- **从 ESP 添加单个部件**：MenuOutfitEditor.cpp 的 `##pieceplugins` / `##piecepieces` 子窗口，用 PluginScan::ArmorsOf 列件，已占槽标「[槽位已占用]」，可勾「只显示槽位空闲的」。
+- **Z 键即时开窗**（1.5.56）：`[RandomOutfit] QuickPickerKey`（默认 Z，留空禁用）。NGHotkeys.cpp 的 FireQuickslotKey() 在按键当帧调用 Menu::ShowQuickPicker(true)，kQuickslotOpenCooldownMs = 500 限流；**不消费事件**，power 照常施法，它自己的 OpenQuickPicker() 发现窗口已开就空转；QuickSlotRandom = on 时按键直接 return（避免抽两次）；暂停类菜单里不触发。所谓「CD」其实就是 lesser power 的施法动画，不是任何计时器（全 src 与 ESP 记录里都没有 cooldown 字段）。
+- **i18n**：词典 341 条；`dist/interface/translations/SkyrimOutfitSystemNG_{english,chinese}.txt` 各 341 行（UTF-16LE+BOM、CRLF）；`$英文<TAB>译文` 两侧**逐字取用**（12 个键以空格结尾、3 个以空格开头）；源码里不许再有裸 IG:: 可见字面量（控件类用 I18n::TrId，纯文本用 I18n::Tr）。
 
 ---
 
@@ -143,89 +130,76 @@
 
 ```
 cd D:/Skyrim-dev/src/SkyrimOutfitSystemSE-NG
-cmd /c buildtask_msbuild.bat          :: 只用这个；裸跑 cmake 会改写 CMakeCache 并失败（找不到 VS 实例）
+cmd /c D:/Skyrim-dev/build/build_1_5_56.bat      # MSBuild 直编；set 环境变量块必须照抄上一版（缺 SystemRoot/ProgramData/ALLUSERSPROFILE/PUBLIC/PATH/TEMP/TMP/USERPROFILE/APPDATA/VCPKG_ROOT 任一就 MSB4018 + FileTracker 崩）
 ```
-- 版本号两处：`src/cpp/include/version.h` 的 `_VERSION_PATCH`；`CMakeLists.txt` 的 `project(SkyrimOutfitSystemNG VERSION 1.5.xx)`。
-- 构建成功判据：`BUILD_EXIT=0`、0 error 0 warning、日志末尾 `Deploying OutfitSystemNG.dll to dist/SKSE/Plugins`；把 `build/build_task.log` 复制成 `build/build_1_5_XX.log` 留档（**声称留档就必须真复制**）。
-- 守卫测试：`C:/Program Files/PowerShell/7/pwsh.exe`（PS 5.1 会因 `String.Split(string)` 退化假失败），env 带 `PATHEXT=.COM;.EXE;.BAT;.CMD`。23 个脚本中 **2 个是既有失败、不是回归**：`hair_tint_read_only.ps1`（锚点随代码迁移消失）、`skse_listener_replay.ps1`（需要 `bug/skse64.log`）。
-- 打包：`build/pack_1_5_XX.ps1`（全量 31 条目）与 `build/pack_1_5_XX_test.ps1`（MO2 测试包：只有 DLL + 说明 txt）。两者都用 `[IO.Compression.ZipFile]` + 正斜杠 `CreateEntry` + 逐条回读校验，**禁止 `Compress-Archive`**（会写反斜杠条目名 + 外层目录）。派生新脚本只改版本号与 `$dst`，**不要全文 split/join 替换版本号**（会改坏说明文本里的历史版本号）。
-- `dist/SHA256SUMS.txt`：30 行、按 hash 字典序、不含自身、LF、逐条复核。两个 `.zip.sha256` 写「hash + 两空格 + 包名 + CRLF」。
-- `dist/` 文档八处同步：`DELIVERY.md`（头部版本段 + 新 §4.xx 小节 + §5 编译/版本资源/关键字符串行 + §6 首测条目 + §7 限制 + §8 日志速查 + §9 红线）、`CHANGELOG.md`、`TESTING.md`（§3.xx 用例）、`ARCHITECTURE.md`（§8.7 历史条目）、`BUILD.md`（头部状态段）、`dist/README.md`（头部 + 版本列表）、`VERSIONS.md`、仓库根 `README.md`（当前版本句）。
-- 发布顺序：version.h/CMake → 构建 → dist 文档定稿 → SHA256SUMS → 打包逐条回读 → 回填 VERSIONS → `git commit` + `git tag` → 核对 tag 指向。台账里**不要写自身 commit hash**（amend 会改哈希，形成死循环，只写 tag 名）。
-- `.gitattributes` 有 `dist/** -text`；`dist/`、`build/`、`*.dll` 被忽略，所以文档/SHA256SUMS/打包脚本/zip 要 `git add -f`。
-- 交付两种包：**全量包**（31 条目，用户正式安装用）与 **MO2 测试包**（2 条目，用户实机试新 DLL 用；按 m08008 协议：候选分支 + 不 tag + 不合 main + 不改 VERSIONS）。
-
+- 版本号两处：`src/cpp/include/version.h` 的 SKYRIMOUTFITSYSTEMSE_VERSION_PATCH；`CMakeLists.txt` 的 `project(SkyrimOutfitSystemNG VERSION 1.5.xx)`。
+- **改过 CMakeLists.txt 必须重配**：先 `call vcvars64.bat` 再 `cmake -S . -B build -DVCPKG_MANIFEST_INSTALL=OFF`（`build/cfg_1_5_56.bat`），否则报 could not find specified instance of Visual Studio；反之 manifest install 开着会因 vcpkg 内部异常卡死。
+- 构建成功判据：BUILD_EXIT=0、0 error 0 warning；产物 `build/Release/OutfitSystemNG.dll` 含字符串 SKSEPlugin_Load / _Version / _Query 与版本号字符串。
+- 守卫（pwsh 7，PS 5.1 会假失败）：`tests/i18n_translation_files.ps1`、`tests/golden_menu_guards.ps1`、`tests/esp_outfits_filter.ps1`、`tests/esp_outfits_names.ps1`（内含 esp_outfits_match 单测）、`tests/slot_uniqueness.ps1`、`tests/slot_rules.ps1`。
+- 打包：`D:/Skyrim-dev/build/pack_dist_1556.ps1`（全量 31 条目，ZipFileExtensions::CreateEntryFromFile + 正斜杠条目名）与 `pack_1_5_55_test.ps1`（MO2 测试包：只有 DLL + 说明 txt）。`.zip.sha256` 内容为「哈希 + 两空格 + 包名」。
+- `dist/SHA256SUMS.txt`：30 行、按路径排序、不含自身、LF、逐条复核。
+- 发布顺序（VERSIONS.md 固定要求）：version.h / CMakeLists → 构建 → 收尾 dist → 重算 SHA256SUMS.txt → 打包并把 zip 大小 / 哈希写进 VERSIONS.md → git add -A + commit + tag。**不要在 commit 消息或 VERSIONS.md 里写自身提交哈希**。
+- `.gitattributes` 有 `dist/** -text`；`.gitignore` 忽略 `dist/`、`build/`、`*.dll`、`*.pex`、`*.log`，所以文档 / SHA256SUMS / zip 要 `git add -f`。
+- 交付两种包：**全量包**（31 条目，正式安装）与 **MO2 测试包**（2 条目，试新 DLL）；测试包协议＝候选分支 + 不 tag + 不合 main + 不改 VERSIONS。
 ---
 
-## 8. 日志判据速查（用户发来的 `SkyrimOutfitSystemNG.log`）
+## 8. 日志判据速查（用户发来的 SkyrimOutfitSystemNG.log）
 
 | 想确认什么 | 关键行 |
 | --- | --- |
-| 钩子成对装好 | `Illusion display is active: the player skinning hooks are installed.`（若为 critical `Illusion display is off for this session` 则幻化整条关闭、真甲可见） |
-| 贴件真的发生 | `Custom: attaching N outfit-only piece(s) of M displayed (mask 0x…, outfit revision …, body morph …)` |
+| 日志级别 | 默认 info；`[Debug] ExtraLogging = on` 才是 trace（1.5.56 起未开时没有逐件 ESP 行） |
+| 钩子成对装好 | `Illusion display is active: the player skinning hooks are installed.`；critical 的 `Illusion display is off ...` 表示成对校验失败 |
+| 贴件真的发生 | `Custom: attaching N outfit-only piece(s) of M displayed (mask 0x..., outfit revision ..., body morph ...)` |
 | .tri 目标 | `carries a .tri morph target on N of M cloned slot(s)` |
-| 实时形变在跑 | `MorphRefresh pipeline (session totals): posted=… on-thread=… poll-done=… player-samples=… player-changes=… cache-replays=…`；`re-morphed … the vertices moved`（`did not change` 表示几何未生效） |
-| 场景套装切换 | `SceneOutfits: <事件> came from thread X (game thread Y); the switch is handed to the game thread.` + `… scene started; A -> B` + 同一毫秒的 `Armor Refresh for …` |
-| 金件点选 | `Menu: golden piece <plugin>:<id> <name>`；组行 `Menu: golden group <名字> selected (N of M).` |
-| ESP 生成套装 | `ESP outfits: …` 结果行 + 每款的 `costume` 明细（1.5.46 的文案，1.5.45 是 `name group(s)`） |
-| 金件存库 | `Golden items: N piece(s) of <plugin> added.` / 若 `Message handler: an exception escaped` 说明又被异常撞过 |
-
-游戏崩溃看 CrashLogger：`PROBABLE CALL STACK` 为空时读 `STACK` 段的 char* 槽（能看到我们自己的函数名、日志格式串、skee 返回地址）。没有 pdb 时可用 `.pdata` 的 `RUNTIME_FUNCTION`（start/end/unwind）把崩溃 RVA 对位到函数区间。
+| 实时形变在跑 | `MorphRefresh pipeline (session totals): posted=... on-thread=... poll-done=...` |
+| 场景套装切换 | `SceneOutfits: <事件> came from thread X (game thread Y); the switch is handed to the game thread.` |
+| ESP 生成 | 每次预览一行 `ESP outfits: preview [<esp>] candidates=N pending=M filtered=K capped=... reason=<原因 计数,...>`；应用后 `confirmed [...] created={} skipped={}`。逐件行只在 ExtraLogging 下出现 |
+| 一槽一件掉件 | `Slot rule: [..] preset=... dropped XXXXXXXX ...` |
+| 批量删除 | `Outfits: bulk delete removed N preset(s)` |
+| 金件点选 | `Menu: golden piece <plugin>:<id> <name>` / `Menu: golden group <名字> selected (N of M).` |
+| Z 键 | `Quick picker: Z opens the window directly (0.5 s limit).`（info，启动时一行）；每次开窗本身在 debug 级 |
 
 ---
 
 ## 9. 坑清单（都是踩过的，别再踩）
 
-1. **禁止清空 `RE::BipedAnim::objects[bit]` 的 item/addon/part 或调 `ClearBipedPart`**：那是引擎为该槽维护的唯一条目，清掉后装备栏不变引擎就不重贴 → 该槽永久空模型（1.5.24 事故）。离开幻化集的槽一律「交回引擎」；只有「我们上一套留下的克隆」在四条件同时成立时才可摘（`previousOwned & flag` && 该槽无真甲 && 皮肤不覆盖 && `partClone` 非空）。
-2. **贴件必须用引擎传进来的 `ActorWeightModel`**（注入壳里 `mov rcx, rbx; mov rdx, rdi` 后 call），不许 `reinterpret_cast` 自造——`RE::ActorWeightModel` 在 CL-NG 里只有前向声明。
-3. **成对钩子 fail-closed**：藏真甲（`DontVanillaSkinPlayer`）与贴幻化件（`CustomSkinPlayer`）必须同时装上，否则总开关关闭幻化并打 critical（只装一半 = 全裸且游戏不崩，比不装更糟）。
-4. **钩子站点**：地址库只保证函数入口；`+0x81` 这类偏移是某版本的快照。旧版实测可用的站点不许因「E8 目标校验过强」被判死（1.5.20 事故）；反过来，0 命中 call 时**不许放大窗口或在全 .text 乱钩**，应先怀疑 ID 选错或被内联。
-5. **线程身份只记录不执法**：SKSE `AddTask` 的回调在这台机器上经常不在主线程，`IsGameThread()` 当门禁会把整段时期丢空（1.5.35/1.5.36 事故）。每个一次性的「闩」都必须在任务不被执行时也能释放（用时间戳节流，不要 `exchange(true)` 后等某条路径来复位）。
-6. **第三方接口只能是加速项**：skee 的 `InterfaceExchangeMessage` 广播在用户环境里从未送达 skee64（收件集固定不含 skee），所以任何功能都不能以「拿到 BodyMorph 接口」为前提；skee v5 才有 `AddMorphShapeCallback`（vtable 末项，必须 `GetVersion()>=5` 才能调）。
-7. **i18n 译文是 printf 格式串**：en/zh 占位符必须同序（`I18n.cpp` 已有运行时护栏 + `tests/golden_menu_guards.ps1`），错序 = `%s` 吃 size_t = `strlen(0x8)` 崩溃。
-8. **ImGui 控件 id 必须跨帧稳定**：`PushID(某每帧新拷贝里的字符串指针)` 会命中 `PushID(const void*)`，按下帧与松开帧 id 不同 → 点击被丢弃（1.5.44 事故）。列表行用行号/索引。
-9. **两个无符号数之差不许直接喂 `assign`/`resize`/指针算术**：先改数据再算区间会下溢成 SIZE_MAX，抛 `std::length_error(vector too long)` 并掀掉整个菜单回调（1.5.42 事故）。
-10. **FormID 宽度按插件类型**：light(ESL) 只存低 12 位（`GetFormID` 对 light 返回 `0xFE000000 + (lightIndex<<12) + formID`，不掩码），照 24 位存会二次叠加永远查不到（1.5.43 事故）。
-11. **持锁代码不许调会自己上锁的公共 getter**：`std::mutex` 同线程重入在 MSVC 抛 `system_error(resource deadlock would occur)`，会以「启动即闪退」的形式暴露（1.5.41 事故）。用 `recursive_mutex` + `*Locked()` 内部版本。
-12. `git checkout <tag> -- src` 会**整份覆盖**，把 tag 之后做的独立修复一起抹掉（7f5a2ce 的 BODYTRI 保留语义就是这么丢的）。先 `git log <tag>..HEAD -- src` 列清单再决定。
-13. `git add -f a b c` 里只要有一个路径不存在，整条命令返回 128 而后面的 `git commit` 照常执行 → 文件漏进提交；事后 `git show --stat` 核对，缺了就补建 + `commit --amend` + `git tag -f`。
-14. 大文档编辑（DELIVERY 已 22 万字符）：用字符串切片 + 回读断言，别指望一个 replace 命中一次；构造内容后**必须真的 `writeFileSync`**（漏写会让断言才发现）；`@B@` 之类占位符必须回填并 grep 校验（曾把 34 个字面占位符带进发布包）。
-15. **不要在已被用户否决的机制上打补丁**：1.5.30 补跑 pass、1.5.31 `Update3DModel`、1.5.33 `OnGameThread` 门禁、1.5.35 猜 `Main::Update` 当帧泵、1.5.36 一次性闩、1.5.46 Trie 分组——都是「方向被否后继续加固」。用户说「按 X 那条路走」时，第一步是读 X 的既有实现照抄结构。
+1. **禁止清空 `RE::BipedAnim::objects[bit]` 的 item/addon/part 或调 ClearBipedPart**（1.5.23 事故：该槽永久空模型）。
+2. **贴件必须用引擎传进来的 ActorWeightModel**，不许自造（1.5.22 全裸）。
+3. **成对钩子 fail-closed**：藏真甲与贴幻化件必须同时装上，只装一半 = 全裸。
+4. **钩子站点**：地址库只保证函数入口，`+0x81` 这类偏移是版本快照；0 命中 call 时不许放大窗口或全 .text 乱钩。
+5. **线程身份只记录不执法**：AddTask 回调常不在主线程，IsGameThread() 当门禁会把整段时期丢空。
+6. **第三方接口只能是加速项**：skee 的 InterfaceExchangeMessage 在用户环境从未送达，任何功能不能以拿到 BodyMorph 接口为前提。
+7. **i18n 译文是 printf 格式串**：en/zh 占位符必须同序同类型（1.5.39 曾因此崩）；golden_menu_guards.ps1 与 i18n_translation_files.ps1 都验这个。
+8. **ImGui 控件 id 必须跨帧稳定**：PushID(每帧新拷贝的字符串指针) 会命中 PushID(const void*)，点击被丢弃（1.5.44）。
+9. **两个无符号数之差不许直接喂 assign / resize**：下溢成 SIZE_MAX 抛 length_error，掀掉整个菜单回调（1.5.42）。
+10. **FormID 宽度按插件类型**：light(ESL) 只存低 12 位。
+11. **持锁代码不许调会自己上锁的公共 getter**：MSVC 抛 system_error(resource deadlock would occur)（1.5.40 启动闪退）。
+12. **对空 shared 取 front() 就是崩溃源**（1.5.52 线上即有，1.5.53 修）；同名副本要先 dedupe 再判。
+13. **标签组递归拆分方向**：StyleBetter(deeper, whole) 为真才拆，写反就把整套拆成单件。
+14. **改 `src/core/*.h` 后必须重编离线复算 exe**（esp_dbg / esp_scan_run），否则用旧算法得错误结论。
+15. **单测期望值必须先跑探针打印真实分组再写断言**，凭空写的断言必失败。
+16. **git commit -F 的相对路径解析到仓库内**：消息文件放仓库外时必须写绝对路径。
+17. **`git checkout <tag> -- src` 会整份覆盖**，把 tag 之后的独立修复一起抹掉。
+18. **不要在已被用户否决的机制上打补丁**（1.5.30–1.5.33 的补跑 pass / 重建 3D / OnGameThread 门禁）。
+19. **I18n.cpp 这类大文件别用行号 splice**：混合行尾会让插入块错位、整段吞掉函数（1.5.56 就把 ParseTranslation 写坏了）→ 从 `git show HEAD:路径` 取干净基线整体重放改动，再 `git diff -U2` 逐处核对。
 
 ---
 
 ## 10. 仍未修的技术债（下一版可选）
 
-1. 实时形变「引擎不改装备时零采样」：需要一条与 worn pass 解耦的采样锚点（采样通道与执行通道各自独立），线程身份只记录。
-2. SLIF 的骨骼节点缩放通道（kKeys）不与幻化克隆连通；要做需把源骨骼 scale 映射到克隆内网格节点，属新增耦合，动前先问用户。
-3. OStim 场景内约 18 秒无蒙皮 pass（场景开始到用户按 Tab 之间只有 1 轮 pass）。
-4. AE 1.6.x 从未实机验收；第一人称单独 `.tri` 未覆盖。
-5. 场景中切成 `_sex` 套装时身体/手脚槽可能空（1.5.29 后未再复现，若复现按「引擎 Skin 覆盖 3P slot 2/4/7 与幻化克隆争用」方向查）。
+1. 实时形变「引擎不改装备时零采样」：需要一条与 worn pass 解耦的采样锚点；1.5.38 分支可参考（`git show abandoned/menu-morph-live-1.5.38:src/cpp/MorphRefresh.cpp`），但它会覆盖之后的独立修复，先 `git log` 对照再挑。
+2. SLIF 骨骼节点缩放通道（kKeys）不与幻化克隆连通；要做需把源骨骼 scale 映射到克隆网格节点，动前先问用户。
+3. OStim 场景内约 18 秒无蒙皮 pass；AE 1.6.x 未实机验收；第一人称单独 .tri 未覆盖。
+4. ESP 生成的三处口径缺口（本地化 .STRINGS、无 FULL、后缀式共同词）与 87 个零预设插件——用户已认可现状，除非他要求否则别动。
+5. 三个产品参数（kMaxVariants 32→64、同名同槽冗余记录是否隐藏、后缀式共同词）仍未拍板。
 
 ---
 
-## 11. 本次回退做了什么（可复现）
+## 11. 沟通纪律（会影响交付是否被接受）
 
-```
-cd D:/Skyrim-dev/src/SkyrimOutfitSystemSE-NG
-git tag abandoned/esp-outfits-trie-1.5.46 v1.5.46    # 语义封存，代码留在 tag 里可取
-git reset --hard v1.5.45                            # 源码/版本号/dist 文档/tests 回到 1.5.45
-# 再把 1.5.45 成品包解回 dist（31 文件），保证 dist 与发行包逐字节一致：
-#   Expand-Archive -LiteralPath SkyrimOutfitSystemNG-1.5.45.zip -DestinationPath <tmp> -Force
-#   逐文件覆盖到 dist/
-```
-
-校验结果：dist 31 文件 / 3,093,035 B；`dist/SHA256SUMS.txt` 30/30 通过；`dist/SKSE/Plugins/OutfitSystemNG.dll` 2,074,112 B / `075e211e59f1b6ad87b949eb8747bdcfeff73a231cf900ecf089625f34d4928f` / 1.5.45.0；`dist/SKSE/Plugins` 下无旧名 DLL。
-
-1.5.46 的算法代码仍可随时取回对照：`git show v1.5.46:src/core/EspOutfits.cpp`（**只作反面参考**：字符级前缀树本身没错，错在把「名字像」当成「同一套的替代件」）。
-
----
-
-## 12. 沟通纪律（会影响交付是否被接受）
-
-- 全部推理与汇报用**中文**，要直接、不要绕。
-- 先读 `dist/docs/` 再动手；改动前先确认改的是哪个仓库、哪个模块（用户纠正过「我说的是 SexLab/OStim 的 `_sex`，你怎么改的是按地点/状态自动切换」）。
-- 汇报结构固定：真因（带日志/源码证据）→ 改法 → 产物数字表（DLL 大小/哈希/FileVersion、包大小/哈希、commit/tag）→ 几步实机判定日志 → 边界与未验证项。**不许声称已实机验证**。
-- 引用用户原话必须能对上消息编号；「用户已确认」只能来自用户本人那一轮。
-- 用户会主动验证：手改 ini、连续切换预设、开关菜单对比。交付前假设他会往极端里测。
-
+- 全部推理与汇报用**中文**，直接、不绕。
+- 改前先确认改的是哪个仓库、哪个模块（用户纠正过「我说的是场景 `_sex` 套装，你怎么改的是按地点/状态自动切换」）。
+- 汇报结构固定：真因（带日志 / 源码证据）→ 改法 → 产物数字表（DLL 大小 / 哈希 / FileVersion、包大小 / 哈希、分支与 tag）→ 几步实机判定 → 边界与未验证项。**不许声称已实机验证**。
+- 引用用户原话必须对得上消息编号；「用户已确认」只能来自用户本人那一轮。
+- 测试包与正式包的边界要守住：验证性修复先出测试包（只有 DLL），用户实机点头后才 tag / 合主线 / 动 dist。
+- 用户会主动往极端里测（手改 ini、连切预设、开关菜单对比），交付前按这个标准自查。

@@ -87,6 +87,16 @@ namespace SOS
 		// [RandomOutfit]
 		std::string randomOutfitHotkey{ "ctrl+shift+O" };
 		std::string quickPickerHotkey{ "ctrl+shift+L" };
+
+		// [RandomOutfit] - a single key without modifiers that opens the quick
+		// picker the moment it is pressed. The "Change Outfit" lesser power that
+		// the shipped esp grants only reaches the window after its cast animation,
+		// which is what feels like a cooldown on the quickslot key; this key skips
+		// that wait and is limited to one open every 0.5 s. The power keeps
+		// working (its own open call does nothing while the window is already
+		// open), and the key is ignored while QuickSlotRandom is on so the
+		// random roll never happens twice. Empty disables the shortcut.
+		std::string quickPickerKey{ "Z" };
 		bool randomFavoritesOnly{ true };
 		bool randomExcludeCurrent{ true };
 

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <map>
 #include <set>
 #include <tuple>
 
@@ -80,7 +81,7 @@ namespace SOS::EspOutfits
 			const char* editor = armor->GetFormEditorID();
 			const auto mask = armor->GetSlotMask().underlying();
 			const bool ordinary = wearable;  // keep the original mask, including FX on a mixed-slot piece
-			SKSE::log::info("ESP outfits: input [{}] id={:08X} mask={:08X} editor='{}' name='{}' slots={} {}",
+			SKSE::log::debug("ESP outfits: input [{}] id={:08X} mask={:08X} editor='{}' name='{}' slots={} {}",
 				a_plugin, armor->GetFormID(), armor->GetSlotMask().underlying(), editor ? editor : "", full ? full : "",
 				Names::SlotNumbers(mask), ordinary ? "wearable" : "not clothing");
 			if (!ordinary) {
@@ -136,7 +137,7 @@ namespace SOS::EspOutfits
 			for (const auto& [index, why] : group.pending) {
 				reasons[index] = why;
 				const auto& piece = preview.pieces[index];
-				SKSE::log::warn("ESP outfits: pending piece [{}] family='{}' id={:08X} mask={:08X} name='{}' reason={}",
+				SKSE::log::debug("ESP outfits: pending piece [{}] family='{}' id={:08X} mask={:08X} name='{}' reason={}",
 					a_plugin, label, piece.formId, piece.mask, piece.name, why);
 			}
 			// Take the presets that still fit instead of dropping the whole style: a full
@@ -149,7 +150,7 @@ namespace SOS::EspOutfits
 						reasons[index] = "preset-limit";
 					}
 				}
-				SKSE::log::warn("ESP outfits: pending [{}] family='{}' reason=preset-limit variants={}", a_plugin, label, group.variants.size() - room);
+				SKSE::log::debug("ESP outfits: pending [{}] family='{}' reason=preset-limit variants={}", a_plugin, label, group.variants.size() - room);
 			}
 			const auto wanted = group.variants.size() < room ? group.variants.size() : room;
 			for (std::size_t i = 0; i < wanted; ++i) {
@@ -158,14 +159,14 @@ namespace SOS::EspOutfits
 					for (const auto index : group.variants[i]) {
 						reasons[index] = "duplicate-preset-name";
 					}
-					SKSE::log::warn("ESP outfits: pending [{}] family='{}' reason=duplicate-preset-name", a_plugin, label);
+					SKSE::log::debug("ESP outfits: pending [{}] family='{}' reason=duplicate-preset-name", a_plugin, label);
 					continue;
 				}
 				if (name.empty() || name.size() > maxName || Names::ComparisonKey(name).empty()) {
 					for (const auto index : group.variants[i]) {
 						reasons[index] = "unsupported-preset-name";
 					}
-					SKSE::log::warn("ESP outfits: pending [{}] family='{}' reason=unsupported-preset-name", a_plugin, label);
+					SKSE::log::debug("ESP outfits: pending [{}] family='{}' reason=unsupported-preset-name", a_plugin, label);
 					continue;
 				}
 				usedNames.insert(Names::ComparisonKey(name));
@@ -173,7 +174,7 @@ namespace SOS::EspOutfits
 				for (const auto index : variant) {
 					included[index] = true;
 					const auto& piece = preview.pieces[index];
-					SKSE::log::info("ESP outfits: candidate [{}] preset='{}' id={:08X} slots={} name='{}'",
+					SKSE::log::debug("ESP outfits: candidate [{}] preset='{}' id={:08X} slots={} name='{}'",
 						a_plugin, name, piece.formId, Names::SlotNumbers(piece.mask), piece.name);
 				}
 				preview.outfits.push_back({ std::move(name), variant });
@@ -185,7 +186,7 @@ namespace SOS::EspOutfits
 			if (!included[i]) {
 				preview.unresolved.push_back(i);
 				const auto& piece = preview.pieces[i];
-				SKSE::log::warn("ESP outfits: unplaced [{}] id={:08X} mask={:08X} name='{}' reason={}",
+				SKSE::log::debug("ESP outfits: unplaced [{}] id={:08X} mask={:08X} name='{}' reason={}",
 					a_plugin, piece.formId, piece.mask, piece.name, reasons[i]);
 			}
 		}
@@ -195,8 +196,25 @@ namespace SOS::EspOutfits
 				preset.existing = guard->inner().has_outfit(preset.name.c_str());
 			}
 		}
-		SKSE::log::info("ESP outfits: preview [{}] candidates={} pending={} filtered={} capped={}", a_plugin,
-			preview.outfits.size(), preview.unresolved.size(), preview.notClothing, preview.truncated);
+		// One line per preview: the per-piece detail above is debug only, so the
+		// default log stays readable. The histogram is what tells apart "nothing to
+		// group" from "the slots could not be filled".
+		std::map<std::string_view, std::size_t> reasonCounts;
+		for (const auto index : preview.unresolved) {
+			++reasonCounts[std::string_view(reasons[index])];
+		}
+		std::string histogram;
+		for (const auto& [reason, count] : reasonCounts) {
+			if (!histogram.empty()) {
+				histogram += ", ";
+			}
+			histogram += reason;
+			histogram += ' ';
+			histogram += std::to_string(count);
+		}
+		SKSE::log::info("ESP outfits: preview [{}] candidates={} pending={} filtered={} capped={} reason={}",
+			a_plugin, preview.outfits.size(), preview.unresolved.size(), preview.notClothing, preview.truncated,
+			histogram.empty() ? "-" : histogram);
 		return preview;
 	}
 
@@ -208,7 +226,7 @@ namespace SOS::EspOutfits
 		for (const auto& outfit : a_preview.outfits) {
 			if (service.has_outfit(outfit.name.c_str())) {
 				++result.skipped;
-				SKSE::log::warn("ESP outfits: skipped existing preset [{}] '{}'", a_preview.plugin, outfit.name);
+				SKSE::log::debug("ESP outfits: skipped existing preset [{}] '{}'", a_preview.plugin, outfit.name);
 				continue;
 			}
 			std::vector<const RE::TESObjectARMO*> chosen;
