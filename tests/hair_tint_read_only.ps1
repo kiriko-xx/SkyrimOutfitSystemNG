@@ -13,9 +13,12 @@ foreach ($forbidden in @('GetSingleton', 'AddTask', 'SKSE::log', 'RequestBake', 
 foreach ($forbidden in @('SetHairColor', 'UpdateHairColor', 'ApplyVertexDiff', 'ApplyBodyMorphs', 'QueueNiNodeUpdate', 'SetVertex', 'memcpy(', 'memset(')) {
  if ($src.Contains($forbidden)) { throw "Unexpected write operation: $forbidden" }
 }
-$task = $morph.IndexOf('tasks->AddTask([retryProviders]()')
-$sample = $morph.IndexOf('HairTintDiagnostics::SampleOnMainThread(', $task)
+# The main-thread task that samples the skeleton is the same one that retries the
+# providers and drains the sliders; find it from the sample call itself (the lambda
+# captures nothing, so its header is not a stable anchor).
+$sample = $morph.IndexOf('HairTintDiagnostics::SampleOnMainThread(')
+$task = $morph.LastIndexOf('tasks->AddTask(', $sample)
 $retry = $morph.IndexOf('RetryProviders();', $task)
 $drain = $morph.IndexOf('DrainRaceMenuSlider();', $task)
-if ($task -lt 0 -or $sample -le $task -or $sample -ge $retry -or $sample -ge $drain) { throw 'Sampling must precede provider and morph writes in main-thread task' }
+if ($sample -lt 0 -or $task -lt 0 -or $sample -le $task -or $sample -ge $retry -or $sample -ge $drain) { throw 'Sampling must precede provider and morph writes in main-thread task' }
 Write-Output 'HAIR_TINT_READ_ONLY_GUARDS_OK: bounded, type-guarded, queue-only callbacks; static checks, not engine validation'

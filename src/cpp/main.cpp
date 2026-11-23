@@ -14,6 +14,8 @@
 #include "hooking/Hooks.hpp"
 #include "core/GoldenItems.h"
 
+#include <atomic>
+#include <cstdint>
 #include <string>
 #include <cstring>
 #include <exception>
@@ -234,6 +236,99 @@ namespace {
         }
     }
 
+    // The outfit refresh has to wait until the game has actually built the
+    // player's 3D; running it inside kPostLoadGame hangs 1.5.97 (the biped data
+    // is still being filled in).
+    //
+    // That wait must never be a task that queues itself again. SKSE drains the task
+    // queue until it is empty, so a task that re-adds itself while it is not ready
+    // keeps the queue busy forever: the frame never ends and the game freezes with no
+    // rendering and no cursor (1.5.62 did exactly that - a load the game refused
+    // because a plugin was missing was enough to freeze it).
+    // The wait therefore lives on the 11 ms wakeup timer: it posts at most one cheap
+    // probe task every kPostLoadProbeIntervalMs until the player's 3D exists, and
+    // stops after kPostLoadGiveUpMs. A probe that finds the 3D still missing simply
+    // returns; the timer owns the retry.
+    constexpr std::uint64_t kPostLoadProbeIntervalMs = 250;
+    constexpr std::uint64_t kPostLoadProbeStaleMs = 2000;
+    constexpr std::uint64_t kPostLoadGiveUpMs = 120000;
+
+    std::atomic<bool> g_postLoadPending{ false };
+    std::atomic<bool> g_postLoadProbeOutstanding{ false };
+    std::atomic<std::uint64_t> g_postLoadSince{ 0 };
+    std::atomic<std::uint64_t> g_postLoadLastProbe{ 0 };
+    std::atomic<unsigned> g_postLoadProbes{ 0 };
+
+    std::uint64_t NowMs() noexcept {
+        return static_cast<std::uint64_t>(::GetTickCount64());
+    }
+
+    void PostPostLoadProbe()
+    {
+        auto* tasks = SKSE::GetTaskInterface();
+        if (!tasks) {
+            g_postLoadPending.store(false);
+            return;
+        }
+        g_postLoadLastProbe.store(NowMs());
+        g_postLoadProbeOutstanding.store(true);
+        g_postLoadProbes.fetch_add(1);
+        tasks->AddTask([]() {
+            g_postLoadProbeOutstanding.store(false);
+            if (!g_postLoadPending.load()) {
+                return;
+            }
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player || !player->Is3DLoaded()) {
+                // The wakeup timer posts the next probe; a task must not re-add itself.
+                return;
+            }
+            g_postLoadPending.store(false);
+            LOG(debug, "Player 3D is ready after {} probe(s); refreshing the outfits.", g_postLoadProbes.load());
+            CreateRefreshAllArmorsTask();
+        });
+    }
+
+    void BeginPostLoadRefresh()
+    {
+        g_postLoadSince.store(NowMs());
+        g_postLoadLastProbe.store(0);
+        g_postLoadProbes.store(0);
+        g_postLoadPending.store(true);
+        PostPostLoadProbe();
+    }
+
+    void CancelPostLoadRefresh()
+    {
+        g_postLoadPending.store(false);
+        g_postLoadProbeOutstanding.store(false);
+    }
+
+    // Runs on the Win32 timer thread every 11 ms, so it must not touch game data.
+    void ServicePostLoadRefresh() noexcept
+    {
+        if (!g_postLoadPending.load()) {
+            return;
+        }
+        const auto now = NowMs();
+        const auto since = g_postLoadSince.load();
+        if (now - since >= kPostLoadGiveUpMs) {
+            g_postLoadPending.store(false);
+            LOG(warn, "The player's 3D never became ready (a load that this game build refused leaves nothing to refresh); the outfit is refreshed on the next equipment change instead.");
+            return;
+        }
+        const auto last = g_postLoadLastProbe.load();
+        // A probe that is still queued means the game thread has not reached it yet;
+        // the stale cap keeps one lost probe from stopping the wait for good.
+        if (g_postLoadProbeOutstanding.load() && now - last < kPostLoadProbeStaleMs) {
+            return;
+        }
+        if (now - last < kPostLoadProbeIntervalMs) {
+            return;
+        }
+        PostPostLoadProbe();
+    }
+
     void RevertCallback(SKSE::SerializationInterface* a_intfc) {
         (void)a_intfc;
         // Revert fires at the start of every load; keep the hooks out of the
@@ -245,49 +340,14 @@ namespace {
         SOS::AutoSwitch::Reset();
         SOS::MorphRefresh::Reset();
         SOS::SceneOutfits::Reset();
+        CancelPostLoadRefresh();
         LOG(debug, "Reverted to a fresh outfit state.");
-    }
-
-    // The outfit refresh has to wait until the game has actually built the
-    // player's 3D; running it inside kPostLoadGame hangs 1.5.97 (the biped data
-    // is still being filled in). Re-queue the task until that is done.
-    //
-    // The fast budget covers a normal load. A load that takes longer than that used to
-    // lose the refresh for good (1.5.61 log: "the outfit refresh is skipped", and the
-    // illusion only came back because the co-save load happened to trigger one later),
-    // so once the budget is spent the task keeps looking, just at a low rate.
-    constexpr unsigned kPostLoadFastAttempts = 600;
-    constexpr unsigned kPostLoadSlowStride = 30;
-
-    void SchedulePostLoadRefresh(unsigned a_attempt)
-    {
-        auto* tasks = SKSE::GetTaskInterface();
-        if (!tasks) {
-            return;
-        }
-        tasks->AddTask([a_attempt]() {
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            if (!player || !player->Is3DLoaded()) {
-                if (a_attempt >= kPostLoadFastAttempts && (a_attempt - kPostLoadFastAttempts) % kPostLoadSlowStride != 0) {
-                    SchedulePostLoadRefresh(a_attempt + 1);
-                    return;
-                }
-                if (a_attempt == kPostLoadFastAttempts) {
-                    LOG(warn, "The player's 3D is still not loaded after {} attempt(s); the outfit refresh keeps waiting for it at a low rate.", a_attempt);
-                }
-                SchedulePostLoadRefresh(a_attempt + 1);
-                return;
-            }
-            if (a_attempt > 0) {
-                LOG(debug, "Player 3D is ready after {} attempt(s); refreshing the outfits.", a_attempt);
-            }
-            CreateRefreshAllArmorsTask();
-        });
     }
 
     void CALLBACK WakeRefreshQueues(PTP_CALLBACK_INSTANCE, void*, PTP_TIMER) noexcept
     {
         try {
+            ServicePostLoadRefresh();
             if (!SOS::GameState::IsLoading()) {
                 SOS::MorphRefresh::Tick();
             }
@@ -383,6 +443,7 @@ namespace {
             SOS::AutoSwitch::Reset();
             SOS::MorphRefresh::Reset();
             SOS::SceneOutfits::Reset();
+            CancelPostLoadRefresh();
             SOS::Compat::Reload();
             if (a_msg->type == SKSE::MessagingInterface::kNewGame) {
                 // A new game starts with a fresh player who owns no spells.
@@ -407,7 +468,7 @@ namespace {
 			// waiting for a timer that may have expired in the main menu.
 			SOS::MorphRefresh::RetryProviders();
             SOS::Features::ApplyQuickslotSpell();
-            SchedulePostLoadRefresh(0);
+            BeginPostLoadRefresh();
             break;
         default:
             break;

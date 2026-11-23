@@ -13,6 +13,7 @@ $cpp = @'
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <limits>
 #include <string_view>
@@ -70,7 +71,9 @@ namespace SKSE {
 struct NiNodeUpdateEvent {RE::TESObjectREFR* reference;};
 RE::BSTEventSource<NiNodeUpdateEvent> events;
 RE::BSTEventSource<NiNodeUpdateEvent>* GetNiNodeUpdateEventSource(){return &events;}
-namespace log {inline unsigned infos=0;template<class...T>void debug(const char*,T&&...){}template<class...T>void info(const char*,T&&...){++infos;}}
+// 1.5.56 moved the successful restore to the debug level, so the stub has to count
+// that line instead of every info message.
+namespace log {inline unsigned infos=0,restores=0;template<class...T>void debug(const char* f,T&&...){if(f&&std::strstr(f,"restored count="))++restores;}template<class...T>void info(const char*,T&&...){++infos;}}
 }
 '@
 $cpp += $production
@@ -82,7 +85,7 @@ struct Fixture {
  RE::BSLightingShaderProperty sp,tp,sp2,tp2;
  RE::BSLightingShaderMaterialHairTint sm,tm,sm2;
  Fixture() {
-  SOS::HairTintRecovery::Reset();RE::writes=0;SKSE::log::infos=0;
+  SOS::HairTintRecovery::Reset();RE::writes=0;SKSE::log::infos=0;SKSE::log::restores=0;
   RE::PlayerCharacter::singleton=&player;RE::UI::singleton=&ui;
   player.hair=&source;player.biped[0].objects[1].partClone.p=&target;
   source.children={{&sg}};target.children={{&tg}};
@@ -94,7 +97,7 @@ struct Fixture {
  }
  void event(RE::TESObjectREFR* p=nullptr){SKSE::NiNodeUpdateEvent e{p?p:&player};auto q=RE::queries;SKSE::events.Send(&e);CHECK(RE::queries==q);}
  void drain(std::uint32_t mask=2){SOS::HairTintRecovery::Drain(&player,mask);}
- void unchanged(){CHECK(RE::writes==0);CHECK(SKSE::log::infos==0);}
+ void unchanged(){CHECK(RE::writes==0);CHECK(SKSE::log::infos==0);CHECK(SKSE::log::restores==0);}
 };
 int main(){
  using namespace SOS::HairTintRecovery;
@@ -108,7 +111,7 @@ int main(){
  {Fixture f;f.sm.tintColor.red=std::numeric_limits<float>::quiet_NaN();f.event();f.drain();f.unchanged();}
  {Fixture f;f.sm.tintColor.blue=std::numeric_limits<float>::infinity();f.event();f.drain();f.unchanged();}
  {Fixture f;f.tp.material=&f.sm;f.sm.tintColor.tracked=true;f.event();f.drain();f.unchanged();}
- {Fixture f;f.target.children.push_back({&f.tg2});f.player.biped[1].objects[1].partClone.p=&f.target;f.event();f.drain();CHECK(RE::writes==1);CHECK(SKSE::log::infos==1);CHECK(f.tm.tintColor==f.sm.tintColor);}
+ {Fixture f;f.target.children.push_back({&f.tg2});f.player.biped[1].objects[1].partClone.p=&f.target;f.event();f.drain();CHECK(RE::writes==1);CHECK(SKSE::log::restores==1);CHECK(f.tm.tintColor==f.sm.tintColor);}
  {Fixture f;f.event();f.drain();CHECK(RE::writes==1);CHECK(f.tm.tintColor==f.sm.tintColor);f.tm.tintColor.red=.1f;f.drain();CHECK(RE::writes==1);CHECK(f.tm.tintColor.red==.1f);}
  {Fixture f;f.event();Reset();f.drain();f.unchanged();}
  {Fixture f;f.player.biped[0].objects[1].partClone.p=&f.source;f.event();f.drain();f.unchanged();}

@@ -13,9 +13,9 @@ function Assert-Absent([string]$text, [string]$what) {
 }
 
 # 1. the slice is clamped to the live list size
-Assert-Present $ui 'const std::size_t total = g_filtered.size();'
-Assert-Present $ui 'const std::size_t begin = std::min(total, static_cast<std::size_t>(std::max(0, (g_page - 1) * pageSize)));'
-Assert-Present $ui 'const std::size_t end = std::min(total, begin + static_cast<std::size_t>(pageSize));'
+Assert-Present $ui 'std::size_t total = g_filtered.size();'
+Assert-Present $ui 'std::size_t begin = std::min(total, static_cast<std::size_t>(std::max(0, (g_page - 1) * pageSize)));'
+Assert-Present $ui 'std::size_t end = std::min(total, begin + static_cast<std::size_t>(pageSize));'
 
 # 2. the old unguarded slice is gone; begin and end both come from 'total'
 Assert-Absent $ui 'const std::size_t end = std::min(g_filtered.size(), begin + '
@@ -24,7 +24,7 @@ Assert-Absent $ui 'const std::size_t begin = static_cast<std::size_t>(std::max(0
 # 3. the delete handler still empties the filter list, which is what made the
 #    slice point past the end - keep the two facts tied together.
 Assert-Present $ui 'g_filtered.clear();'
-$slice = $ui.IndexOf('const std::size_t total = g_filtered.size();')
+$slice = $ui.IndexOf('std::size_t total = g_filtered.size();')
 $clear = $ui.IndexOf('g_filtered.clear();')
 if ($slice -lt 0 -or $clear -lt 0 -or $slice -lt $clear) {
     throw 'the clamped slice must sit after the delete handler, in the same function'
