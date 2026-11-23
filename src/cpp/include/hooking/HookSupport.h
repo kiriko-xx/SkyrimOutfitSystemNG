@@ -48,6 +48,25 @@ namespace Hooking
 	// site that does not match the recorded callee.
 	std::uintptr_t FindCallInFunctionOrOffset(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, std::ptrdiff_t a_legacyOffset);
 
+	// Locates the call inside the skinning routine of a hook's host function that hands
+	// an item visitor to a_target, and - when that function calls a_target more than once -
+	// tells the passes apart by the visitor object itself. AE 1.6.1170 calls the worn
+	// visitor twice: once with a checker that only reports what is worn, and once with the
+	// visitor that fills the BipedAnim. Patching the first one changes nothing while the
+	// hook that hides the real armour still runs, which is exactly the nude actor 1.5.56
+	// produced on that runtime.
+	//
+	// The anchor is the address of the vtable of the visitor the wanted pass loads right
+	// before the call; every candidate site is checked for a rip-relative load of it within
+	// kAnchorLookback bytes. Nothing here trusts a recorded byte offset: a_preferredOffset
+	// is only used when it still holds a call to a_target, and when the candidates stay
+	// ambiguous the function returns 0 - a disabled hook leaves the illusion to the deferred
+	// pass, while a guessed site hides the real armour for the rest of the session.
+	std::uintptr_t FindWornPassCall(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, const REL::RelocationID& a_anchorVTable, std::ptrdiff_t a_preferredOffset);
+
+	// How far before a call the visitor it is handed is loaded. Both passes of the AE
+	// skinning routine load theirs inside this window.
+	inline constexpr std::ptrdiff_t kAnchorLookback = 0x60;
 	// How far into a function body the call scan looks. All the hooks patch a call in
 	// the first few hundred bytes of their host function (the deepest is 0x373).
 	inline constexpr std::ptrdiff_t kBodyScanLimit = 0x800;

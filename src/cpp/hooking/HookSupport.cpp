@@ -130,6 +130,23 @@ namespace Hooking
 			return std::format("{} bytes, written {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
 				size, local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond);
 		}
+		// True when a rip-relative load of a_target sits in [a_begin, a_end). The visitor a
+		// pass hands to the worn call is built on the stack and takes its vtable from one
+		// address, so the lea right before the call names the pass.
+		bool LoadsAddress(std::uintptr_t a_begin, std::uintptr_t a_end, std::uintptr_t a_target)
+		{
+			if (!a_target || !InText(a_begin, 1)) return false;
+			for (auto at = a_begin; at + 7 <= a_end; ++at) {
+				const auto* bytes = reinterpret_cast<const std::uint8_t*>(at);
+				if (bytes[0] != 0x48 && bytes[0] != 0x4C) continue;
+				if (bytes[1] != 0x8D) continue;
+				if ((bytes[2] & 0xC7) != 0x05) continue;
+				const auto rel = *reinterpret_cast<const std::int32_t*>(at + 3);
+				const auto address = at + 7 + static_cast<std::uintptr_t>(static_cast<std::ptrdiff_t>(rel));
+				if (address == a_target) return true;
+			}
+			return false;
+		}
 	}
 
 	bool IdExists(std::uint64_t a_id)
@@ -299,6 +316,92 @@ namespace Hooking
 		const auto text = TextSegment();
 		LOG(info, "{}: SkyrimSE.exe {}, {}, base 0x{:X}, .text rva 0x{:X} + 0x{:X}.",
 			a_hook, module.version().string(), ModuleFileStamp(), module.base(), text.address() - module.base(), text.size());
+	}
+
+	std::uintptr_t FindWornPassCall(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, const REL::RelocationID& a_anchorVTable, std::ptrdiff_t a_preferredOffset)
+	{
+		if (!IdExists(a_host) || !IdExists(a_target)) {
+			LOG(err, "{}: address library id {} or {} is missing for runtime {}; this hook stays disabled.",
+				a_hook, a_host.id(), a_target.id(), REL::Module::get().version().string());
+			return 0;
+		}
+
+		const auto base = REL::Module::get().base();
+		const auto entry = a_host.address();
+		const auto target = a_target.address();
+		if (!InText(entry, 1)) {
+			LOG(err, "{}: the entry rva 0x{:X} is outside .text; the hook stays disabled so the game keeps running.", a_hook, entry - base);
+			return 0;
+		}
+
+		const auto text = TextSegment();
+		const auto textEnd = text.address() + text.size();
+		auto end = entry + static_cast<std::uintptr_t>(kBodyScanLimit);
+		if (end > textEnd) end = textEnd;
+
+		const auto sites = CallsReaching(entry, end, target);
+		if (sites.empty()) {
+			LOG(err, "{}: the function at rva 0x{:X} does not call 0x{:X} within 0x{:X} bytes; the hook stays disabled so the game keeps running and the display set is attached from the deferred pass. Report this line together with your game version.",
+				a_hook, entry - base, target, kBodyScanLimit);
+			LogModuleIdentity(a_hook);
+			const auto all = CallsReaching(text.address(), textEnd, target);
+			LOG(err, "{}: .text holds {} call(s) to 0x{:X}.", a_hook, all.size(), target);
+			for (std::size_t i = 0; i < all.size() && i < 5; ++i) {
+				LOG(err, "{}: call at rva 0x{:X} ({} bytes from the function entry)", a_hook, all[i] - base,
+					static_cast<std::ptrdiff_t>(all[i]) - static_cast<std::ptrdiff_t>(entry));
+			}
+			return 0;
+		}
+
+		for (const auto site : sites) {
+			LOG(debug, "{}: candidate call to 0x{:X} at rva 0x{:X} (+0x{:X} into the function at rva 0x{:X}).",
+				a_hook, target, site - base, static_cast<std::ptrdiff_t>(site) - static_cast<std::ptrdiff_t>(entry), entry - base);
+		}
+
+		// The visitor the call is handed is what tells the passes apart.
+		const bool anchorKnown = IdExists(a_anchorVTable);
+		const auto anchor = anchorKnown ? a_anchorVTable.address() : 0;
+		std::vector<std::uintptr_t> anchored;
+		if (anchor) {
+			const auto lookback = static_cast<std::uintptr_t>(kAnchorLookback);
+			for (const auto site : sites) {
+				const auto low = site - lookback < entry ? entry : site - lookback;
+				if (LoadsAddress(low, site, anchor)) anchored.push_back(site);
+			}
+		}
+		if (anchored.size() == 1) {
+			const auto site = anchored.front();
+			LOG(info, "{}: the call at rva 0x{:X} (+0x{:X} into the function) is preceded by a load of the visitor 0x{:X} - the pass that fills the biped on this game build, which is where the hook goes.",
+				a_hook, site - base, static_cast<std::ptrdiff_t>(site) - static_cast<std::ptrdiff_t>(entry), anchor);
+			return site;
+		}
+		if (anchored.size() > 1) {
+			LOG(warn, "{}: {} of the {} call(s) to 0x{:X} are preceded by a load of the visitor 0x{:X}; the recorded offset decides between them.",
+				a_hook, anchored.size(), sites.size(), target, anchor);
+		} else if (anchorKnown) {
+			LOG(warn, "{}: none of the {} call(s) to 0x{:X} is preceded within 0x{:X} bytes by a load of the visitor 0x{:X}.",
+				a_hook, sites.size(), target, kAnchorLookback, anchor);
+		} else {
+			LOG(warn, "{}: the visitor id {} is missing for runtime {}, so the passes cannot be told apart by the visitor they are handed.",
+				a_hook, a_anchorVTable.id(), REL::Module::get().version().string());
+		}
+
+		const auto preferred = entry + static_cast<std::uintptr_t>(a_preferredOffset);
+		if (a_preferredOffset != 0 && InText(preferred, 5) && *reinterpret_cast<const std::uint8_t*>(preferred) == 0xE8 && BranchTarget(preferred) == target) {
+			LOG(warn, "{}: the hook goes to the site this plugin has patched since 1.0.0, rva 0x{:X} (+0x{:X} into the function), which still calls 0x{:X}. If the illusion does not appear on this game build, report this line together with your game version.",
+				a_hook, preferred - base, a_preferredOffset, target);
+			return preferred;
+		}
+
+		if (sites.size() > 1) {
+			LOG(err, "{}: the function at rva 0x{:X} calls 0x{:X} {} times and none of them could be identified as the pass that fills the biped, so the hook stays disabled and the display set is attached from the deferred pass. Report this line together with your game version.",
+				a_hook, entry - base, target, sites.size());
+			LogModuleIdentity(a_hook);
+			return 0;
+		}
+
+		LOG(debug, "{}: the function at rva 0x{:X} calls 0x{:X} once, at rva 0x{:X}; the hook goes there.", a_hook, entry - base, target, sites.front() - base);
+		return sites.front();
 	}
 
 	std::uintptr_t ResolveSite(const char* a_hook, const REL::RelocationID& a_id, std::ptrdiff_t a_offset, std::uintptr_t a_expectedTarget, std::ptrdiff_t a_scanWindow)

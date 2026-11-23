@@ -272,6 +272,74 @@ namespace Hooking {
             LOG(warn, "Custom: ApplyArmorAddon refused {:08X} (slot mask 0x{:08X}) for weight model 0x{:X}; that slot stays empty. Report this line together with the game version.", a_armor->GetFormID(), a_armor->GetSlotMask().underlying(), reinterpret_cast<std::uintptr_t>(a_model));
         }
 
+        // The vtable of the visitor of the pass this hook sits on, reported by the
+        // installer. A visitor of any other pass - the checker object AE 1.6.1170 calls
+        // the same function with - is rejected by it.
+        std::atomic<std::uintptr_t> g_wornVisitorVTable{ 0 };
+
+        // What ApplyArmorAddon put in the biped for one piece. The bool it returns is not
+        // a render signal: it is false for every piece whose armatures cover fewer slots
+        // than the ARMO advertises, and on AE the function does not write its return
+        // register at all. So the slots are read back instead - a slot counts as staged
+        // when it holds one of this ARMO's own armatures.
+        std::uint32_t StagedSlots(RE::BipedAnim* a_anim, const RE::TESObjectARMO* a_armor) {
+            if (!a_anim || !a_armor) return 0;
+            const auto mask = a_armor->GetSlotMask().underlying();
+            if (mask == 0) return 0;
+            const auto& addons = a_armor->armorAddons;
+            std::uint32_t staged = 0;
+            for (std::uint32_t bit = 0; bit < 32; ++bit) {
+                if ((mask & (1u << bit)) == 0) continue;
+                const auto* addon = a_anim->objects[bit].addon;
+                if (!addon) continue;
+                for (std::uint32_t i = 0; i < addons.size(); ++i) {
+                    if (addons[i] == addon) {
+                        staged |= (1u << bit);
+                        break;
+                    }
+                }
+            }
+            return staged;
+        }
+
+        // When the skinning pass this hook sits in last ran for an actor. The hook is
+        // only reached on the path the engine takes for that actor - AE 1.6.1170 returns
+        // from the skinning routine before the hooked call whenever the actor already has
+        // buffered objects - so "the hook is installed" is not the same as "this actor
+        // comes through it", and the deferred pass has to stay available per actor.
+        std::mutex g_hitMutex;
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_siteHookHit;
+
+        void RecordSiteHookHit(RE::FormID a_actor) {
+            const auto now = std::chrono::steady_clock::now();
+            std::lock_guard lock(g_hitMutex);
+            if (g_siteHookHit.size() > 512) g_siteHookHit.clear();
+            g_siteHookHit[a_actor] = now;
+        }
+
+        bool SiteHookHitRecently(RE::FormID a_actor) {
+            const auto now = std::chrono::steady_clock::now();
+            std::lock_guard lock(g_hitMutex);
+            const auto it = g_siteHookHit.find(a_actor);
+            return it != g_siteHookHit.end() && now - it->second < std::chrono::milliseconds(400);
+        }
+
+        void ForgetSiteHookHit(RE::FormID a_actor) {
+            std::lock_guard lock(g_hitMutex);
+            g_siteHookHit.erase(a_actor);
+        }
+
+        // The visitor the worn pass is handed starts with its vtable and keeps the biped
+        // being filled as its fourth member; SE 1.5.97 and AE 1.6.1170 lay it out the same
+        // way. Checking the vtable first keeps a visitor of another pass from being read.
+        RE::BipedAnim* PassBiped(RE::InventoryChanges::IItemChangeVisitor* a_visitor) {
+            if (!a_visitor) return nullptr;
+            const auto vtable = g_wornVisitorVTable.load(std::memory_order_relaxed);
+            if (vtable == 0) return nullptr;
+            if (*reinterpret_cast<const std::uintptr_t*>(a_visitor) != vtable) return nullptr;
+            return *reinterpret_cast<RE::BipedAnim**>(reinterpret_cast<std::uintptr_t>(a_visitor) + 0x18);
+        }
+
         // The store revision changes whenever an outfit is created, edited or
         // reassigned - including the "wear this outfit again" path the player
         // triggers from the quick picker or a hotkey. Such a re-apply has to
@@ -458,14 +526,22 @@ namespace Hooking {
 
             for (const auto* armor : applySet) {
                 if (!armor) continue;
-                if (!RE::TESObjectARMOAugments::ApplyArmorAddon(armor, race, actorWeightModel, isFemale)) {
+                // The return value is not a render signal (see StagedSlots): on AE the
+                // function does not even write it, and on every runtime it is false for a
+                // piece whose armatures cover fewer slots than the ARMO advertises - which
+                // is most head pieces. What landed in the biped is read back instead.
+                RE::TESObjectARMOAugments::ApplyArmorAddon(armor, race, actorWeightModel, isFemale);
+                auto* anim = ModelBiped(actor, actorWeightModel);
+                const auto mask = armor->GetSlotMask().underlying();
+                const auto staged = StagedSlots(anim, armor);
+                if (anim && staged == 0) {
                     LogApplyRefused(armor, actorWeightModel);
                     continue;
                 }
                 if (restoreItems) {
                     RestoreRealItems(actor, armor, wornBySlot);
                 }
-                const auto mask = armor->GetSlotMask().underlying();
+                LOG(debug, "Custom: {:08X} put 0x{:08X} of its 0x{:08X} slot(s) on the biped for {:08X}.", armor->GetFormID(), staged, mask, actor->GetFormID());
                 for (std::uint32_t bit = 0; bit < 32; ++bit) {
                     if ((mask & (1u << bit)) == 0) continue;
                     LogSlotState(actor, actorWeightModel, armor, bit);
@@ -519,6 +595,33 @@ namespace Hooking {
             Custom(actor, nullptr);
         }
 
+        // Entry point used by the hook on the worn pass. Everything comes out of the two
+        // arguments the site was called with, so the injected code no longer carries a
+        // register contract that breaks whenever a runtime keeps the actor or the model
+        // somewhere else.
+        void CustomFromWornPass(RE::InventoryChanges* a_inventory, RE::InventoryChanges::IItemChangeVisitor* a_visitor) {
+            if (!a_inventory) return;
+            auto* owner = a_inventory->owner;
+            if (!ShouldOverrideSkinning(owner)) return;
+            auto* actor = skyrim_cast<RE::Actor*>(owner);
+            if (!actor) return;
+            // This actor really came through the hooked pass, so the deferred attach is
+            // not needed for it while it keeps doing so.
+            RecordSiteHookHit(actor->GetFormID());
+            auto* anim = PassBiped(a_visitor);
+            if (!anim) {
+                // Another build or another mod handed the pass a different visitor: the
+                // biped the actor is drawn with is the next best answer.
+                LOG(debug, "Custom: the visitor of the skinning pass is not the one this build fills the biped in; using the third person biped of {:08X}.", actor->GetFormID());
+                anim = actor->GetBiped(false).get();
+            }
+            if (!anim) return;
+            // ApplyArmorAddon reads this pointer and never keeps it, so a temporary stands
+            // in for the engine struct exactly like the address of the caller's own holder.
+            RE::BipedAnim* holder = anim;
+            CustomOne(actor, reinterpret_cast<RE::ActorWeightModel*>(&holder));
+        }
+
         // Called from the main thread, outside any skinning pass. A pass is not the only
         // thing that can empty the biped: a scene framework that strips the actor edits
         // the biped directly, and then nothing puts the illusion back until the player
@@ -547,6 +650,7 @@ namespace Hooking {
         }
 
         void ForgetActor(RE::FormID a_actor) {
+            ForgetSiteHookHit(a_actor);
             std::lock_guard lock(g_appliedMaskMutex);
             g_actorDisplayMask.erase(a_actor);
         }
@@ -587,13 +691,22 @@ namespace Hooking {
             g_siteHookInstalled.store(a_installed, std::memory_order_relaxed);
         }
 
+        void SetWornVisitorVTable(std::uintptr_t a_vtable) {
+            g_wornVisitorVTable.store(a_vtable, std::memory_order_relaxed);
+        }
+
         bool SiteHookInstalled() {
             return g_siteHookInstalled.load(std::memory_order_relaxed);
         }
 
         void MarkAttachPending(RE::Actor* a_actor) {
-            if (!a_actor || SiteHookInstalled()) return;
+            if (!a_actor) return;
+            // The site hook is the fast path, not a guarantee: it only runs on the branch
+            // of the skinning routine the engine takes for an actor. While it has not been
+            // used for this actor recently the deferred pass takes over, which is what
+            // keeps an actor whose skinning routine returns early from being nude.
             const auto id = a_actor->GetFormID();
+            if (SiteHookInstalled() && SiteHookHitRecently(id)) return;
             const auto now = std::chrono::steady_clock::now();
             bool firstOfBatch = false;
             {

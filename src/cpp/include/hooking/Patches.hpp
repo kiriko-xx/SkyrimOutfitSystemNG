@@ -5,6 +5,8 @@
 #ifndef SKYRIMOUTFITSYSTEMSE_INCLUDE_HOOKING_PATCHES_HPP
 #define SKYRIMOUTFITSYSTEMSE_INCLUDE_HOOKING_PATCHES_HPP
 
+#include <cstdint>
+
 #include "RE/REAugments.h"
 
 namespace Hooking {
@@ -32,6 +34,15 @@ namespace Hooking {
         // Entry point used by the hook: the visitation runs for one inventory, and the
         // actor plus both of its weight models are resolved from it.
         void CustomFromInventory(RE::InventoryChanges* inventory);
+
+        // Entry point used by the hook that sits on the worn pass itself: the actor is
+        // taken from the inventory, and the BipedAnim the pass is filling from the
+        // visitor it was handed, so the injected code reads no register.
+        void CustomFromWornPass(RE::InventoryChanges* inventory, RE::InventoryChanges::IItemChangeVisitor* visitor);
+
+        // The vtable that identifies the visitor of the pass this hook sits on. Resolved
+        // and reported by the installer before the hook is written.
+        void SetWornVisitorVTable(std::uintptr_t a_vtable);
 
         // actorWeightModel may be null, in which case both of the actor's weight models
         // (third person, then first person) are attached.
