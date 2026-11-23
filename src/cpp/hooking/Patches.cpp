@@ -16,6 +16,7 @@
 
 #include "GameState.h"
 #include "MorphRefresh.h"
+#include "OutfitSystem.h"
 #include "Utility.h"
 #include "bindings.h"
 #include "core/Settings.h"
@@ -596,26 +597,38 @@ namespace Hooking {
         }
 
         // Entry point used by the hook on the worn pass. Everything comes out of the two
-        // arguments the site was called with, so the injected code no longer carries a
-        // register contract that breaks whenever a runtime keeps the actor or the model
-        // somewhere else.
+        // arguments the game passed, so the injected code carries no register contract that
+        // breaks whenever a runtime keeps the actor or the model somewhere else.
+        //
+        // The hook sits on the entry of the worn visitor itself, which every pass of every
+        // actor runs through, so the visitor is judged before anything else: only the one
+        // whose vtable this build recorded fills the biped this plugin may write. The other
+        // passes - in particular the checker pass of AE 1.6.1170 - are left alone, because
+        // writing a biped outside the pass that builds it produces parts the game never
+        // finishes (on 1.6.1170 that was a see-through body with no feet).
         void CustomFromWornPass(RE::InventoryChanges* a_inventory, RE::InventoryChanges::IItemChangeVisitor* a_visitor) {
-            if (!a_inventory) return;
+            // ApplyArmorAddon and the worn-form lookup walk worn items themselves, so this
+            // function can be re-entered from inside itself; the second entry has to do
+            // nothing at all.
+            static thread_local bool inPass = false;
+            if (inPass) return;
+            inPass = true;
+            struct Reset
+            {
+                bool& flag;
+                ~Reset() { flag = false; }
+            } reset{ inPass };
+
+            if (!a_inventory || !a_visitor) return;
+            auto* anim = PassBiped(a_visitor);
+            if (!anim) return;
             auto* owner = a_inventory->owner;
             if (!ShouldOverrideSkinning(owner)) return;
             auto* actor = skyrim_cast<RE::Actor*>(owner);
             if (!actor) return;
-            // This actor really came through the hooked pass, so the deferred attach is
-            // not needed for it while it keeps doing so.
+            // This actor really came through the hooked pass, so the deferred attach is not
+            // needed for it while it keeps doing so.
             RecordSiteHookHit(actor->GetFormID());
-            auto* anim = PassBiped(a_visitor);
-            if (!anim) {
-                // Another build or another mod handed the pass a different visitor: the
-                // biped the actor is drawn with is the next best answer.
-                LOG(debug, "Custom: the visitor of the skinning pass is not the one this build fills the biped in; using the third person biped of {:08X}.", actor->GetFormID());
-                anim = actor->GetBiped(false).get();
-            }
-            if (!anim) return;
             // ApplyArmorAddon reads this pointer and never keeps it, so a temporary stands
             // in for the engine struct exactly like the address of the caller's own holder.
             RE::BipedAnim* holder = anim;
@@ -682,7 +695,19 @@ namespace Hooking {
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
                     if (!actor) continue;
                     if (!ShouldOverrideSkinning(actor)) continue;
-                    Custom(actor, nullptr);
+                    if (SiteHookInstalled()) {
+                        // The hook lives inside the pass that builds the biped, so the display
+                        // set only gets geometry when the game rebuilds that biped. Writing the
+                        // biped from here instead fills a model the game never finishes: on AE
+                        // 1.6.1170 the pieces of the 1.5.60 build had an addon and a part but
+                        // no geometry behind them, which showed as a see-through blue body
+                        // without feet. An equip refresh runs the pass again, with the hook in
+                        // it.
+                        ::OutfitSystem::refreshArmorFor(actor);
+                    } else {
+                        // No hook in the pass at all: the external fill is all that is left.
+                        Custom(actor, nullptr);
+                    }
                 }
             }
         }
@@ -720,7 +745,11 @@ namespace Hooking {
                 g_attachPending.insert(id);
             }
             if (firstOfBatch) {
-                LOG(debug, "Custom: the skinning routine of this game build has no call site to hook; attaching the display set from the deferred pass.");
+                if (SiteHookInstalled()) {
+                    LOG(debug, "Custom: the hooked skinning pass has not reached {:08X} yet; the actors that have not been through it are rebuilt from the deferred pass.", static_cast<std::uint32_t>(id));
+                } else {
+                    LOG(debug, "Custom: this game build's worn visitor could not be hooked; attaching the display set from the deferred pass.");
+                }
             }
             if (g_attachTaskQueued.exchange(true, std::memory_order_relaxed)) return;
             auto* tasks = SKSE::GetTaskInterface();

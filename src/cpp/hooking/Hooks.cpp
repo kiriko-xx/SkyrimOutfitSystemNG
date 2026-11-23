@@ -53,6 +53,21 @@ namespace Hooking {
             LOG(debug, "{}: patched.", a_name);
             return true;
         }
+
+        // Allocates trampoline code without patching anything. Used for the prologue copy
+        // an entry hook calls before it jumps back into the game function.
+        template <class Code>
+        void* AllocateCode(const char* a_name, Code& a_code) {
+            if (g_localTrampoline->free_size() < a_code.getSize()) {
+                LOG(critical, "{}: the trampoline has {} free bytes and the code needs {}; this hook stays disabled.", a_name, g_localTrampoline->free_size(), a_code.getSize());
+                return nullptr;
+            }
+            void* code = g_localTrampoline->allocate(a_code);
+            if (!code) {
+                LOG(critical, "{}: the trampoline is full; this hook stays disabled.", a_name);
+            }
+            return code;
+        }
     }// namespace
 
     namespace Detail {
@@ -181,96 +196,103 @@ namespace Hooking {
             using Hooking::CustomSkinPlayer::SetSiteHookInstalled;
             using Hooking::CustomSkinPlayer::SetWornVisitorVTable;
 
-            // AE inlined the function 1.5.x called here, so the address library entry
-            // differs per runtime; which call inside it belongs to the skinning pass is
-            // found by scanning the function body, not by a recorded byte offset.
-            REL::RelocationID CustomSkinPlayer_Hook_ID(24231, 24725);
+            // The function every skinning pass calls to walk an actor's worn items, hooked
+            // at its own entry. Hooking the callee instead of one of the calls inside its
+            // caller is what makes this hook reachable on AE 1.6.1170: the address library
+            // gives the function itself, which no other plugin can move, while the calls
+            // inside the skinning routine belong to whoever patched them last. On 1.6.1170
+            // only one of the two calls to this function still reads as a plain call at run
+            // time, and that one is on the pass which is skipped, so 1.5.56 to 1.5.60
+            // attached nothing while the real armour was already hidden.
             REL::RelocationID InventoryChanges_ExecuteVisitorOnWorn(15856, 16096);
-            // The vtable of the visitor the pass that fills the biped is handed. AE
-            // 1.6.1170 calls the worn visitor twice inside the same function: first with a
-            // checker object that only reports what is worn, then with this one. Only the
-            // second call changes the BipedAnim, so the visitor - not the order of the
-            // calls - decides where the hook goes. SE has a single call, which loads an
-            // object of the same kind, so the anchor is declared for both runtimes.
+            // The vtable of the visitor the pass that fills the biped is handed. The checker
+            // pass of AE 1.6.1170 hands a different object, so the visitor itself - not the
+            // order of the calls - tells the two passes apart.
             REL::RelocationID WornVisitorVTable(241890, 195851);
 
-            std::uintptr_t CustomSkinPlayer_Hook = 0;
-
             void Apply() {
-                if (!RequireIds("CustomSkinPlayer", { CustomSkinPlayer_Hook_ID, InventoryChanges_ExecuteVisitorOnWorn })) {
+                if (!RequireIds("CustomSkinPlayer", { InventoryChanges_ExecuteVisitorOnWorn })) {
                     return;
                 }
-
-                // Last resort only: the offsets every release up to 1.5.19 patched
-                // (0x81 SE / 0x1EF AE). Each one is used only when it still holds a call to
-                // the worn visitor; the pass is identified by the visitor it is handed.
-                const std::ptrdiff_t kFallbackOffset = REL::Module::IsAE() ? 0x1EF : 0x81;
-                CustomSkinPlayer_Hook = FindWornPassCall("CustomSkinPlayer", CustomSkinPlayer_Hook_ID, InventoryChanges_ExecuteVisitorOnWorn, WornVisitorVTable, kFallbackOffset);
-                if (!CustomSkinPlayer_Hook) {
-                    return;
-                }
-
-                LOG(debug, "Patching custom skin player");
                 LogResolved("InventoryChanges_ExecuteVisitorOnWorn", InventoryChanges_ExecuteVisitorOnWorn);
-                // Tells the C++ side which visitor object marks this pass, so the BipedAnim
-                // the pass is filling can be read out of the visitor instead of a register.
+                // Tells the C++ side which visitor object marks the filling pass, so the
+                // BipedAnim being filled is read out of the visitor instead of a register.
                 if (IdExists(WornVisitorVTable)) {
                     SetWornVisitorVTable(WornVisitorVTable.address());
+                } else {
+                    LOG(warn, "CustomSkinPlayer: this build's address library has no entry for the visitor of the skinning pass; the display set will only be attached from the deferred pass.");
                 }
 
-                //
-                // The site is the "run the worn visitor" call of the skinning routine. The
-                // injected code takes both of its arguments off the stack - the inventory in
-                // rcx, the visitor in rdx - so it depends on no register at all: the actor is
-                // read from the inventory and the BipedAnim from the visitor it was handed.
-                // 1.5.20 to 1.5.56 rebuilt the model pointer from a register instead (rdi on
-                // SE, r15 on AE), which is wrong on any runtime that keeps it somewhere else:
-                // every ApplyArmorAddon call then refused the model and every slot stayed
-                // empty, on AE 1.6.1170 with the real armour already hidden.
-                //
-                struct Code : Xbyak::CodeGenerator {
-                    Code(std::uintptr_t a_resume, std::uintptr_t a_executeVisitorOnWorn, std::uintptr_t a_customFromWornPass) {
-                        Xbyak::Label f_CustomFromWornPass;
-                        Xbyak::Label f_ExecuteVisitorOnWorn;
+                const auto entry = InventoryChanges_ExecuteVisitorOnWorn.address();
+                constexpr std::size_t kStolen = 5;
+                const auto copied = CopyableEntryLength(entry, kStolen);
+                if (copied != kStolen) {
+                    LOG(err, "CustomSkinPlayer: the entry of the worn visitor at rva {:x} starts with a sequence this hook cannot copy into a trampoline; the hook stays disabled.", entry - REL::Module::get().base());
+                    LogSiteBytes("CustomSkinPlayer", entry);
+                    return;
+                }
 
-                        // Run the vanilla pass first (it fills the model with the worn
-                        // armour), then attach the outfit to the very same model. Both calls
-                        // take the two arguments the site was called with, which sit on the
-                        // stack while the vanilla pass runs.
+                // The copied prologue of the game function, followed by a jump to the rest of
+                // it: the injected code calls this, so the vanilla pass still runs exactly
+                // once with the arguments and the stack the game prepared for it.
+                struct Prologue : Xbyak::CodeGenerator {
+                    Prologue(std::uintptr_t a_entry, std::size_t a_copied) {
+                        db(reinterpret_cast<const std::uint8_t*>(a_entry), a_copied);
+                        jmp(ptr[rip]);
+                        dq(a_entry + a_copied);
+                    }
+                };
+
+                Prologue pro{ entry, copied };
+                void* trampoline = AllocateCode("custom skin player prologue", pro);
+                if (!trampoline) {
+                    return;
+                }
+
+                // Entry stub. The inventory (rcx) and the visitor (rdx) are still the ones the
+                // game passed, so nothing here depends on a register a runtime happens to keep
+                // the actor or the weight model in. Order matters: the vanilla pass runs first
+                // and leaves the real armour in the biped, then the display set is written over
+                // it, exactly like the SE hook does. 1.5.57 took the model from r15 and 1.5.60
+                // wrote the biped from outside the pass; neither ever produced geometry.
+                struct Code : Xbyak::CodeGenerator {
+                    Code(std::uintptr_t a_trampoline, std::uintptr_t a_customFromWornPass) {
+                        Xbyak::Label f_CustomFromWornPass;
+                        Xbyak::Label f_trampoline;
+
                         push(rcx);
                         push(rdx);
-                        sub(rsp, 0x20);
-                        call(ptr[rip + f_ExecuteVisitorOnWorn]);
-                        add(rsp, 0x20);
+                        sub(rsp, 0x28);// shadow space for the callee, keeps rsp 16-byte aligned
+                        call(ptr[rip + f_trampoline]);
+                        add(rsp, 0x28);
 
                         mov(rcx, ptr[rsp + 8]);
                         mov(rdx, ptr[rsp]);
-                        sub(rsp, 0x20);
+                        sub(rsp, 0x28);
                         call(ptr[rip + f_CustomFromWornPass]);
-                        add(rsp, 0x20);
+                        add(rsp, 0x28);
 
                         pop(rdx);
                         pop(rcx);
-                        jmp(ptr[rip]);
-                        dq(a_resume);
+                        ret();
 
                         L(f_CustomFromWornPass);
                         dq(a_customFromWornPass);
 
-                        L(f_ExecuteVisitorOnWorn);
-                        dq(a_executeVisitorOnWorn);
+                        L(f_trampoline);
+                        dq(a_trampoline);
                     }
                 };
 
-                Code gen{ CustomSkinPlayer_Hook + 0x5, InventoryChanges_ExecuteVisitorOnWorn.address(), std::uintptr_t(CustomFromWornPass) };
-                g_customSkinPlayerInstalled = Install("custom skin player", CustomSkinPlayer_Hook, gen);
+                Code gen{ reinterpret_cast<std::uintptr_t>(trampoline), std::uintptr_t(CustomFromWornPass) };
+                g_customSkinPlayerInstalled = Install("custom skin player", entry, gen);
                 // Tells the C++ side whether the display set is attached from inside the
-                // skinning routine or from the deferred pass it drives itself.
+                // skinning pass or from the deferred pass it drives itself.
                 SetSiteHookInstalled(g_customSkinPlayerInstalled);
                 if (g_customSkinPlayerInstalled) {
-                    LOG(info, "CustomSkinPlayer: the display set is attached from inside the skinning routine.");
+                    LOG(info, "CustomSkinPlayer: the worn visitor is hooked at its entry (rva {:x}), so the display set is attached inside the pass that fills the biped.", entry - REL::Module::get().base());
                 } else {
-                    LOG(warn, "CustomSkinPlayer: the display set will be attached from the deferred pass after each skinning update, because this game build has no call site inside the skinning routine for the hook.");
+                    LOG(warn, "CustomSkinPlayer: the display set will be attached from the deferred pass after each skinning update, because the worn visitor of this game build could not be hooked.");
                 }
             }
         }// namespace CustomSkinPlayer

@@ -318,6 +318,33 @@ namespace Hooking
 			a_hook, module.version().string(), ModuleFileStamp(), module.base(), text.address() - module.base(), text.size());
 	}
 
+	std::size_t CopyableEntryLength(std::uintptr_t a_entry, std::size_t a_needed)
+	{
+		const auto* bytes = reinterpret_cast<const std::uint8_t*>(a_entry);
+		std::size_t used = 0;
+		while (used < a_needed) {
+			const auto left = a_needed - used;
+			const auto* at = bytes + used;
+			std::size_t length = 0;
+			if (left >= 5 && at[0] == 0x48 && at[1] == 0x89 && (at[2] == 0x5C || at[2] == 0x6C || at[2] == 0x74 || at[2] == 0x7C) && at[3] == 0x24) {
+				length = 5;// mov [rsp+disp8], rbx / rbp / rsi / rdi
+			} else if (left >= 5 && at[0] == 0x4C && at[1] == 0x89 && at[2] == 0x44 && at[3] == 0x24) {
+				length = 5;// mov [rsp+disp8], r8
+			} else if (left >= 3 && at[0] == 0x48 && at[1] == 0x8B && (at[2] == 0xC4 || at[2] == 0xEC)) {
+				length = 3;// mov rax, rsp / mov rbp, rsp
+			} else if (left >= 2 && at[0] == 0x41 && at[1] >= 0x50 && at[1] <= 0x57) {
+				length = 2;// push r8 .. r15
+			} else if (at[0] >= 0x50 && at[0] <= 0x57) {
+				length = 1;// push rax .. rdi
+			}
+			if (length == 0 || length > left) {
+				return 0;
+			}
+			used += length;
+		}
+		return used;
+	}
+
 	std::uintptr_t FindWornPassCall(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, const REL::RelocationID& a_anchorVTable, std::ptrdiff_t a_preferredOffset)
 	{
 		if (!IdExists(a_host) || !IdExists(a_target)) {

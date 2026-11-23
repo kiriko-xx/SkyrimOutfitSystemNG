@@ -64,6 +64,21 @@ namespace Hooking
 	// pass, while a guessed site hides the real armour for the rest of the session.
 	std::uintptr_t FindWornPassCall(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, const REL::RelocationID& a_anchorVTable, std::ptrdiff_t a_preferredOffset);
 
+	// Length of the entry bytes of a function that can be copied verbatim into a
+	// trampoline, or 0 when the prologue cannot be relocated safely.
+	//
+	// Hooking a callee at its entry instead of a call site inside its caller keeps this
+	// plugin off a piece of code other plugins patch as well. The AE 1.6.1170 skinning
+	// routine calls the worn visitor twice, and one of those calls no longer reads as a
+	// plain call at run time because another plugin claims it; the entry of the callee is
+	// reached no matter who rewrote its callers.
+	//
+	// Only instructions that run the same wherever they are placed are accepted (stores
+	// of the non-volatile registers relative to rsp, and pushes of volatile ones), and
+	// a_needed must land on an instruction boundary. Anything else returns 0 so the
+	// caller does not copy a rip-relative or relative instruction into the trampoline.
+	std::size_t CopyableEntryLength(std::uintptr_t a_entry, std::size_t a_needed);
+
 	// How far before a call the visitor it is handed is loaded. Both passes of the AE
 	// skinning routine load theirs inside this window.
 	inline constexpr std::ptrdiff_t kAnchorLookback = 0x60;
