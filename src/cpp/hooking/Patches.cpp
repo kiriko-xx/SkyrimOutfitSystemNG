@@ -258,7 +258,7 @@ namespace Hooking {
         // that slot while the real armour stays hidden. That is the one failure mode
         // that must never pass silently, so it is logged (throttled: the skinning pass
         // runs many times per second).
-        void LogApplyRefused(const RE::TESObjectARMO* a_armor, const RE::ActorWeightModel* a_model) {
+        void LogApplyRefused(const RE::TESObjectARMO* a_armor, const RE::ActorWeightModel* a_model, bool a_firstPerson) {
             static std::mutex mutex;
             static std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> seen;
             const auto now = std::chrono::steady_clock::now();
@@ -269,6 +269,14 @@ namespace Hooking {
                 const auto it = seen.find(key);
                 if (it != seen.end() && now < it->second) return;
                 seen[key] = now + std::chrono::seconds(5);
+            }
+            if (a_firstPerson) {
+                // The first person biped only builds the body (the hands); hair, feet and
+                // jewellery have no armature in it at all, so a refusal there is what the
+                // pass is supposed to do. Warning about it made a healthy session look
+                // broken - every one of the 21 lines in the 1.5.61 log came from this pass.
+                LOG(debug, "Custom: {:08X} (slot mask 0x{:08X}) has no armature in the first person biped, as expected.", a_armor->GetFormID(), a_armor->GetSlotMask().underlying());
+                return;
             }
             LOG(warn, "Custom: ApplyArmorAddon refused {:08X} (slot mask 0x{:08X}) for weight model 0x{:X}; that slot stays empty. Report this line together with the game version.", a_armor->GetFormID(), a_armor->GetSlotMask().underlying(), reinterpret_cast<std::uintptr_t>(a_model));
         }
@@ -525,6 +533,11 @@ namespace Hooking {
                 }
             }
 
+            // The engine runs this once per biped of the actor, third person first and
+            // first person after it. Only the third person one is expected to carry every
+            // displayed piece, so refusals are judged against that.
+            auto* const firstPersonBiped = actor->GetBiped(true).get();
+
             for (const auto* armor : applySet) {
                 if (!armor) continue;
                 // The return value is not a render signal (see StagedSlots): on AE the
@@ -536,7 +549,7 @@ namespace Hooking {
                 const auto mask = armor->GetSlotMask().underlying();
                 const auto staged = StagedSlots(anim, armor);
                 if (anim && staged == 0) {
-                    LogApplyRefused(armor, actorWeightModel);
+                    LogApplyRefused(armor, actorWeightModel, anim == firstPersonBiped);
                     continue;
                 }
                 if (restoreItems) {
@@ -746,7 +759,7 @@ namespace Hooking {
             }
             if (firstOfBatch) {
                 if (SiteHookInstalled()) {
-                    LOG(debug, "Custom: the hooked skinning pass has not reached {:08X} yet; the actors that have not been through it are rebuilt from the deferred pass.", static_cast<std::uint32_t>(id));
+                    LOG(debug, "Custom: {:08X} has not been through the hooked skinning pass in the last moment; asking the engine to rebuild its biped so that the hook can fill it.", static_cast<std::uint32_t>(id));
                 } else {
                     LOG(debug, "Custom: this game build's worn visitor could not be hooked; attaching the display set from the deferred pass.");
                 }

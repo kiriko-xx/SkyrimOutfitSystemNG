@@ -251,6 +251,14 @@ namespace {
     // The outfit refresh has to wait until the game has actually built the
     // player's 3D; running it inside kPostLoadGame hangs 1.5.97 (the biped data
     // is still being filled in). Re-queue the task until that is done.
+    //
+    // The fast budget covers a normal load. A load that takes longer than that used to
+    // lose the refresh for good (1.5.61 log: "the outfit refresh is skipped", and the
+    // illusion only came back because the co-save load happened to trigger one later),
+    // so once the budget is spent the task keeps looking, just at a low rate.
+    constexpr unsigned kPostLoadFastAttempts = 600;
+    constexpr unsigned kPostLoadSlowStride = 30;
+
     void SchedulePostLoadRefresh(unsigned a_attempt)
     {
         auto* tasks = SKSE::GetTaskInterface();
@@ -260,11 +268,14 @@ namespace {
         tasks->AddTask([a_attempt]() {
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (!player || !player->Is3DLoaded()) {
-                if (a_attempt < 600) {
+                if (a_attempt >= kPostLoadFastAttempts && (a_attempt - kPostLoadFastAttempts) % kPostLoadSlowStride != 0) {
                     SchedulePostLoadRefresh(a_attempt + 1);
-                } else {
-                    LOG(warn, "The player never finished loading its 3D; the outfit refresh is skipped.");
+                    return;
                 }
+                if (a_attempt == kPostLoadFastAttempts) {
+                    LOG(warn, "The player's 3D is still not loaded after {} attempt(s); the outfit refresh keeps waiting for it at a low rate.", a_attempt);
+                }
+                SchedulePostLoadRefresh(a_attempt + 1);
                 return;
             }
             if (a_attempt > 0) {
