@@ -93,7 +93,21 @@ namespace Hooking {
                     return;
                 }
 
-                DontVanillaSkinPlayer_Hook = FindCallInFunction("DontVanillaSkinPlayer", DontVanillaSkinPlayer_Hook_ID, TESObjectARMO_ApplyArmorAddon);
+                // What the site looks like, independent of the address it sits at: the
+                // routine fills the call arguments right before the call (r9d = race flag,
+                // rdx = the item list, rcx = the body model) and turns the call result into
+                // the "armour applied" flag right after it. The next function along calls the
+                // same function and ends in a return straight after, so the two never match
+                // the same fingerprints. The register the flag is written through differs
+                // between the runtimes (dil on SE, sil on AE), hence the wildcards.
+                const SiteShape shape{
+                    "vanilla armour pass",
+                    {
+                        { -18, "44 8B 49 38 41 83 E1 01 48 8B 91 58 01 00 00 48 8B CD" },
+                        { 5, "40 B? 01 40 0F B6 C?" },
+                    }
+                };
+                DontVanillaSkinPlayer_Hook = FindVerifiedCall("DontVanillaSkinPlayer", DontVanillaSkinPlayer_Hook_ID, TESObjectARMO_ApplyArmorAddon, shape);
                 if (!DontVanillaSkinPlayer_Hook) {
                     return;
                 }
@@ -153,7 +167,15 @@ namespace Hooking {
                     return;
                 }
 
-                ShimWornFlags_Hook = FindCallInFunction("ShimWornFlags", ShimWornFlags_Hook_ID, InventoryChanges_GetWornMask);
+                // The inventory is the one the routine keeps in rax and locks right before
+                // the call; only the register the lock copy names differs between runtimes.
+                const SiteShape shape{
+                    "worn mask call",
+                    {
+                        { -8, "48 8B C8 4C 89 ?? 24 70" },
+                    }
+                };
+                ShimWornFlags_Hook = FindVerifiedCall("ShimWornFlags", ShimWornFlags_Hook_ID, InventoryChanges_GetWornMask, shape);
                 if (!ShimWornFlags_Hook) {
                     return;
                 }
@@ -311,7 +333,18 @@ namespace Hooking {
                     return;
                 }
 
-                FixEquipConflictCheck_Hook = FindCallInFunction("FixEquipConflictCheck", FixEquipConflictCheck_Hook_ID, BGSBipedObjectForm_TestBodyPartByIndex);
+                // The per-slot conflict test is called with the slot index in edx and the
+                // body form in rcx, and its verdict is used as "this item conflicts". Both
+                // halves of that exist only in this loop: the two other calls to the same
+                // function in the scan window pass different registers.
+                const SiteShape shape{
+                    "equip conflict loop",
+                    {
+                        { -8, "4C 8B F0 8B D3 48 8B CD" },
+                        { 5, "84 C0 0F 84" },
+                    }
+                };
+                FixEquipConflictCheck_Hook = FindVerifiedCall("FixEquipConflictCheck", FixEquipConflictCheck_Hook_ID, BGSBipedObjectForm_TestBodyPartByIndex, shape);
                 if (!FixEquipConflictCheck_Hook) {
                     return;
                 }
@@ -402,7 +435,23 @@ namespace Hooking {
                     return;
                 }
 
-                SkillMutationFunction_Hook = FindCallInFunction("FixSkillLeveling", SkillMutationFunction_Hook_ID, visitor);
+                // SE calls a named visitor; AE inlined it into the loop and keeps the visit
+                // state in registers, so the two look nothing alike. Each runtime gets the
+                // fingerprints of the call it was written against.
+                const SiteShape shape = isAE
+                    ? SiteShape{
+                          "skill mutation loop (AE)",
+                          {
+                              { -6, "4C 8B E8 48 8B 0E" },
+                              { 5, "48 8B D8 4C 8B 36 49 83 C6 10 45 8D 67 2A" },
+                          } }
+                    : SiteShape{
+                          "skill mutation call (SE)",
+                          {
+                              { -10, "48 8D 54 24 20 48 89 44 24 28" },
+                              { 5, "8B 7C 24 34 8B 74 24 30 03 FE" },
+                          } };
+                SkillMutationFunction_Hook = FindVerifiedCall("FixSkillLeveling", SkillMutationFunction_Hook_ID, visitor, shape);
                 if (!SkillMutationFunction_Hook) {
                     return;
                 }
@@ -482,11 +531,17 @@ namespace Hooking {
                     }
                 };
 
-                // The SE branch resumes right after the patched call; the AE branch
-                // either returns to the caller or jumps past the vanilla loop.
-                Code gen{ SkillMutationFunction_Hook + 0x5,
-                    isAE ? SkillMutationFunction_Hook + 0x7B : SkillMutationFunction_Hook + 0x5,
-                    visitor.address(), isAE };
+                // The SE branch resumes right after the patched call; the AE branch either
+                // returns to the caller or jumps past the vanilla loop. Where the loop ends
+                // is a property of the loop, not a constant: it is the instruction behind the
+                // branch that closes it, so it is derived from the code instead of recorded
+                // (on 1.6.1170 that instruction sat 123 bytes past the call, which is the value the
+                // old code had written down; the number itself is not trusted, only the derivation).
+                std::uintptr_t skip = SkillMutationFunction_Hook + 0x5;
+                if (isAE && !DeriveLoopSkip("FixSkillLeveling", SkillMutationFunction_Hook_ID.address(), SkillMutationFunction_Hook, &skip)) {
+                    return;
+                }
+                Code gen{ SkillMutationFunction_Hook + 0x5, skip, visitor.address(), isAE };
                 Install("skill level logic", SkillMutationFunction_Hook, gen);
             }
         }// namespace FixSkillLeveling

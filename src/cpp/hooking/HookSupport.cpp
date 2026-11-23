@@ -221,6 +221,134 @@ namespace Hooking
 		return sites.front();
 	}
 
+	std::uintptr_t FindVerifiedCall(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, const SiteShape& a_shape)
+	{
+		if (!IdExists(a_host) || !IdExists(a_target)) {
+			LOG(err, "{}: address library id {} or {} is missing for runtime {}; this hook stays disabled.",
+				a_hook, a_host.id(), a_target.id(), REL::Module::get().version().string());
+			return 0;
+		}
+
+		// A malformed fingerprint would silently turn every candidate into "unverified",
+		// so refuse to install instead of running with a shape that cannot match.
+		for (std::size_t i = 0; i < a_shape.chunks.size(); ++i) {
+			if (SitePattern::Length(a_shape.chunks[i].bytes) == 0) {
+				LOG(critical, "{}: byte fingerprint {} of the '{}' site shape is malformed; the hook stays disabled.", a_hook, i, a_shape.name);
+				return 0;
+			}
+		}
+
+		const auto base = REL::Module::get().base();
+		const auto entry = a_host.address();
+		const auto target = a_target.address();
+		const auto text = TextSegment();
+		const auto textEnd = text.address() + text.size();
+		if (!InText(entry, 1)) {
+			LOG(err, "{}: the entry rva 0x{:X} is outside .text; the hook stays disabled so the game keeps running.", a_hook, entry - base);
+			return 0;
+		}
+
+		auto end = entry + static_cast<std::uintptr_t>(kBodyScanLimit);
+		if (end > textEnd) end = textEnd;
+
+		const auto sites = CallsReaching(entry, end, target);
+		if (sites.empty()) {
+			LOG(err, "{}: the function at rva 0x{:X} does not call 0x{:X} within 0x{:X} bytes; the hook stays disabled so the game keeps running. Report this line together with your game version.",
+				a_hook, entry - base, target, kBodyScanLimit);
+			LogModuleIdentity(a_hook);
+			const auto all = CallsReaching(text.address(), textEnd, target);
+			LOG(err, "{}: .text holds {} call(s) to 0x{:X}.", a_hook, all.size(), target);
+			for (std::size_t i = 0; i < all.size() && i < 5; ++i) {
+				LOG(err, "{}: call at rva 0x{:X} ({} bytes from the function entry)", a_hook, all[i] - base,
+					static_cast<std::ptrdiff_t>(all[i]) - static_cast<std::ptrdiff_t>(entry));
+			}
+			return 0;
+		}
+
+		std::vector<std::uintptr_t> verified;
+		for (const auto site : sites) {
+			LOG(debug, "{}: the call to 0x{:X} sits at rva 0x{:X} ({} byte(s) into the function at rva 0x{:X}).",
+				a_hook, target, site - base,
+				static_cast<std::ptrdiff_t>(site) - static_cast<std::ptrdiff_t>(entry), entry - base);
+			const auto* bytes = reinterpret_cast<const std::uint8_t*>(site);
+			if (SitePattern::MatchesAll(a_shape.chunks.data(), a_shape.chunks.size(), bytes)) {
+				verified.push_back(site);
+			}
+		}
+
+		if (verified.size() == 1) {
+			LOG(debug, "{}: rva 0x{:X} is the site of this hook (matched '{}').", a_hook, verified.front() - base, a_shape.name);
+			return verified.front();
+		}
+
+		if (verified.size() > 1) {
+			LOG(err, "{}: {} calls to 0x{:X} inside the function at rva 0x{:X} match '{}'; the hook stays disabled rather than patching a guess. Report this line together with your game version.",
+				a_hook, verified.size(), target, entry - base, a_shape.name);
+			return 0;
+		}
+
+		if (sites.size() == 1) {
+			// Fingerprints were written against the builds that have been looked at. A game
+			// build nobody has looked at yet still leaves a single call to the callee in the
+			// function, which is the evidence this hook was written around.
+			LOG(warn, "{}: the only call to 0x{:X} in the function at rva 0x{:X} does not match '{}'; hooking it anyway because it is the only one there. Report this line together with your game version.",
+				a_hook, target, entry - base, a_shape.name);
+			return sites.front();
+		}
+
+		LOG(err, "{}: {} calls to 0x{:X} inside the function at rva 0x{:X} and none matches '{}'; the hook stays disabled so the game keeps running. Report this line together with your game version.",
+			a_hook, sites.size(), target, entry - base, a_shape.name);
+		LogModuleIdentity(a_hook);
+		return 0;
+	}
+
+	bool DeriveLoopSkip(const char* a_hook, std::uintptr_t a_entry, std::uintptr_t a_site, std::uintptr_t* a_skip)
+	{
+		if (!a_skip) return false;
+		const auto base = REL::Module::get().base();
+		const auto begin = a_site + 5;
+		auto end = a_site + static_cast<std::uintptr_t>(kLoopScanLimit);
+		const auto text = TextSegment();
+		const auto textEnd = text.address() + text.size();
+		if (end > textEnd) end = textEnd;
+
+		std::vector<std::pair<std::uintptr_t, std::size_t>> backEdges;
+		for (auto address = begin; address + 2 <= end; ++address) {
+			const auto opcode = *reinterpret_cast<const std::uint8_t*>(address);
+			std::size_t length = 0;
+			std::ptrdiff_t rel = 0;
+			if (opcode >= 0x70 && opcode <= 0x7F) {
+				length = 2;
+				rel = *reinterpret_cast<const std::int8_t*>(address + 1);
+			} else if (opcode == 0x0F && address + 6 <= end) {
+				const auto second = *reinterpret_cast<const std::uint8_t*>(address + 1);
+				if (second >= 0x80 && second <= 0x8F) {
+					length = 6;
+					rel = *reinterpret_cast<const std::int32_t*>(address + 2);
+				}
+			}
+			if (!length) continue;
+			const auto target = static_cast<std::uintptr_t>(static_cast<std::ptrdiff_t>(address) + static_cast<std::ptrdiff_t>(length) + rel);
+			// A loop back edge jumps backwards, but its target can sit *after* the call
+			// site: the call is one of the statements inside the loop body, and the body
+			// starts further on. Requiring the target to be before the call would miss
+			// exactly the loop this is meant to find.
+			if (target >= a_entry && target < address) {
+				backEdges.emplace_back(address, length);
+			}
+		}
+
+		if (backEdges.size() != 1) {
+			LOG(err, "{}: the call site at rva 0x{:X} is followed by {} branches that jump back into the loop; the hook stays disabled because leaving the loop would end up mid-instruction. Report this line together with your game version.",
+				a_hook, a_site - base, backEdges.size());
+			return false;
+		}
+
+		*a_skip = backEdges.front().first + backEdges.front().second;
+		LOG(debug, "{}: the loop around rva 0x{:X} ends at rva 0x{:X}, behind the branch at rva 0x{:X}.",
+			a_hook, a_site - base, *a_skip - base, backEdges.front().first - base);
+		return true;
+	}
 	std::uintptr_t FindCallInFunctionOrOffset(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, std::ptrdiff_t a_legacyOffset)
 	{
 		if (!IdExists(a_host) || !IdExists(a_target)) {

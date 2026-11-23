@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "REL/Relocation.h"
+#include "hooking/SitePattern.h"
 
 namespace Hooking
 {
@@ -37,6 +38,48 @@ namespace Hooking
 	//
 	// Returns 0 (and logs why) when no call to a_target sits in the body.
 	std::uintptr_t FindCallInFunction(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target);
+
+	// A set of byte fingerprints that identify one call site inside a game function.
+	// Every chunk has to match for the site to count as verified.
+	struct SiteShape
+	{
+		const char* name;
+		std::vector<SitePattern::Chunk> chunks;
+	};
+
+	// Like FindCallInFunction, but the site has to be identified, not guessed.
+	//
+	// The candidates are the calls in the body of a_host that reach a_target. A
+	// candidate counts as verified when every chunk of a_shape matches the
+	// instruction stream around it (the argument setup leading into the call and the
+	// code that consumes the result). The rules are:
+	//   * exactly one verified candidate - the usual case - that one is patched;
+	//   * several verified candidates - the fingerprints do not separate them, so the
+	//     hook is disabled; patching the wrong one of two indistinguishable calls is
+	//     worse than not patching at all;
+	//   * no verified candidate but exactly one candidate - a game build that the
+	//     fingerprints were not written for. The single call to the callee inside the
+	//     function is still the best evidence there is, so it is patched with a
+	//     warning that keeps the case visible in the log;
+	//   * no verified candidate and several candidates - the hook is disabled.
+	//
+	// Returns 0 (and logs why) instead of ever patching an unidentified site.
+	std::uintptr_t FindVerifiedCall(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, const SiteShape& a_shape);
+
+	// Distance past a call site that is scanned for the loop it sits in. The skill
+	// mutation loop of AE 1.6.1170 closes 0x79 bytes after the call.
+	inline constexpr std::ptrdiff_t kLoopScanLimit = 0x140;
+
+	// Finds the instruction the injected code has to jump to in order to leave the loop
+	// the call site sits in: the one right after the loop back edge, i.e. after the only
+	// branch in [a_site + 5, a_site + kLoopScanLimit) that jumps backwards into the loop.
+	//
+	// AE inlined the routine this hook used to patch, so the skip target is a compile
+	// artifact rather than something the address library knows. Deriving it from the
+	// branch structure instead of a recorded "+0x7B" keeps the fix working when a build
+	// recompiles the loop, and refusing to guess keeps a disabled hook from jumping into
+	// the middle of an instruction.
+	bool DeriveLoopSkip(const char* a_hook, std::uintptr_t a_entry, std::uintptr_t a_site, std::uintptr_t* a_skip);
 
 	// Same scan, but for builds where the function body contains no call to a_target at
 	// all. That happens when the compiler inlined the callee or when the address
