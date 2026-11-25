@@ -200,7 +200,7 @@ cd src\papyrus
 在无交互环境里用计划任务启动（直接 spawn 的进程会被宿主杀掉）：
 
 ```bat
-schtasks /create /tn SOSNG /tr "cmd /c D:\Skyrim-dev\src\SkyrimOutfitSystemSE-NG\buildtask.bat" /sc once /st 23:59 /f
+schtasks /create /tn SOSNG /tr "cmd /c D:\Skyrim-dev\src\SkyrimOutfitSystemNG\buildtask.bat" /sc once /st 23:59 /f
 schtasks /run /tn SOSNG
 ```
 
@@ -221,7 +221,7 @@ Compress-Archive -Path dist\* -DestinationPath SkyrimOutfitSystemNG-1.5.27.zip -
 
 ```powershell
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$src = "D:\Skyrim-dev\src\SkyrimOutfitSystemSE-NG\dist"
+$src = "D:\Skyrim-dev\src\SkyrimOutfitSystemNG\dist"
 $dst = "SkyrimOutfitSystemNG-1.5.27.zip"
 Remove-Item $dst -ErrorAction SilentlyContinue
 $zip = [IO.Compression.ZipFile]::Open((Resolve-Path .).Path + "\" + $dst, "Create")

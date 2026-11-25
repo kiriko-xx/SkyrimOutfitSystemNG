@@ -16,7 +16,7 @@ pub struct Settings {
 impl Settings {
     pub fn new() -> Self {
         let mut file = PathBuf::from(GetRuntimeDirectory().to_string());
-        file.push("Data\\SKSE\\Plugins\\SkyrimOutfitSystemSE.ini");
+        file.push("Data\\SKSE\\Plugins\\SkyrimOutfitSystemNG.ini");
         let mut ini = Ini::new();
         ini.set_multiline(true);
         if let Err(error) = ini.load(file.clone()) {

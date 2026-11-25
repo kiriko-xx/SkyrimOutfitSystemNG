@@ -33,8 +33,8 @@ namespace util {
 namespace Plugin {
     using namespace std::literals;
 
-    inline constexpr REL::Version VERSION{SKYRIMOUTFITSYSTEMSE_VERSION_MAJOR, SKYRIMOUTFITSYSTEMSE_VERSION_MINOR, SKYRIMOUTFITSYSTEMSE_VERSION_PATCH};
-    inline constexpr auto NAME = "SkyrimOutfitSystemNG"sv;
+    inline constexpr REL::Version VERSION{SKYRIMOUTFITSYSTEMNG_VERSION_MAJOR, SKYRIMOUTFITSYSTEMNG_VERSION_MINOR, SKYRIMOUTFITSYSTEMNG_VERSION_PATCH};
+    inline constexpr auto NAME = "OutfitSystemNG"sv;
 }// namespace Plugin
 
 #endif//SKYRIMOUTFITSYSTEMSE_SOS_PCH_H

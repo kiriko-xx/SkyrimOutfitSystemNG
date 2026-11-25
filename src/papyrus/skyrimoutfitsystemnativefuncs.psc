@@ -120,7 +120,7 @@ String[] Function SearchOutfits (String asQuery, Bool abFavoritesOnly = False) G
 ; NOTE: the former generic perception API (IsPerceptionEnabled,
 ; SetPerceptionEnabled, GetPerceivedArmor) has been removed. Compatibility with
 ; mods that inspect the worn equipment is handled inside the plugin and is
-; configured in Data\SKSE\Plugins\SkyrimOutfitSystemSE.ini under [Compatibility].
+; configured in Data\SKSE\Plugins\SkyrimOutfitSystemNG.ini under [Compatibility].
 
 ;
 ; Quick picker: a small standalone window (search + paging) that the

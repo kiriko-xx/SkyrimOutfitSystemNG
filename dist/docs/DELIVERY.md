@@ -98,7 +98,7 @@
 - **本版只动菜单与扫描层，不动引擎侧**：贴件语义、槽位清理、`.tri` 推导、钩子安装、`SceneOutfits` 一行未改（`git diff v1.5.34 HEAD -- src/cpp/hooking src/cpp/MorphRefresh.cpp src/cpp/MorphRefresh.h src/cpp/SceneOutfits.cpp` 为空），1.5.25 实测正常的基础幻化与 1.5.34 已验收的场景套装切换都不受影响。
 - **逐槽策略编辑器只对被选中的套装展开**（m09191②）：旧实现是一个全局布尔，勾一次就让所有套装的策略编辑器一起展开；现在展开状态按套装名保存在 `std::unordered_set<std::string> g_slotPolicyOpen` 里（`src/cpp/MenuOutfitEditor.cpp`），导出/导入 JSON 的键仍是每套自己的 `slotPolicy` / `slotPolicies`，文件格式未变。
 - **新增「从 ESP 生成套装」**（m09191③）：幻化页底部选择 ESP → 扫描该 ESP 的护甲 → 同名槽位拆成 `<名称>_1`、`<名称>_2` …，槽位策略统一「需要已装备」，生成后列表焦点跳到第一套生成的套装；变体超过 32 种时只取前 32 并在提示里说明。
-- **新增「金件」页**（m09191④）：独立数据文件 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`（与幻化 JSON 分开），左侧按 ESP 分组、右侧增删单件，支持「添加某个 ESP 的全部装备」与「按 FormID 添加单件」（输入的件必须真实存在）；旧 `SkyrimOutfitSystemSE.ini` 里的金件列表在首次加载时迁移一次。
+- **新增「金件」页**（m09191④）：独立数据文件 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`（与幻化 JSON 分开），左侧按 ESP 分组、右侧增删单件，支持「添加某个 ESP 的全部装备」与「按 FormID 添加单件」（输入的件必须真实存在）；旧 `SkyrimOutfitSystemNG.ini` 里的金件列表在首次加载时迁移一次。
 - **扫描只收正常服装**（m09426）：`PluginScan::IsOutfitArmor()` 要求记录有 EditorID、覆盖至少一个非 FX 槽位（FX = 显示掩码第 31 位 / CK 槽 61）、且至少一个 armor addon 有模型；同时把 FX 位从分桶里剔除，避免 FX 特效被当成服装槽。**金件不受这三条限制**：FX 件、没有 EditorID 的件都能加进金件列表。
 - **设置页新增「套装生成」段**：`[Customization] EspOutfitAutoFavorite`（默认打开）＝从 ESP 生成的套装自动收藏。
 
@@ -218,13 +218,13 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | 路径 | 说明 |
 | --- | --- |
 | SKSE/Plugins/OutfitSystemNG.dll | 插件本体（1.5.30 起文件名；插件身份仍是 SkyrimOutfitSystemNG，旧名不得留在 Data 里） |
-| SKSE/Plugins/SkyrimOutfitSystemSE.ini | 默认配置（缺失时自动使用随包默认值） |
+| SKSE/Plugins/SkyrimOutfitSystemNG.ini | 默认配置（缺失时自动使用随包默认值） |
 | interface/translations/SkyrimOutfitSystemNG_english.txt | **可编辑翻译文件（英文，248 条，UTF-16LE，29,016 字节）**，见 `docs/I18N.md` |
 | interface/translations/SkyrimOutfitSystemNG_chinese.txt | **可编辑翻译文件（中文，248 条，UTF-16LE，21,530 字节）** |
 | Scripts/*.pex（**6 个**） | 快捷槽、战斗侦测、自动切换、快捷槽管理、MCM 空壳、**SkyrimOutfitSystemNativeFuncs** |
 | Scripts/Source/*.psc（6 个） | 对应源码，其中 SkyrimOutfitSystemNativeFuncs.psc 含 **66** 个原生函数声明 |
 | SkyrimOutfitSystem.esp | 原版 ESP（法术 / 战斗侦测 / quest 绑定） |
-| interface/translations/skyrimoutfitsystem_english.txt | 翻译 |
+| interface/translations/SkyrimOutfitSystemNG_english.txt | 翻译 |
 | docs/ | 10 篇维护文档（1.4.0 新增 I18N.md） |
 | README.md / LICENSE.md | 使用说明与许可 |
 | SHA256SUMS.txt | 逐文件哈希 |
@@ -1550,7 +1550,7 @@ if (!OnGameThread()) {
 2. **`src/core/PluginScan.h/.cpp`（新）**：只读的加载顺序视图。`LoadedPlugins()` 先列普通插件（`GetLoadedMods()` + `GetLoadedModCount()`）再列 light 插件（`GetLoadedLightMods()` + `GetLoadedLightModCount()`），`order` 递增；护甲用 `GetFormArray(RE::FormType::Armor)` 按 `OwningPlugin()`（`TESForm::GetFile(0)->GetFilename()`）归组。只有 `Invalidate()` 会丢缓存。
 3. **`PluginScan::IsOutfitArmor()`（本版新增，m09426 的落地点）**：三条同时满足才算服装 —— ①`GetFormEditorID()` 非空（无名记录是补丁占位，列出来也没法认）；②`GetSlotMask().underlying() & ~(1u << 31)` 非零（只覆盖 FX 槽的记录是特效，不是衣服）；③`armorAddons` 里至少一个 addon 的 `bipedModels[SEXES::kMale].GetModel()` 或 `bipedModel1stPersons[SEXES::kMale].GetModel()` 非空（没有模型就没有东西可画）。`PluginsWithArmor()` 同时给出 `armors`（全量槽位记录）与 `outfitArmors`（通过上面三条的数量），幻化页用后者、金件页用前者。
 4. **`src/core/EspOutfits.h/.cpp`（新）**：`GenerateFromPlugin()` 先用 `IsOutfitArmor()` 过滤，被排除的记录计入 `notClothing` 并在结果行里说明；分桶时 `mask & ~kFxBit`，FX 位不进任何槽；按 32 槽分桶、每桶第 i 件进第 i 套（不足时复用第 0 件），变体上限 32；同名套装原地覆盖（`erase_all_armors()` + `insert_armor()` + 清逐槽策略 + `set_blanket_slot_policy_c("XXXO")`），不存在则 `create_outfit_preset()`。生成后 `FocusOutfitInList()` + 刷新全部外观。
-5. **`src/core/GoldenItems.h/.cpp`（新）**：金件独立存储 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`（`{"version":1,"groups":[{"plugin":…,"items":["000800",…]}]}`），读写走不可变快照，皮肤钩子随时可查；`Settings::IsGoldenItem()` 委托 `Golden::IsGolden()`，`Outfit.cpp` 的贴件判断逻辑未改。`AddLocal()` 先用 `PluginScan::ResolveArmor()` 验证记录真实存在（要求槽位掩码非零）；`AddAllFromPlugin()` **不做服装过滤**（m09426 的「金件放开」）。旧 `SkyrimOutfitSystemSE.ini` 的 `goldenItems` 在 kDataLoaded 时一次性 `ApplyLegacyEntries()` 后清空，并写 `[Compatibility] GoldenItemsMigrated`。
+5. **`src/core/GoldenItems.h/.cpp`（新）**：金件独立存储 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`（`{"version":1,"groups":[{"plugin":…,"items":["000800",…]}]}`），读写走不可变快照，皮肤钩子随时可查；`Settings::IsGoldenItem()` 委托 `Golden::IsGolden()`，`Outfit.cpp` 的贴件判断逻辑未改。`AddLocal()` 先用 `PluginScan::ResolveArmor()` 验证记录真实存在（要求槽位掩码非零）；`AddAllFromPlugin()` **不做服装过滤**（m09426 的「金件放开」）。旧 `SkyrimOutfitSystemNG.ini` 的 `goldenItems` 在 kDataLoaded 时一次性 `ApplyLegacyEntries()` 后清空，并写 `[Compatibility] GoldenItemsMigrated`。
 6. **菜单**：幻化页底部新增「从 ESP 生成套装」块（ESP 列表倒序、搜索框、`Mark generated outfits as favourites` 勾选、生成结果行）；新增「金件」页（`RenderGolden()`，左列表右编辑、导出/导入按钮、按 FormID 添加）；设置页新增「套装生成」段放同一个自动收藏开关。全部文案走 `I18n::T()`，中文侧同步。
 
 ### 新日志（排查用）
@@ -1679,7 +1679,7 @@ if (!OnGameThread()) {
 
 - `Unhandled exception at 0x7FF88FC3933A KERNELBASE.dll+00C933A`（`nop [rax+rax*1], eax`），`Exception Flags 0x00000081`，`Exception Thread ID 16272`，`Process Uptime 00:08:39`，Skyrim SSE v1.5.97。
 - `PROBABLE CALL STACK` 前 6 帧全在 `OutfitSystemNG.dll`（`+011678F` ← `+0111422` ← `+0002BA0` ← `+0091885` ← `+008C164`），第 7 帧才进 `SKSEMenuFramework.dll+0110402 UI.cpp:1585 UI::RenderMenuWindow`。
-- **关键**：`[RSP+188]` = `(char*) "vector too long"`、`[RSP+48]` = `(std::length_error*)`、`[RSP+2B0]` = `D:\Skyrim-dev\src\SkyrimOutfitSystemSE-NG\src\cpp\MenuUI.cpp`、`[RSP+2C0]` = `void __cdecl SOS::Menu::`anonymous-namespace'::RenderOutfits(void)`。异常来自 C++ 标准库的 `std::_Xlength_error`，不是引擎访问违例。
+- **关键**：`[RSP+188]` = `(char*) "vector too long"`、`[RSP+48]` = `(std::length_error*)`、`[RSP+2B0]` = `D:\Skyrim-dev\src\SkyrimOutfitSystemNG\src\cpp\MenuUI.cpp`、`[RSP+2C0]` = `void __cdecl SOS::Menu::`anonymous-namespace'::RenderOutfits(void)`。异常来自 C++ 标准库的 `std::_Xlength_error`，不是引擎访问违例。
 - 没有 .pdb，用自写 PE 解析对位：`.pdata` 4,738 个 `RUNTIME_FUNCTION`；`0x8C164` 落在函数 `0x8B640..0x8DA34`（`+0xB24`）= `RenderOutfits`；`0x11678F` 落在 `0x1166F8..0x11679F`（`+0x97`）；`0x2BA0` 所在小函数里存着字面量 `vector too long`（即 `std::_Xlength_error` 的抛出点）；`0x8C15F` 处是 `call 0x91740`（`std::vector` 的 assign 实现）。
 - 游戏日志末行正是 `13:13:54.409827 MenuUI.cpp:962: Outfits: deleted 'xxOK-Aniimo-Leisurely time': yes.` —— 删除成功、紧接着就崩在同一个渲染函数里。
 
@@ -2006,7 +2006,7 @@ ImGui 的点击判定要求**按下**与**松开**落在同一个控件 id 上�
 - **1.5.39 的三项新功能（逐槽策略按套装独立 / 从 ESP 生成套装 / 金件页）全部未实机验证**：本机没有游戏，静态侧只有 `BUILD_EXIT=0`（0 error / 0 warning）与守卫测试 `tests/esp_outfits_filter.ps1` 等 7 项通过。菜单交互、ESP 扫描结果、生成出的套装外观都还没人看过。
 - **从 ESP 生成的套装只按「每槽第 i 件配成第 i 套」拼装**：同一个 ESP 里某槽有 4 件、另一槽只有 1 件时，会生成 4 套且后 3 套复用那 1 件；变体上限 32 是硬编码。想要精确搭配需要手动改套装。
 - **服装过滤是三条硬判据**（有 EditorID + 至少一个非 FX 槽位 + 至少一个 armor addon 有模型），仍可能漏掉特例：只挂了 `bipedModels[kFemale]` 而男性槽为空的 addon（判据里同时看 `bipedModels[kMale]` 与 `bipedModel1stPersons[kMale]`，通常能覆盖）；用脚本在运行时动态生成、没有 EditorID 的护甲会被当成「非服装」跳过。**金件不受此限**。
-- **金件数据换了存储位置**（`Data\SKSE\Plugins\OutfitSystemGoldenItems.json`）：旧 `SkyrimOutfitSystemSE.ini` 的 `goldenItems` 只在首次加载时迁移一次并写 `[Compatibility] GoldenItemsMigrated`；若之后又手工往 ini 里加金件，不会再被读。
+- **金件数据换了存储位置**（`Data\SKSE\Plugins\OutfitSystemGoldenItems.json`）：旧 `SkyrimOutfitSystemNG.ini` 的 `goldenItems` 只在首次加载时迁移一次并写 `[Compatibility] GoldenItemsMigrated`；若之后又手工往 ini 里加金件，不会再被读。
 - SMP 重置依赖 Faster HDT-SMP 的 Papyrus 静态函数 `DynamicHDT.ResetPhysics`；没装 FSMP 时开关无效但不报错。
 - SexLab / OStim 场景套装只对玩家生效（事件不带参与者列表；OStim 的 NPC 子线程不处理）。
 

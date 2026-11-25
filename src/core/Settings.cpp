@@ -20,16 +20,25 @@ namespace SOS
 		// where users expect to edit it. A copy in the SKSE log directory is also
 		// accepted so that a user can override the packaged defaults without
 		// touching their mod manager's files.
+		//
+		// The file used to be named after the upstream plugin. Both names are
+		// still read, and Save() renames the old one, so an existing install
+		// keeps its settings. The new name wins when both are present.
+		constexpr const char* kIniName = "SkyrimOutfitSystemNG.ini";
+		constexpr const char* kLegacyIniName = "SkyrimOutfitSystemSE.ini";
+
 		std::vector<std::filesystem::path> SettingsPaths()
 		{
 			std::vector<std::filesystem::path> paths;
 			std::error_code ec;
 			auto runtime = std::filesystem::current_path(ec);
 			if (!ec) {
-				paths.push_back(runtime / "Data" / "SKSE" / "Plugins" / "SkyrimOutfitSystemSE.ini");
+				paths.push_back(runtime / "Data" / "SKSE" / "Plugins" / kIniName);
+				paths.push_back(runtime / "Data" / "SKSE" / "Plugins" / kLegacyIniName);
 			}
 			if (auto dir = SKSE::log::log_directory()) {
-				paths.push_back(*dir / "SkyrimOutfitSystemSE.ini");
+				paths.push_back(*dir / kIniName);
+				paths.push_back(*dir / kLegacyIniName);
 			}
 			return paths;
 		}
@@ -77,6 +86,9 @@ namespace SOS
 				break;
 			}
 			SKSE::log::warn("Settings: failed to parse {}; trying the next location.", candidate.string());
+		}
+		if (loaded && path.filename() == kLegacyIniName) {
+			SKSE::log::info("Settings: read {}; the next save renames it to {}.", path.filename().string(), kIniName);
 		}
 		if (!loaded) {
 			SKSE::log::debug("Settings: no readable ini (looked at {} locations); using defaults.", candidates.size());
@@ -186,6 +198,22 @@ namespace SOS
 				return;
 			}
 			target = candidates.front();
+		}
+
+		// Upgrading from the old file name: rename in place once, so the user
+		// finds the settings where the menu says they are.
+		if (target.filename() == kLegacyIniName) {
+			auto renamed = target;
+			renamed.replace_filename(kIniName);
+			std::error_code renameError;
+			std::filesystem::rename(target, renamed, renameError);
+			if (renameError) {
+				SKSE::log::warn("Settings: could not rename {} to {} ({}); it keeps being used.",
+					target.string(), renamed.string(), renameError.message());
+			} else {
+				SKSE::log::info("Settings: {} has been renamed to {}.", target.filename().string(), kIniName);
+				target = renamed;
+			}
 		}
 
 		// Re-read first so that the comments of the packaged file survive.

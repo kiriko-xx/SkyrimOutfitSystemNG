@@ -8,7 +8,7 @@
 
 // Golden items ("金件") are the armour pieces the user wants to keep on top of
 // an outfit no matter which outfit is worn. They used to live as a flat
-// plugin:localid list in SkyrimOutfitSystemSE.ini; they now have their own
+// plugin:localid list in SkyrimOutfitSystemNG.ini; they now have their own
 // store, grouped by the plugin that defines them, because the menu shows one
 // row per plugin.
 //

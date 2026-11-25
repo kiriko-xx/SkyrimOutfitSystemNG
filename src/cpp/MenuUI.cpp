@@ -1662,8 +1662,8 @@ namespace SOS::Menu
 				Features::ApplyQuickslotSpell();
 				Settings::Get().Save();
 			}
-			IG::TextDisabled(I18n::Tr("Version %s"), SKYRIMOUTFITSYSTEMSE_VERSION_VERSTRING);
-			IG::TextDisabled("Settings are stored in Data\\SKSE\\Plugins\\SkyrimOutfitSystemSE.ini");
+			IG::TextDisabled(I18n::Tr("Version %s"), SKYRIMOUTFITSYSTEMNG_VERSION_VERSTRING);
+			IG::TextDisabled("Settings are stored in Data\\SKSE\\Plugins\\SkyrimOutfitSystemNG.ini");
 
 			IG::SeparatorText(I18n::Tr("Outfit data"));
 			IG::TextDisabled("Data\\SKSE\\Plugins\\OutfitSystemData.json - the same file the original mod reads and writes.");
@@ -1786,44 +1786,102 @@ namespace SOS::Menu
 			IG::TextDisabled(I18n::Tr("The previous outfit is restored when the scene ends."));
 			if (IG::Button(I18n::TrId("Log slot report"))) {
 				Compat::Pad::Diagnose(RE::PlayerCharacter::GetSingleton());
-				RE::SendHUDMessage::ShowHUDMessage(I18n::T("Slot report written to SkyrimOutfitSystemNG.log", "槽位报告已写入 SkyrimOutfitSystemNG.log"), nullptr, false);
+				RE::SendHUDMessage::ShowHUDMessage(I18n::T("Slot report written to OutfitSystemNG.log", "槽位报告已写入 OutfitSystemNG.log"), nullptr, false);
 			}
 			IG::SameLine();
 			IG::TextDisabled(I18n::Tr("Lists every slot: what the outfit shows, what is really worn."));
 
 			IG::SeparatorText(I18n::Tr("Hotkeys"));
-			static char        hotkeyBuffer[64]{};
-			static char        quickHotkeyBuffer[64]{};
-			static std::string hotkeyShown;
-			static std::string quickHotkeyShown;
-			// Refresh the editable buffers when the ini value changes externally,
-			// but not while the user is typing into them.
-			if (hotkeyShown != settings.randomOutfitHotkey) {
-				std::snprintf(hotkeyBuffer, sizeof(hotkeyBuffer), "%s", settings.randomOutfitHotkey.c_str());
-				hotkeyShown = settings.randomOutfitHotkey;
-			}
-			if (quickHotkeyShown != settings.quickPickerHotkey) {
-				std::snprintf(quickHotkeyBuffer, sizeof(quickHotkeyBuffer), "%s", settings.quickPickerHotkey.c_str());
-				quickHotkeyShown = settings.quickPickerHotkey;
-			}
-			IG::SetNextItemWidth(200.0f);
-			if (IG::InputTextWithHint("##hotkey", "ctrl+shift+O", hotkeyBuffer, sizeof(hotkeyBuffer))) {
-				settings.randomOutfitHotkey = hotkeyBuffer;
-				hotkeyShown = settings.randomOutfitHotkey;
+
+			// Hotkeys are recorded, not typed: the button opens a small window, the
+			// input sink captures the next chord (up to four keys, keyboard or
+			// controller) and the result is written to the ini straight away.
+
+			// The row whose capture window is open; -1 when none.
+			static int g_hotkeyRow = -1;
+
+			auto applyHotkey = [&settings](Hotkeys::Slot a_slot, const std::string& a_text) {
+				switch (a_slot) {
+				case Hotkeys::Slot::kRandomOutfit:
+					settings.randomOutfitHotkey = a_text;
+					break;
+				case Hotkeys::Slot::kQuickPicker:
+					settings.quickPickerHotkey = a_text;
+					break;
+				case Hotkeys::Slot::kQuickPickerKey:
+					settings.quickPickerKey = a_text;
+					break;
+				}
+				Settings::Get().Save();
 				Hotkeys::Reload();
-				SaveSettingsThrottled();
+			};
+
+			{
+				Hotkeys::Slot capturedSlot{};
+				std::string   capturedText;
+				if (Hotkeys::TakeCaptureResult(capturedSlot, capturedText)) {
+					applyHotkey(capturedSlot, capturedText);
+					g_hotkeyRow = -1;
+				}
 			}
-			IG::SameLine();
-			IG::TextDisabled(I18n::Tr("random outfit - example: ctrl+shift+O, alt+F5"));
-			IG::SetNextItemWidth(200.0f);
-			if (IG::InputTextWithHint("##quickhotkey", "ctrl+shift+L", quickHotkeyBuffer, sizeof(quickHotkeyBuffer))) {
-				settings.quickPickerHotkey = quickHotkeyBuffer;
-				quickHotkeyShown = settings.quickPickerHotkey;
-				Hotkeys::Reload();
-				SaveSettingsThrottled();
+
+			auto hotkeyRow = [](Hotkeys::Slot a_slot, const char* a_label, const std::string& a_value, const char* a_hint) {
+				IG::TextUnformatted(a_label);
+				IG::SameLine(280.0f);
+				const auto shown = a_value.empty() ? std::string(I18n::T("Not set", "未设置")) : a_value;
+				const auto id = shown + "##hotkey" + std::to_string(static_cast<int>(a_slot));
+				if (IG::Button(id.c_str())) {
+					Hotkeys::BeginCapture(a_slot);
+					g_hotkeyRow = static_cast<int>(a_slot);
+				}
+				IG::SameLine();
+				IG::TextDisabled(a_hint);
+			};
+
+			hotkeyRow(Hotkeys::Slot::kRandomOutfit, I18n::Tr("Random outfit"), settings.randomOutfitHotkey,
+				I18n::Tr("click to record, e.g. ctrl+shift+O"));
+			hotkeyRow(Hotkeys::Slot::kQuickPicker, I18n::Tr("Quick picker"), settings.quickPickerHotkey,
+				I18n::Tr("click to record, e.g. ctrl+shift+L"));
+			hotkeyRow(Hotkeys::Slot::kQuickPickerKey, I18n::Tr("Change Outfit power key"), settings.quickPickerKey,
+				I18n::Tr("the hotkey of the power itself; this one skips its cast animation"));
+
+			// The capture window. The menu framework exposes no popup API, so this is a
+			// plain auto sized window centred on the screen.
+			if (Hotkeys::CaptureActive()) {
+				IG::SetNextWindowPos(IG::MainViewportCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+				IG::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Always);
+				bool open = true;
+				if (IG::BeginWindow(I18n::Tr("Set a hotkey"), &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize)) {
+					IG::TextWrapped(I18n::Tr("Press the keys you want to use: up to four held together, keyboard or controller."));
+					IG::Spacing();
+					const auto typed = Hotkeys::CaptureText();
+					if (typed.empty()) {
+						IG::TextDisabled(I18n::Tr("Waiting for input..."));
+					} else {
+						IG::TextUnformatted(typed.c_str());
+					}
+					if (Hotkeys::CaptureOverflowed()) {
+						IG::TextWrapped(I18n::Tr("Only the first four keys are used."));
+					}
+					IG::TextDisabled(I18n::Tr("Release every key when you are done; the chord is stored in the ini right away."));
+					IG::Spacing();
+					if (IG::Button(I18n::TrId("Cancel"))) {
+						Hotkeys::CancelCapture();
+						g_hotkeyRow = -1;
+					}
+					IG::SameLine();
+					if (IG::Button(I18n::TrId("Clear"))) {
+						applyHotkey(static_cast<Hotkeys::Slot>(g_hotkeyRow), std::string{});
+						Hotkeys::CancelCapture();
+						g_hotkeyRow = -1;
+					}
+				}
+				IG::EndWindow();
+				if (!open) {
+					Hotkeys::CancelCapture();
+					g_hotkeyRow = -1;
+				}
 			}
-			IG::SameLine();
-			IG::TextDisabled(I18n::Tr("quick picker window"));
 
 			IG::SeparatorText(I18n::Tr("Random outfit"));
 			if (IG::Checkbox(I18n::TrId("Favourites only"), &settings.randomFavoritesOnly)) {

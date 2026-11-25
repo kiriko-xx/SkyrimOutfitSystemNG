@@ -1132,7 +1132,7 @@ PAD 1.0.4 公开的 `ArmorTear` 函数（`TearArmor` / `GetDamagedWornArmor` / `
 
 ### 新增
 
-- **设置菜单补齐缺项**：Settings 页新增“快速选择窗口热键”输入框（写 `[RandomOutfit] QuickPickerHotkey`，默认 ctrl+shift+L），随机换装热键独立成行，并新增“The Change Outfit power rolls a random outfit”勾选框（对应 `QuickSlotRandom`）。菜单里的改动会**立即写回** `Data/SKSE/Plugins/SkyrimOutfitSystemSE.ini`（新增 `Settings::Save()`），重开游戏仍然保留；ini 里手写的注释不会被覆盖。
+- **设置菜单补齐缺项**：Settings 页新增“快速选择窗口热键”输入框（写 `[RandomOutfit] QuickPickerHotkey`，默认 ctrl+shift+L），随机换装热键独立成行，并新增“The Change Outfit power rolls a random outfit”勾选框（对应 `QuickSlotRandom`）。菜单里的改动会**立即写回** `Data/SKSE/Plugins/SkyrimOutfitSystemNG.ini`（新增 `Settings::Save()`），重开游戏仍然保留；ini 里手写的注释不会被覆盖。
 - **Papyrus API**：新增 `IsQuickSlotRandom()` / `SetQuickSlotRandom(bool)`，注册名 67 → **69**，`SkyrimOutfitSystemNativeFuncs` 声明同步更新。
 - **修掉一个重复注册**：`GetOutfitNameMaxLength` 在 1.0.2 之前被注册了两次（第一次没带 static 标志），Papyrus 侧可能拿到非静态版本；本版只保留正确的静态注册。
 - **[Debug] ExtraLogging 增加感知层取证**：开启后每次脚本查询都会打印 `Perception: GetWornForm(illusion|vanilla|bare skin)(<actor>) -> <armor|None>` 与 `Perception: WornHasKeyword(XXXXXXXX) -> true/false`。用它可以直接判断某个 mod 到底是走 Papyrus 还是走引擎条件。

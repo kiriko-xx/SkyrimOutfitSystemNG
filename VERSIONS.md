@@ -97,3 +97,8 @@ git commit -m "merge: bring 1.5.29 stale-clone narrow clear forward"
 **合并时绝对不能动的底线**：①`Hooks.cpp` 的注入壳与站点选择（`FindCallInFunctionOrOffset`）不要跨版本混用，1.5.17 与 1.5.22+ 的契约不同；②不得恢复任何 `ClearBipedPart` / `ClearSlots` 对 `BipedAnim::objects[bit]` 的清空（1.5.24 的 bug）；③`.tri` 目标必须无条件贴，不得再以拿到 skee 接口为前提（1.5.20–1.5.25 的 bug）；④模块名字段只能出现一个 DLL（`OutfitSystemNG.dll`）。
 
 **每次发布固定顺序**（避免台账自引用死循环）：改 `version.h`/`CMakeLists` → 构建 → 收尾 `dist/` → 重算 `SHA256SUMS.txt` → 打包并记录 zip 大小/哈希到本文件 → `git add -A` + `git commit` + `git tag vX.Y.Z`。不要在 commit 消息或本文件里写自身提交哈希。
+## v1.5.65（2026-11-25）
+- 热键改为点击后弹窗录制（1~4 键和弦，支持手柄），写入 ini 并即时生效。
+- 项目/源码目录、DLL 与 ini 统一改名为 SkyrimOutfitSystemNG（日志 OutfitSystemNG.log 与 DLL 同名）；旧 ini 首次保存自动改名。
+- dist/SkyrimOutfitSystem.esp 加 ESL flag 并精简为一条 Change Outfit 能力（MGEF/SPEL/QUST）；删掉 MCM/自动切换/战斗检测脚本与记录。
+- 成品包 SkyrimOutfitSystemNG-1.5.65.zip。

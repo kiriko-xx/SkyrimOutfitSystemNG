@@ -158,7 +158,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 | --- | --- |
 | 施放 “Change Outfit” 法术，ini `QuickSlotRandom = off` | 弹快速选择窗口 |
 | 同上，菜单里勾选 “The "Change Outfit" power rolls a random outfit” 后再施放 | 直接随机换装并弹 HUD 名称 |
-| 改完设置后看 `Data/SKSE/Plugins/SkyrimOutfitSystemSE.ini` | `[RandomOutfit] QuickSlotRandom = on`，且文件里的其它注释仍在（Save 是读回再写） |
+| 改完设置后看 `Data/SKSE/Plugins/SkyrimOutfitSystemNG.ini` | `[RandomOutfit] QuickSlotRandom = on`，且文件里的其它注释仍在（Save 是读回再写） |
 | 重开游戏再施放 | 行为保持上次的设置（说明写盘成功，不是只改内存） |
 | 菜单 Settings 页的快速选择窗口热键输入框 | 改成 alt+F7 后立刻生效，不需要重启；ini 里 `QuickPickerHotkey = alt+F7` |
 | 菜单里改随机换装热键 | 同上，写 `[RandomOutfit] Hotkey` |
@@ -274,7 +274,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 
 1. 按 Z（或热键）打开快选窗：标题必须是“天际幻化系统 - 快速选择”（英文 `Skyrim Outfit System - Quick picker`），**不能是 “Debug”**。
 2. 首次打开应居中、尺寸 640×800；拖动窗口到左上、缩放到 900×600，关闭后重新打开（不重启游戏）应回到 900×600 的左上位置。
-3. 重启游戏再打开：位置与尺寸仍是上次的（`DataSKSEPluginsSkyrimOutfitSystemSE.ini` 的 `[UI] QuickPickerX/Y/Width/Height` 已写入非 -1 值）。
+3. 重启游戏再打开：位置与尺寸仍是上次的（`DataSKSEPluginsSkyrimOutfitSystemNG.ini` 的 `[UI] QuickPickerX/Y/Width/Height` 已写入非 -1 值）。
 4. 直接改 ini：`QuickPickerX=200`、`QuickPickerY=150`、`QuickPickerWidth=700`、`QuickPickerHeight=500`，重启游戏打开 → 窗口应出现在 (200,150)、700×500。
 5. 日志应出现 `Quick picker: opening at 200,150 with 700x500 (restored from the ini).`；若是首次则是 `(centred)`。
 6. 日志出现 `ImGuiApi: N/M optional helpers resolved ...`：若 N<M，逐条看 `optional entry point ... is missing`，窗口仍应能打开（只有对应小功能缺失）。
@@ -825,7 +825,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 - **C1 服装过滤三条判据**：找一个含「只覆盖 FX 槽（CK 槽 61）」「没有 EditorID」「armor addon 没模型」记录的 ESP → 这些记录都不出现在生成的套装里；日志 `ESP outfits: …; N wearable of M slot record(s)).` 中 M > N。
 - **C2 金件不过滤**：同一个 ESP 用金件页「添加某个 ESP 的全部装备」→ **FX 件与无 EditorID 的件都能加进来**；右侧每条显示 `plugin:localid` 与 `[槽位 …]`（FX 件显示槽位 61）。
 - **D1 金件按 FormID 添加**：在选中组的输入框填 `000800`（或 `Plugin.esp:000800`）→ 添加成功并落盘；填不存在的 ID → 提示找不到记录；填非十六进制 → 提示 `That is not a hexadecimal form id.`。
-- **E1 数据分离与迁移**：改金件后 `OutfitSystemGoldenItems.json` 变化，但 `OutfitSystemData.json`（幻化）不应因金件改动被迫重写；旧 `SkyrimOutfitSystemSE.ini` 里若有 `goldenItems`，首次加载后应迁移进 JSON 且 ini 写 `GoldenItemsMigrated`。
+- **E1 数据分离与迁移**：改金件后 `OutfitSystemGoldenItems.json` 变化，但 `OutfitSystemData.json`（幻化）不应因金件改动被迫重写；旧 `SkyrimOutfitSystemNG.ini` 里若有 `goldenItems`，首次加载后应迁移进 JSON 且 ini 写 `GoldenItemsMigrated`。
 - **F1 基础幻化与场景套装回归**：菜单切普通套装 / 空套装仍按 1.5.25 表现（`Armor Refresh` + `attaching N outfit-only piece(s)`，身体槽不空）；进 OStim 场景仍按 1.5.34 表现（`came from thread … handed to the game thread` + `scene started`）。
 - **G1 静态守卫**：`tests/esp_outfits_filter.ps1` 必须通过 —— 套装生成走 `PluginScan::IsOutfitArmor()` 且分桶剔除 `kFxBit`，金件路径不调用 `IsOutfitArmor()`。
 

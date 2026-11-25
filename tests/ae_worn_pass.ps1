@@ -78,7 +78,7 @@ Assert-Contains $drainBlock '::OutfitSystem::refreshArmorFor(actor);' 'the defer
 Assert-Contains $drainBlock 'Custom(actor, nullptr);' 'the external fill stays as the fallback without an in-pass hook'
 
 $version = Read-RepoFile 'src/cpp/include/version.h'
-if ($version -match 'SKYRIMOUTFITSYSTEMSE_VERSION_PATCH\s+(\d+)') {
+if ($version -match 'SKYRIMOUTFITSYSTEMNG_VERSION_PATCH\s+(\d+)') {
     $patch = [int]$Matches[1]
     if ($patch -lt 61) {
         Write-Output "FAIL the worn visitor entry hook arrived in 1.5.61 (found 1.5.$patch)"

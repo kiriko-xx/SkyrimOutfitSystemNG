@@ -10,7 +10,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 工程 | `D:/Skyrim-dev/src/SkyrimOutfitSystemSE-NG`（git 仓库） |
+| 工程 | `D:/Skyrim-dev/src/SkyrimOutfitSystemNG`（git 仓库） |
 | 发布线 | `main` = **v1.5.56**（本次一次性收尾 1.5.47–1.5.56 全部测试分支）；上一个发布 tag 是 `v1.5.34` |
 | 产物 DLL | `dist/SKSE/Plugins/OutfitSystemNG.dll` 2,207,232 B / sha256 `42dcf428d3035e18852be3ba409f59f1980319e5d5fff7e14767b5501c4c2a47` / FileVersion 1.5.56.0 |
 | dist | 31 文件 / 3,264,062 B，`dist/SHA256SUMS.txt` 30 条逐条通过 |
@@ -129,7 +129,7 @@
 ## 7. 构建 / 测试 / 打包 SOP（照抄）
 
 ```
-cd D:/Skyrim-dev/src/SkyrimOutfitSystemSE-NG
+cd D:/Skyrim-dev/src/SkyrimOutfitSystemNG
 cmd /c D:/Skyrim-dev/build/build_1_5_56.bat      # MSBuild 直编；set 环境变量块必须照抄上一版（缺 SystemRoot/ProgramData/ALLUSERSPROFILE/PUBLIC/PATH/TEMP/TMP/USERPROFILE/APPDATA/VCPKG_ROOT 任一就 MSB4018 + FileTracker 崩）
 ```
 - 版本号两处：`src/cpp/include/version.h` 的 SKYRIMOUTFITSYSTEMSE_VERSION_PATCH；`CMakeLists.txt` 的 `project(SkyrimOutfitSystemNG VERSION 1.5.xx)`。

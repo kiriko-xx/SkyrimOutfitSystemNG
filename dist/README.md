@@ -8,7 +8,7 @@
 
 本版把 1.5.47–1.5.55 的开发线一次性收尾发布（1.5.54 / 1.5.55 只出过测试包）。
 
-- **Z 键即时打开快速选择**：以前按 Z 要等「Change Outfit」这个能力的施法动画放完，窗口才出来，手感像有冷却。现在按 Z **当帧**就弹出快速选择窗口，同一个键 0.5 秒内只开一次。配置在 `Data\SKSE\Plugins\SkyrimOutfitSystemSE.ini` 的 `[RandomOutfit]` 段：
+- **Z 键即时打开快速选择**：以前按 Z 要等「Change Outfit」这个能力的施法动画放完，窗口才出来，手感像有冷却。现在按 Z **当帧**就弹出快速选择窗口，同一个键 0.5 秒内只开一次。配置在 `Data\SKSE\Plugins\SkyrimOutfitSystemNG.ini` 的 `[RandomOutfit]` 段：
   `QuickPickerKey = Z`（留空即关闭；`QuickSlotRandom = on` 时按键不做任何事，随机换装仍由能力本身负责，避免抽两次）；暂停类菜单（背包 / 地图 / 控制台）打开时不会触发。按键本身不拦截事件，能力照常施法，只是它的开窗请求发现窗口已开就忽略，不会开两次。
 - **日志瘦身**：没开 `[Debug] ExtraLogging` 时，日志里每张 ESP 只剩一行摘要，例如 `ESP outfits: preview [[SSE] Personal Pack vol.2.esp] candidates=30 pending=0 filtered=0 capped=false reason=-`；以前那种逐件 `input [...]`、逐预设 `candidate [...]` 的刷屏只在开了 `ExtraLogging` 才出现。摘要行现在还带「待判断原因」计数，一眼能看出为什么有件没进预设。
 - **中文界面不再夹英文**：内置词典扩到 341 条，并重写了随包的 `Data\interface\translations\SkyrimOutfitSystemNG_english.txt` / `_chinese.txt`（各 341 行）。批量删除工具栏、ESP 预览、编辑器里的「从 ESP 添加单个部件」、设置页的提示全部有译文；这两份 txt 也可以直接改（编码 UTF-16LE，分隔符是 TAB），改完在设置里点 `Reload the language files` 生效。
@@ -75,7 +75,7 @@
 - **逐槽策略编辑器只对被选中的套装展开**（m09191②）：旧实现是一个全局布尔，勾一次就让所有套装的策略面板一起展开；现在展开状态按套装名保存在 `MenuOutfitEditor.cpp` 的 `std::unordered_set<std::string> g_slotPolicyOpen` 里。JSON 仍是每套自己的 `slotPolicy` / `slotPolicies`，导入导出格式不变。
 - **新增「从 ESP 生成套装」**（m09191③）：幻化页底部「Choose a plugin...」列出按加载顺序倒序排列的 ESP，选中后扫描该 ESP 的护甲生成套装，默认名 = ESP 名称；同槽位多件拆成 `ESP名称_1`、`ESP名称_2` …；槽位策略统一「需要已装备（槽位有装备时才显示幻化）」；生成后左侧列表焦点跳到第一套生成的套装；变体上限 32。设置页与生成块里都有「生成的套装自动收藏」开关（`[Customization] EspOutfitAutoFavorite`，默认打开）。
 - **扫描只收正常服装**（m09426）：`PluginScan::IsOutfitArmor()` 要求 ①有 EditorID、②至少覆盖一个非 FX 槽位（FX = 掩码第 31 位 / CK 槽 61）、③至少一个 armor addon 有模型；分桶时 `mask & ~kFxBit`，FX 位不进任何槽。被排除的记录数量会显示在 ESP 列表与生成结果里。
-- **新增「金件」页**（m09191④）：数据存 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`（与幻化 JSON 分开），左侧按 ESP 分组、右侧增删单件，支持「添加某个 ESP 的全部装备」与「按 FormID 添加单件」（`000800` 或 `Plugin.esp:000800`，必须真实存在）。**金件不筛选**：FX 特效、没有 EditorID 的件都能加（m09426）。旧 `SkyrimOutfitSystemSE.ini` 的 `goldenItems` 首次加载时迁移一次。
+- **新增「金件」页**（m09191④）：数据存 `Data\SKSE\Plugins\OutfitSystemGoldenItems.json`（与幻化 JSON 分开），左侧按 ESP 分组、右侧增删单件，支持「添加某个 ESP 的全部装备」与「按 FormID 添加单件」（`000800` 或 `Plugin.esp:000800`，必须真实存在）。**金件不筛选**：FX 特效、没有 EditorID 的件都能加（m09426）。旧 `SkyrimOutfitSystemNG.ini` 的 `goldenItems` 首次加载时迁移一次。
 - **未验证**：本机没有游戏。静态侧 `BUILD_EXIT=0`（0 error / 0 warning，DLL `OutfitSystemNG.dll` 2,030,592 B / `1.5.39.0`）+ 守卫测试 `tests/esp_outfits_filter.ps1` 等 7 项通过；菜单交互与生成结果**全部未实机验证**。详见 `docs/DELIVERY.md` §4.63 与 `docs/TESTING.md` §3.47。
 
 ## 1.5.34 最新说明（2026-11-18，历史）
@@ -169,7 +169,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 - Papyrus API（SkyrimOutfitSystemNativeFuncs）与原版命名一一对应。
 
 ### 本移植新增
-- **设置菜单改用 SKSE Menu Framework**（Quick picker / Outfits / Actors / Settings 四页），不再依赖 SkyUI MCM；旧 MCM 脚本 SkyOutSysMCM 保留为空壳只为兼容旧存档 quest 绑定。原版 MCM 的细节功能已逐条搬到菜单里（含套装编辑器：从背包/穿戴/FormID/全表搜索添加护甲、槽位冲突确认、32 槽逐槽策略、blanket 策略），对照表见 `docs/MCM_PARITY.md`。Settings 页可直接改两个热键、随机换装的过滤条件、法术行为、兼容开关与调试日志，**改动立即写回 `Data/SKSE/Plugins/SkyrimOutfitSystemSE.ini`**。
+- **设置菜单改用 SKSE Menu Framework**（Quick picker / Outfits / Actors / Settings 四页），不再依赖 SkyUI MCM；旧 MCM 脚本 SkyOutSysMCM 保留为空壳只为兼容旧存档 quest 绑定。原版 MCM 的细节功能已逐条搬到菜单里（含套装编辑器：从背包/穿戴/FormID/全表搜索添加护甲、槽位冲突确认、32 槽逐槽策略、blanket 策略），对照表见 `docs/MCM_PARITY.md`。Settings 页可直接改两个热键、随机换装的过滤条件、法术行为、兼容开关与调试日志，**改动立即写回 `Data/SKSE/Plugins/SkyrimOutfitSystemNG.ini`**。
 - **1000+ 套装浏览**：名字搜索、仅收藏过滤、分页（每页 5–500 可调）、双击应用、行内收藏/删除/重命名。
 - **随机换装**：默认 Ctrl+Shift+O，可只从收藏挑、可排除当前套装；菜单里也有 “Roll now”。
 - **定点兼容：Procedural Armor Damage（PAD）**：不做任何补丁。PAD 靠“背包里真实穿着（ExtraWorn）+ 场景里找到那件护甲的模型”判定可撕件；本插件换上幻化外观后会如实把真实护甲写回 biped 记录，所以 PAD 的门禁照常通过，撕的是你**看得见**的那层 mesh，损伤记在真实护甲上（符合“数值仍按真实护甲”的设定）。**没有真实护甲打底的槽位 PAD 永远撕不到**（背包里没有那件护甲，它无处记损伤）——此时日志会打一行 `PAD compatibility: <actor> shows pieces over slot mask 0x… with no real armour underneath`，排障时点 Settings → Mod compatibility 的 **Log slot report** 按钮，日志会逐槽列出「幻化显示什么 / 真实穿着什么」。注意 PAD 自己的 “Tracked armors” 页只列**已经受过伤**的护甲副本，列表为空只说明还没撕过，不代表它没看到装备。
@@ -186,7 +186,7 @@ SKSE64 2.0.20 的 `RegisterListener(nullptr)` 只订阅注册当时已有的 sen
 
 ## 配置文件
 
-Data/SKSE/Plugins/SkyrimOutfitSystemSE.ini（缺失时用随包默认值，不覆盖用户修改）。读取顺序：先 Data/SKSE/Plugins 下这份，再 My Games/<game>/SKSE/SkyrimOutfitSystemSE.ini（可用于个人覆盖）：
+Data/SKSE/Plugins/SkyrimOutfitSystemNG.ini（缺失时用随包默认值，不覆盖用户修改）。读取顺序：先 Data/SKSE/Plugins 下这份，再 My Games/<game>/SKSE/SkyrimOutfitSystemNG.ini（可用于个人覆盖）：
 
 [Customization] NewOutfitDefaultBasePolicy = XXOO / NewOutfitSetDefaultSlotPolicies = on
 [Debug] ExtraLogging / InstallHooks
@@ -212,10 +212,10 @@ src/cpp/ 原版 C++ 层；src/core/ 取代 Rust crate 的 C++ 数据层；src/pa
 4. 1.0.2 必须整包覆盖：上一版漏打包了 SkyrimOutfitSystemNativeFuncs.pex，只换 DLL 不会恢复 Papyrus 原生函数；覆盖后旧存档里的套装与指派不受影响。
 5. 1.0.3 建议整包覆盖：脚本 SkyOutSysQuickslotEffect.pex 与 SkyrimOutfitSystemNativeFuncs.pex 都有改动（法术改为弹快速选择窗口、新增 IsQuickSlotRandom/SetQuickSlotRandom），只换 DLL 会导致法术行为与菜单设置对不上。
 6. 1.1.0 整包覆盖：感知功能（重绑 Actor.GetWornForm / WornHasKeyword）已移除，改为 PAD / AND 定点兼容；`IsPerceptionEnabled` / `SetPerceptionEnabled` / `GetPerceivedArmor` 三个 Papyrus 函数不再存在，ini 里的 `[Perception]` 段与 `InstallPerception` 也失效（改用 `[Compatibility] AdvancedNudityDetection` / `ProceduralArmorDamage`）。旧存档不受影响，套装与指派照常读取。
-7. 1.2.0 建议整包覆盖（脚本未变，只需换 DLL 与 ini）：新增菜单语言切换与 PAD 槽位诊断，`SkyrimOutfitSystemSE.ini` 多了 `[UI] Language` 段。
-8. 1.3.0 建议整包覆盖：SMF 菜单补齐原版 MCM 的全部细节功能（套装编辑器、Apply to 目标选择、附近角色添加、快捷槽法术开关），`SkyrimOutfitSystemSE.ini` 多了 `[General] QuickslotsEnabled`；`SkyOutSysMCM.pex` 重新编译，补回了原版脚本对外提供的 `GetModVersion()` / `GetVersion()` / `GetQuickslotManager()` 三个接口（只有第三方脚本会调用它们，不装也能玩）。旧存档与 ESP 不需要换。
-9. **1.4.0** 整包覆盖：新增可编辑翻译文件 `SKSE/Plugins/SkyrimOutfitSystemNG_i18n.txt`（首次运行自动生成）；`SkyrimOutfitSystemSE.ini` 的 `[UI]` 段多了 `OutfitListWidth` / `OutfitPageSize` / `QuickPickerPageSize`；快速选择窗口改为自绘居中窗口并支持全键盘/手柄操作；`Custom()` 现在会把 `BIPOBJECT.item` 还原成真实护甲，PAD（Procedural Armor Damage）终于能撕到幻化外观。旧存档、ESP、Papyrus 脚本都不需要换。
-10. **1.4.1** 建议整包覆盖：翻译文件从 `SKSE/Plugins/SkyrimOutfitSystemNG_i18n.txt` 换成 `Data\interface\translations\SkyrimOutfitSystemNG_english.txt` / `_chinese.txt`（旧文件可以删掉，插件不再读它）；`SkyrimOutfitSystemSE.ini` 的 `[UI]` 段可能自动多出 `QuickPickerX/Y/Width/Height`（你拖动快速选择窗口后才会写）；修复了 v4 老存档槽位策略被误认成 `XXOO`（始终使用套装）的迁移 bug；Settings 页新增 **Export / Import outfits to OutfitSystemData.json**，结构与原版一致。旧存档、ESP、Papyrus 脚本不需要换。
+7. 1.2.0 建议整包覆盖（脚本未变，只需换 DLL 与 ini）：新增菜单语言切换与 PAD 槽位诊断，`SkyrimOutfitSystemNG.ini` 多了 `[UI] Language` 段。
+8. 1.3.0 建议整包覆盖：SMF 菜单补齐原版 MCM 的全部细节功能（套装编辑器、Apply to 目标选择、附近角色添加、快捷槽法术开关），`SkyrimOutfitSystemNG.ini` 多了 `[General] QuickslotsEnabled`；`SkyOutSysMCM.pex` 重新编译，补回了原版脚本对外提供的 `GetModVersion()` / `GetVersion()` / `GetQuickslotManager()` 三个接口（只有第三方脚本会调用它们，不装也能玩）。旧存档与 ESP 不需要换。
+9. **1.4.0** 整包覆盖：新增可编辑翻译文件 `SKSE/Plugins/SkyrimOutfitSystemNG_i18n.txt`（首次运行自动生成）；`SkyrimOutfitSystemNG.ini` 的 `[UI]` 段多了 `OutfitListWidth` / `OutfitPageSize` / `QuickPickerPageSize`；快速选择窗口改为自绘居中窗口并支持全键盘/手柄操作；`Custom()` 现在会把 `BIPOBJECT.item` 还原成真实护甲，PAD（Procedural Armor Damage）终于能撕到幻化外观。旧存档、ESP、Papyrus 脚本都不需要换。
+10. **1.4.1** 建议整包覆盖：翻译文件从 `SKSE/Plugins/SkyrimOutfitSystemNG_i18n.txt` 换成 `Data\interface\translations\SkyrimOutfitSystemNG_english.txt` / `_chinese.txt`（旧文件可以删掉，插件不再读它）；`SkyrimOutfitSystemNG.ini` 的 `[UI]` 段可能自动多出 `QuickPickerX/Y/Width/Height`（你拖动快速选择窗口后才会写）；修复了 v4 老存档槽位策略被误认成 `XXOO`（始终使用套装）的迁移 bug；Settings 页新增 **Export / Import outfits to OutfitSystemData.json**，结构与原版一致。旧存档、ESP、Papyrus 脚本不需要换。
 11. **1.4.2** 建议整包覆盖（脚本、ESP、旧存档都不用换）：快速选择窗口改为自己开窗 —— 位置/尺寸真正生效、标题不再显示 “Debug”、ini 里的 `QuickPickerX/Y/Width/Height` 有效；长按首次延迟 0.40→0.22 秒；`OutfitSystemData.json` 的策略字段现在认中文标签（“需要已装备（槽位有装备时才显示套装）”这类也能正确导入）；套装编辑器的槽位名带编号（`头部（槽位 0）`）；中文策略文案的“套装”改为“幻化”。同时请更新 `Data\interface\translations\SkyrimOutfitSystemNG_english.txt` / `_chinese.txt`（词典 224 条不变，但 7 条中文措辞改了）。
 12. **1.4.3** 建议整包覆盖（脚本、ESP、旧存档都不用换）：槽位编号从内部索引（`头部（槽位 0）`）改成 CK / xEdit / 游戏里显示的号（`头部（槽位 30）`、`盾牌（槽位 39）`、`FX（槽位 61）`），32 个槽位名按官方对照表重写（`项链`、`未知 (一般来说是 面部)` 等）；`OutfitSystemData.json` 导入导出全面对齐原版 v0.6.x —— `slotPolicy` / `slotPolicies` 都用数字枚举（`"slotPolicy": 2` = 需要已装备、`5` = 始终使用幻化、`8` = 穿透），导入仍兼容四字符码/翻译键/中英标签。请同时更新 `Data\interface\translations\` 下两份语言文件（槽位名改了）。
 
