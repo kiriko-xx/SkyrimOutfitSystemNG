@@ -67,8 +67,13 @@ namespace SOS::Hotkeys
 			bool valid() const { return !triggers.empty(); }
 		};
 
-		Chord      g_random;
-		Chord      g_quick;
+		// Every hotkey can be bound twice, once to the keyboard and once to the
+		// controller, and both bindings stay active at the same time. The game's
+		// own power key keeps a single chord: it mirrors the game binding.
+		Chord      g_randomKb;
+		Chord      g_randomPad;
+		Chord      g_quickKb;
+		Chord      g_quickPad;
 		Chord      g_quickKey;
 		std::mutex g_chordMutex;
 
@@ -432,6 +437,43 @@ namespace SOS::Hotkeys
 			return true;
 		}
 
+		// True when either of the two bindings of a hotkey is fully pressed.
+		bool AnyChordDown(const Chord& a_first, const Chord& a_second)
+		{
+			return (a_first.valid() && AllDown(a_first)) || (a_second.valid() && AllDown(a_second));
+		}
+
+		bool AnyChordBound(const Chord& a_first, const Chord& a_second)
+		{
+			return a_first.valid() || a_second.valid();
+		}
+
+		// Keeps only the triggers of one device. Used to fold a binding written by
+		// an older build (which kept both devices in a single ini value) into the
+		// two fields.
+		Chord OnlyDevice(const Chord& a_chord, Dev a_device)
+		{
+			Chord result;
+			for (const auto& trigger : a_chord.triggers) {
+				if (trigger.device == a_device) {
+					result.triggers.push_back(trigger);
+				}
+			}
+			return result;
+		}
+
+		void AppendChord(Chord& a_target, const Chord& a_source)
+		{
+			for (const auto& trigger : a_source.triggers) {
+				if (!Contains(a_target.triggers, trigger)) {
+					a_target.triggers.push_back(trigger);
+				}
+			}
+			if (a_target.triggers.size() > kMaxChordKeys) {
+				a_target.triggers.resize(kMaxChordKeys);
+			}
+		}
+
 		void Remember(const Trigger& a_trigger, bool a_down)
 		{
 			std::lock_guard lock(g_heldMutex);
@@ -521,30 +563,174 @@ namespace SOS::Hotkeys
 		}
 
 		// ---- capture ----------------------------------------------------
+		//
+		// Modelled on FreeClimb's recorder, which behaves the way the settings page
+		// is expected to: the recorder is a modal window, it accepts nothing until
+		// the player released whatever was held when it opened, it says why a
+		// combination was refused, and it gives up after a while.
+
+		enum class CaptureState : int
+		{
+			kIdle = 0,
+			kWaiting,
+			kArmed,
+			kCaptured
+		};
+
+		enum class CaptureProblem : int
+		{
+			kNone = 0,
+			kTooMany,
+			kInvalid,
+			kNotTogether
+		};
 
 		std::atomic<bool> g_capturing{ false };
 		std::atomic<int>  g_captureSlot{ -1 };
 		// 0 = keyboard, 1 = gamepad; see NGHotkeys::Input.
-		std::atomic<int> g_captureDevice{ 0 };
+		std::atomic<int>  g_captureDevice{ 0 };
+		std::atomic<int>  g_captureState{ 0 };
+		std::atomic<int>  g_captureProblem{ 0 };
 		std::mutex        g_captureMutex;
-		std::vector<Trigger> g_captureKeys;
+		std::vector<Trigger> g_captureCandidate;
 		std::vector<Trigger> g_captureDown;
-		bool        g_captureDone{ false };
-		std::uint64_t g_captureLastDownMs{ 0 };
-		// A single dropped read must not cut a chord short: the chord is only accepted
-		// once every captured key has been up for a moment (kCaptureSettleMs).
-		constexpr std::uint64_t kCaptureSettleMs = 150;
-		bool        g_captureOverflow{ false };
 		std::string g_captureResult;
 		int         g_captureResultSlot{ -1 };
+		int         g_captureResultDevice{ 0 };
+		std::uint64_t g_captureStartedMs{ 0 };
+		// A recording that is left open (the player walked away) must not keep the
+		// host from reading input for the rest of the session.
+		constexpr std::uint64_t kCaptureTimeoutMs = 20000;
+
+		Dev CaptureDeviceDev()
+		{
+			return g_captureDevice.load(std::memory_order_relaxed) == 0 ? Dev::kKeyboard : Dev::kGamepad;
+		}
+
+		// Esc and the controller's Back button end a recording without storing
+		// anything.
+		bool IsCaptureCancel(const Trigger& a_trigger)
+		{
+			if (a_trigger.device == Dev::kKeyboard) {
+				return a_trigger.code == 0x01;
+			}
+			return a_trigger.code == RE::BSWin32GamepadDevice::Keys::kBack;
+		}
+
+		// Refuses the chords the game cannot use, so a refused recording tells the
+		// user instead of silently storing a hotkey that never fires.
+		bool ValidCaptureChord(Dev a_device, const std::vector<Trigger>& a_triggers)
+		{
+			if (a_triggers.empty() || a_triggers.size() > kMaxChordKeys) {
+				return false;
+			}
+			bool ctrl = false;
+			bool alt = false;
+			bool tab = false;
+			bool f4 = false;
+			bool del = false;
+			for (const auto& trigger : a_triggers) {
+				if (trigger.device != a_device) {
+					return false;
+				}
+				if (a_device == Dev::kGamepad) {
+					using Keys = RE::BSWin32GamepadDevice::Keys;
+					// Back cancels a recording and Start belongs to the game menu.
+					if (trigger.code == Keys::kBack || trigger.code == Keys::kStart) {
+						return false;
+					}
+					continue;
+				}
+				if (trigger.code == 0x01) {  // Esc cancels a recording
+					return false;
+				}
+				ctrl = ctrl || trigger.code == kModCtrl;
+				alt = alt || trigger.code == kModAlt;
+				tab = tab || trigger.code == 0x0F;
+				f4 = f4 || trigger.code == 0x3E;
+				del = del || trigger.code == 0xD3;
+			}
+			if (a_device == Dev::kGamepad) {
+				return true;
+			}
+			// The combinations the game or Windows keeps for itself.
+			if (alt && (tab || f4)) {
+				return false;
+			}
+			return !(ctrl && alt && del);
+		}
+
+		void FailCaptureLocked(CaptureProblem a_problem)
+		{
+			g_captureProblem.store(static_cast<int>(a_problem), std::memory_order_relaxed);
+			g_captureCandidate.clear();
+			// Listen again once everything is released, so a refused chord can be
+			// retried without closing the window.
+			g_captureState.store(static_cast<int>(CaptureState::kWaiting), std::memory_order_relaxed);
+		}
 
 		void FinishCaptureLocked()
 		{
 			Chord chord;
-			chord.triggers = g_captureKeys;
+			chord.triggers = g_captureCandidate;
 			g_captureResult = Format(chord);
 			g_captureResultSlot = g_captureSlot.load(std::memory_order_relaxed);
-			g_captureDone = true;
+			g_captureResultDevice = g_captureDevice.load(std::memory_order_relaxed);
+			g_captureState.store(static_cast<int>(CaptureState::kCaptured), std::memory_order_relaxed);
+			SKSE::log::debug("Hotkeys: recorded '{}' for the {} device.", g_captureResult, g_captureResultDevice == 0 ? "keyboard" : "controller");
+		}
+
+		// Called after every change of g_captureDown. A chord has to be a set of
+		// keys that are all held at the same time, at most four of them, and it is
+		// accepted once they have all been released again.
+		void AdvanceCaptureLocked()
+		{
+			const auto state = static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed));
+			if (state != CaptureState::kWaiting && state != CaptureState::kArmed) {
+				return;
+			}
+			if (g_captureDown.empty()) {
+				if (state == CaptureState::kWaiting) {
+					g_captureState.store(static_cast<int>(CaptureState::kArmed), std::memory_order_relaxed);
+					return;
+				}
+				if (!g_captureCandidate.empty()) {
+					FinishCaptureLocked();
+				}
+				return;
+			}
+			if (state == CaptureState::kWaiting) {
+				return;  // wait for a neutral state first
+			}
+
+			bool added = false;
+			for (const auto& trigger : g_captureDown) {
+				if (!Contains(g_captureCandidate, trigger)) {
+					added = true;
+					break;
+				}
+			}
+			if (!added) {
+				return;
+			}
+			for (const auto& trigger : g_captureCandidate) {
+				if (!Contains(g_captureDown, trigger)) {
+					// A key of the chord was released while another one was
+					// pressed: those keys were never held together.
+					FailCaptureLocked(CaptureProblem::kNotTogether);
+					return;
+				}
+			}
+			if (g_captureDown.size() > kMaxChordKeys) {
+				FailCaptureLocked(CaptureProblem::kTooMany);
+				return;
+			}
+			if (!ValidCaptureChord(CaptureDeviceDev(), g_captureDown)) {
+				FailCaptureLocked(CaptureProblem::kInvalid);
+				return;
+			}
+			g_captureCandidate = g_captureDown;
+			g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
 		}
 
 		void FeedCapture(const Trigger& a_trigger, bool a_down)
@@ -552,43 +738,36 @@ namespace SOS::Hotkeys
 			// A recording that was started for one device ignores the other one, so
 			// a palm on the controller cannot put a button into a keyboard chord (and
 			// the keyboard cannot pollute a controller chord).
-			const auto wanted = g_captureDevice.load(std::memory_order_relaxed) == 0 ? Dev::kKeyboard : Dev::kGamepad;
-			if (a_trigger.device != wanted) {
+			if (a_trigger.device != CaptureDeviceDev()) {
 				return;
+			}
+			if (a_down && IsCaptureCancel(a_trigger)) {
+				return;  // the caller ends the recording
 			}
 			std::lock_guard lock(g_captureMutex);
 			if (a_down) {
-				g_captureLastDownMs = NowMs();
 				if (!Contains(g_captureDown, a_trigger)) {
 					g_captureDown.push_back(a_trigger);
 				}
-				if (!Contains(g_captureKeys, a_trigger)) {
-					if (g_captureKeys.size() < kMaxChordKeys) {
-						g_captureKeys.push_back(a_trigger);
-					} else {
-						g_captureOverflow = true;
-					}
-				}
-				return;
+			} else {
+				g_captureDown.erase(std::remove_if(g_captureDown.begin(), g_captureDown.end(), [&](const Trigger& t) { return Same(t, a_trigger); }), g_captureDown.end());
 			}
-
-			g_captureDown.erase(std::remove_if(g_captureDown.begin(), g_captureDown.end(), [&](const Trigger& t) { return Same(t, a_trigger); }), g_captureDown.end());
+			AdvanceCaptureLocked();
 		}
 
-		// Called once per frame while capturing: accepts the chord after every key has
-		// been released for kCaptureSettleMs, so a missed poll cannot truncate it.
-		void CheckCaptureSettle()
+		// Both paths (the input sink and the per-frame device poll) feed the same
+		// state machine, so a recording behaves the same with the game paused.
+		void CheckCaptureTimeout()
 		{
-			std::lock_guard lock(g_captureMutex);
-			if (g_captureDone || g_captureKeys.empty() || !g_captureDown.empty()) {
+			if (g_captureStartedMs == 0) {
 				return;
 			}
-			if (NowMs() - g_captureLastDownMs < kCaptureSettleMs) {
+			if (NowMs() - static_cast<std::int64_t>(g_captureStartedMs) < static_cast<std::int64_t>(kCaptureTimeoutMs)) {
 				return;
 			}
-			FinishCaptureLocked();
+			SKSE::log::debug("Hotkeys: the hotkey recording timed out; nothing was stored.");
+			CancelCapture();
 		}
-
 
 		// ---- polling -----------------------------------------------------------
 
@@ -846,7 +1025,8 @@ namespace SOS::Hotkeys
 			std::vector<Trigger>        now;
 			PollDevices(now);
 
-			const bool capturing = g_capturing.load(std::memory_order_relaxed);
+			const bool                 capturing = g_capturing.load(std::memory_order_relaxed);
+			const std::vector<Trigger> previous = last;
 			for (const auto& trigger : now) {
 				if (Contains(last, trigger)) {
 					continue;
@@ -870,25 +1050,31 @@ namespace SOS::Hotkeys
 			last = now;
 
 			if (capturing) {
+				// Only the moment the cancel key goes down ends the recording, so
+				// holding it does not kill the next attempt.
 				for (const auto& trigger : now) {
-					if (trigger.device == Dev::kKeyboard && trigger.code == 0x01) {
+					if (!Contains(previous, trigger) && trigger.device == CaptureDeviceDev() && IsCaptureCancel(trigger)) {
 						CancelCapture();
 						return;
 					}
 				}
-				CheckCaptureSettle();
+				CheckCaptureTimeout();
 			}
 
 			if (capturing || now.empty()) {
 				return;
 			}
 
-			Chord random;
-			Chord quick;
+			Chord randomKb;
+			Chord randomPad;
+			Chord quickKb;
+			Chord quickPad;
 			{
 				std::lock_guard lock(g_chordMutex);
-				random = g_random;
-				quick = g_quick;
+				randomKb = g_randomKb;
+				randomPad = g_randomPad;
+				quickKb = g_quickKb;
+				quickPad = g_quickPad;
 			}
 
 			const bool inputBlocked = CachedTextInputActive();
@@ -896,16 +1082,16 @@ namespace SOS::Hotkeys
 			const bool consoleOpen = ui && ui->IsMenuOpen(RE::Console::MENU_NAME);
 			const bool menuOpen = ui && ui->GameIsPaused();
 
-			if (random.valid()) {
-				if (!AllDown(random)) {
+			if (AnyChordBound(randomKb, randomPad)) {
+				if (!AnyChordDown(randomKb, randomPad)) {
 					g_latchedRandom = false;
 				} else if (!g_latchedRandom && !inputBlocked && !consoleOpen) {
 					g_latchedRandom = true;
 					FireRandomThrottled();
 				}
 			}
-			if (quick.valid()) {
-				if (!AllDown(quick)) {
+			if (AnyChordBound(quickKb, quickPad)) {
+				if (!AnyChordDown(quickKb, quickPad)) {
 					g_latchedQuick = false;
 				} else if (!g_latchedQuick && !inputBlocked && !consoleOpen) {
 					g_latchedQuick = true;
@@ -970,12 +1156,13 @@ namespace SOS::Hotkeys
 					}
 
 					if (capturing) {
-						// The capture window is modal. While it is open the events are
-						// swallowed so the framework menu does not navigate or activate
-						// items with the very keys the user is recording (a pad "A" used
-						// to both record and confirm, which is also why chords never
-						// came out longer than one button).
-						if (trigger.device == Dev::kKeyboard && trigger.code == 0x01) {
+						// The recorder is modal. While it is open every button event is
+						// taken out of the queue, so the framework menu cannot navigate
+						// or activate the entry that opened the recorder with the very
+						// keys being recorded (a pad "A" used to both record and
+						// confirm, which is also why chords never came out longer than
+						// one button).
+						if (down && trigger.device == CaptureDeviceDev() && IsCaptureCancel(trigger)) {
 							CancelCapture();
 							break;
 						}
@@ -992,16 +1179,20 @@ namespace SOS::Hotkeys
 						continue;
 					}
 
-					Chord random;
-					Chord quick;
+					Chord randomKb;
+					Chord randomPad;
+					Chord quickKb;
+					Chord quickPad;
 					{
 						std::lock_guard lock(g_chordMutex);
-						random = g_random;
-						quick = g_quick;
+						randomKb = g_randomKb;
+						randomPad = g_randomPad;
+						quickKb = g_quickKb;
+						quickPad = g_quickPad;
 					}
 
-					if (random.valid()) {
-						if (!AllDown(random)) {
+					if (AnyChordBound(randomKb, randomPad)) {
+						if (!AnyChordDown(randomKb, randomPad)) {
 							g_latchedRandom = false;
 						} else if (!g_latchedRandom && !inputBlocked && !consoleOpen) {
 							g_latchedRandom = true;
@@ -1009,8 +1200,8 @@ namespace SOS::Hotkeys
 						}
 					}
 
-					if (quick.valid()) {
-						if (!AllDown(quick)) {
+					if (AnyChordBound(quickKb, quickPad)) {
+						if (!AnyChordDown(quickKb, quickPad)) {
 							g_latchedQuick = false;
 						} else if (!g_latchedQuick && !inputBlocked && !consoleOpen) {
 							g_latchedQuick = true;
@@ -1031,9 +1222,6 @@ namespace SOS::Hotkeys
 					}
 
 					CheckPowerKey(inputBlocked, menuOpen || consoleOpen);
-				}
-				if (capturing) {
-					CheckCaptureSettle();
 				}
 				return swallow ? RE::BSEventNotifyControl::kStop : RE::BSEventNotifyControl::kContinue;
 			}
@@ -1094,13 +1282,27 @@ namespace SOS::Hotkeys
 	void Reload()
 	{
 		const auto& settings = Settings::Get();
-		const auto  random = Parse(settings.randomOutfitHotkey, "random outfit");
-		const auto  quick = Parse(settings.quickPickerHotkey, "quick picker");
+		const auto  randomAll = Parse(settings.randomOutfitHotkey, "random outfit");
+		const auto  randomPad = Parse(settings.randomOutfitGamepadHotkey, "random outfit (controller)");
+		const auto  quickAll = Parse(settings.quickPickerHotkey, "quick picker");
+		const auto  quickPad = Parse(settings.quickPickerGamepadHotkey, "quick picker (controller)");
 		const auto  quickKey = Parse(settings.quickPickerKey, "quickslot");
+
+		// An ini written by an older build kept both devices in one value. The
+		// keyboard half stays where it is and the controller half moves into its own
+		// field, so an upgrade never drops a binding.
+		const auto randomKb = OnlyDevice(randomAll, Dev::kKeyboard);
+		const auto quickKb = OnlyDevice(quickAll, Dev::kKeyboard);
+		auto       padRandom = randomPad;
+		auto       padQuick = quickPad;
+		AppendChord(padRandom, OnlyDevice(randomAll, Dev::kGamepad));
+		AppendChord(padQuick, OnlyDevice(quickAll, Dev::kGamepad));
 		{
 			std::lock_guard lock(g_chordMutex);
-			g_random = random;
-			g_quick = quick;
+			g_randomKb = randomKb;
+			g_randomPad = padRandom;
+			g_quickKb = quickKb;
+			g_quickPad = padQuick;
 			g_quickKey = quickKey;
 		}
 		ForgetAll();
@@ -1108,13 +1310,13 @@ namespace SOS::Hotkeys
 		g_latchedQuick = false;
 		g_latchedQuickKey = false;
 		g_lastQuickslotOpenMs.store(0, std::memory_order_relaxed);
-		if (random.valid()) {
-			SKSE::log::debug("Hotkeys: random outfit hotkey '{}' -> '{}'.", settings.randomOutfitHotkey, Format(random));
+		if (randomKb.valid() || padRandom.valid()) {
+			SKSE::log::debug("Hotkeys: random outfit hotkey keyboard '{}', controller '{}'.", Format(randomKb), Format(padRandom));
 		} else {
 			SKSE::log::debug("Hotkeys: random outfit hotkey is disabled.");
 		}
-		if (quick.valid()) {
-			SKSE::log::debug("Hotkeys: quick picker hotkey '{}' -> '{}'.", settings.quickPickerHotkey, Format(quick));
+		if (quickKb.valid() || padQuick.valid()) {
+			SKSE::log::debug("Hotkeys: quick picker hotkey keyboard '{}', controller '{}'.", Format(quickKb), Format(padQuick));
 		} else {
 			SKSE::log::debug("Hotkeys: quick picker hotkey is disabled.");
 		}
@@ -1135,34 +1337,50 @@ namespace SOS::Hotkeys
 
 	void BeginCapture(Slot a_slot, Input a_device)
 	{
-		g_captureDevice.store(a_device == Input::kGamepad ? 1 : 0, std::memory_order_relaxed);
+		// Snapshot the devices first: whatever is held right now (usually the button
+		// the player used to open the recorder) has to be waited out instead of
+		// becoming part of the chord.
+		std::vector<Trigger> held;
+		PollDevices(held);
+		const auto wanted = a_device == Input::kGamepad ? Dev::kGamepad : Dev::kKeyboard;
 		{
 			std::lock_guard lock(g_captureMutex);
-			g_captureKeys.clear();
+			g_captureDevice.store(wanted == Dev::kGamepad ? 1 : 0, std::memory_order_relaxed);
+			g_captureCandidate.clear();
 			g_captureDown.clear();
+			for (const auto& trigger : held) {
+				if (trigger.device == wanted) {
+					g_captureDown.push_back(trigger);
+				}
+			}
 			g_captureResult.clear();
 			g_captureResultSlot = -1;
-			g_captureDone = false;
-			g_captureOverflow = false;
-			g_captureLastDownMs = NowMs();
+			g_captureResultDevice = 0;
+			g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
+			g_captureState.store(static_cast<int>(CaptureState::kWaiting), std::memory_order_relaxed);
+			g_captureStartedMs = static_cast<std::uint64_t>(NowMs());
 		}
 		g_captureSlot.store(static_cast<int>(a_slot), std::memory_order_relaxed);
 		g_capturing.store(true, std::memory_order_relaxed);
 		// Whatever is held right now is not part of the new chord.
 		ForgetAll();
+		SKSE::log::debug("Hotkeys: recording the {} hotkey of slot {}; waiting for a neutral state.",
+			wanted == Dev::kGamepad ? "controller" : "keyboard", static_cast<int>(a_slot));
 	}
 
 	void CancelCapture()
 	{
 		g_capturing.store(false, std::memory_order_relaxed);
 		g_captureSlot.store(-1, std::memory_order_relaxed);
+		g_captureState.store(static_cast<int>(CaptureState::kIdle), std::memory_order_relaxed);
+		g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
 		std::lock_guard lock(g_captureMutex);
-		g_captureKeys.clear();
+		g_captureCandidate.clear();
 		g_captureDown.clear();
 		g_captureResult.clear();
 		g_captureResultSlot = -1;
-		g_captureDone = false;
-		g_captureOverflow = false;
+		g_captureResultDevice = 0;
+		g_captureStartedMs = 0;
 	}
 
 	bool CaptureActive()
@@ -1175,37 +1393,44 @@ namespace SOS::Hotkeys
 		return g_captureDevice.load(std::memory_order_relaxed) == 0 ? Input::kKeyboard : Input::kGamepad;
 	}
 
+	bool CaptureArmed()
+	{
+		return static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed)) == CaptureState::kArmed;
+	}
+
+	int CaptureProblem()
+	{
+		return g_captureProblem.load(std::memory_order_relaxed);
+	}
+
 	std::string CaptureText()
 	{
 		std::lock_guard lock(g_captureMutex);
-		if (g_captureKeys.empty()) {
+		if (g_captureCandidate.empty()) {
 			return {};
 		}
 		Chord chord;
-		chord.triggers = g_captureKeys;
+		chord.triggers = g_captureCandidate;
 		return Format(chord);
 	}
 
-	bool CaptureOverflowed()
+	bool TakeCaptureResult(Slot& a_slot, Input& a_device, std::string& a_text)
 	{
 		std::lock_guard lock(g_captureMutex);
-		return g_captureOverflow;
-	}
-
-	bool TakeCaptureResult(Slot& a_slot, std::string& a_text)
-	{
-		std::lock_guard lock(g_captureMutex);
-		if (!g_captureDone || g_captureResultSlot < 0) {
+		if (static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed)) != CaptureState::kCaptured || g_captureResultSlot < 0) {
 			return false;
 		}
 		a_slot = static_cast<Slot>(g_captureResultSlot);
+		a_device = g_captureResultDevice == 0 ? Input::kKeyboard : Input::kGamepad;
 		a_text = g_captureResult;
-		g_captureDone = false;
 		g_captureResult.clear();
 		g_captureResultSlot = -1;
-		g_captureKeys.clear();
+		g_captureResultDevice = 0;
+		g_captureCandidate.clear();
 		g_captureDown.clear();
-		g_captureOverflow = false;
+		g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
+		g_captureState.store(static_cast<int>(CaptureState::kIdle), std::memory_order_relaxed);
+		g_captureStartedMs = 0;
 		g_capturing.store(false, std::memory_order_relaxed);
 		g_captureSlot.store(-1, std::memory_order_relaxed);
 		return true;

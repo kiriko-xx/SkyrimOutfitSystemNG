@@ -106,6 +106,12 @@ namespace SOS::ImGuiApi
 			void (*ImGuiIO_ClearInputKeys)(ImGuiIO*);
 			// Raises the next window above the framework's own windows.
 			void (*SetNextWindowFocus)();
+			// Greys out and locks the page underneath a modal child: the recorder
+			// window owns the input while it is open, so everything below it must
+			// look (and be) out of reach.
+			void (*BeginDisabled)(bool);
+			void (*EndDisabled)();
+
 		};
 
 		// Optional cimgui item-flag helpers. They let the quick picker keep the
@@ -130,6 +136,9 @@ namespace SOS::ImGuiApi
 		bool hasInputSuppression{ false };
 		// True when a window can be raised above the framework's own windows.
 		bool hasWindowFocus{ false };
+		// True when the page under a modal window can be greyed out and locked.
+		bool hasDisabled{ false };
+
 	};
 
 	// The process-wide binding table. Every pointer is null until Bind() ran.
@@ -361,8 +370,29 @@ namespace SOS::IG
 		if (api.hasWindowFocus && api.extras.SetNextWindowFocus) { api.extras.SetNextWindowFocus(); }
 	}
 
+	// True when the host can grey out (and lock) everything drawn inside the
+	// disabled block. Without it the recorder window still works, the page
+	// underneath simply stays clickable.
+	inline bool DisabledReady()
+	{
+		return ImGuiApi::Get().hasDisabled;
+	}
+
+	inline void BeginDisabled(bool a_disabled)
+	{
+		const auto& api = ImGuiApi::Get();
+		if (api.hasDisabled && api.extras.BeginDisabled) { api.extras.BeginDisabled(a_disabled); }
+	}
+
+	inline void EndDisabled()
+	{
+		const auto& api = ImGuiApi::Get();
+		if (api.hasDisabled && api.extras.EndDisabled) { api.extras.EndDisabled(); }
+	}
+
 	// True when the host's ImGui can be told to stop accepting input.
 	inline bool InputSuppressionReady()
+
 	{
 		return ImGuiApi::Get().hasInputSuppression;
 	}

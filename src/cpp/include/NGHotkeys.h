@@ -5,10 +5,11 @@
 
 namespace SOS::Hotkeys
 {
-	// Installs the input sink. Every hotkey is a chord of 1 to 4 keyboard keys
-	// and/or controller buttons, parsed from the ini strings (for example
-	// "ctrl+shift+O" or "pad:LB+pad:RB"); an empty or unparsable value disables
-	// that hotkey.
+	// Installs the input sink. Every hotkey is a chord of 1 to 4 keyboard keys or
+	// of 1 to 4 controller buttons, parsed from the ini strings (for example
+	// "ctrl+shift+O" or "pad:lb+pad:rb"); an empty or unparsable value disables
+	// that binding. A hotkey can be bound to the keyboard and to the controller at
+	// the same time and both bindings fire.
 	bool Install();
 	void Reload();
 	// Called from the render thread every frame. Polls the keyboard and the
@@ -61,9 +62,16 @@ namespace SOS::Hotkeys
 	// Human readable text of what has been pressed so far ("ctrl+shift+O").
 	std::string CaptureText();
 
-	// True when the user pressed more keys than kMaxChordKeys while capturing.
-	bool CaptureOverflowed();
+	// True once every key that was held when the recording started has been
+	// released: only then is anything accepted, so the click that opened the
+	// recorder cannot end up in the chord.
+	bool CaptureArmed();
 
-	// Moves a finished capture into a_slot / a_text and ends the capture.
-	bool TakeCaptureResult(Slot& a_slot, std::string& a_text);
+	// 0 = none, 1 = too many keys at once, 2 = that combination cannot be used,
+	// 3 = the keys were not held together. Non-zero keeps the window open and
+	// tells the user what to change.
+	int CaptureProblem();
+
+	// Moves a finished capture into a_slot / a_device / a_text and ends it.
+	bool TakeCaptureResult(Slot& a_slot, Input& a_device, std::string& a_text);
 }

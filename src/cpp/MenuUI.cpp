@@ -1640,8 +1640,42 @@ namespace SOS::Menu
 			}
 		}
 
+		// Writes a recorded binding back into the ini and re-reads the chords. The
+		// keyboard and the controller keep separate values, so recording one never
+		// replaces the other.
+		void ApplyHotkeySetting(Hotkeys::Slot a_slot, Hotkeys::Input a_device, const std::string& a_text)
+		{
+			auto&      settings = Settings::Get();
+			const bool pad = a_device == Hotkeys::Input::kGamepad;
+			switch (a_slot) {
+			case Hotkeys::Slot::kRandomOutfit:
+				if (pad) {
+					settings.randomOutfitGamepadHotkey = a_text;
+				} else {
+					settings.randomOutfitHotkey = a_text;
+				}
+				break;
+			case Hotkeys::Slot::kQuickPicker:
+				if (pad) {
+					settings.quickPickerGamepadHotkey = a_text;
+				} else {
+					settings.quickPickerHotkey = a_text;
+				}
+				break;
+			case Hotkeys::Slot::kQuickPickerKey:
+				// Only reachable from an ini edited by hand: the page shows the key
+				// the game itself has bound to Shout/Power.
+				if (!pad) {
+					settings.quickPickerKey = a_text;
+				}
+				break;
+			}
+			Settings::Get().Save();
+			Hotkeys::Reload();
+		}
+
 		// ---- settings panel -------------------------------------------------
-		void RenderSettings()
+		void RenderSettingsBody()
 		{
 			FlushSettingsIfDue();
 			auto& settings = Settings::Get();
@@ -1793,76 +1827,50 @@ namespace SOS::Menu
 
 			IG::SeparatorText(I18n::Tr("Hotkeys"));
 
-			// Hotkeys are recorded, not typed. Every row has one button per device: a
-			// single shared recorder could not tell a controller button from a
-			// keyboard key, and the pad "A" that recorded a chord also confirmed the
-			// menu item under it.
+			// Hotkeys are recorded, not typed, and every row has one button per device:
+			// the keyboard chord and the controller chord are separate values that both
+			// fire. The recorder itself is a modal window (RenderHotkeyCapture) that
+			// locks this page while it is open.
 
-			// The row whose capture window is open; -1 when none.
-			static int g_hotkeyRow = -1;
-
-			auto applyHotkey = [&settings](Hotkeys::Slot a_slot, const std::string& a_text) {
-				switch (a_slot) {
-				case Hotkeys::Slot::kRandomOutfit:
-					settings.randomOutfitHotkey = a_text;
-					break;
-				case Hotkeys::Slot::kQuickPicker:
-					settings.quickPickerHotkey = a_text;
-					break;
-				case Hotkeys::Slot::kQuickPickerKey:
-					settings.quickPickerKey = a_text;
-					break;
-				}
-				Settings::Get().Save();
-				Hotkeys::Reload();
-			};
-
-			{
-				Hotkeys::Slot capturedSlot{};
-				std::string   capturedText;
-				if (Hotkeys::TakeCaptureResult(capturedSlot, capturedText)) {
-					applyHotkey(capturedSlot, capturedText);
-					g_hotkeyRow = -1;
-				}
-			}
-
-			auto hotkeyRow = [&applyHotkey](Hotkeys::Slot a_slot, const char* a_label, const std::string& a_value) {
-				// Two rows carry the same label in translation, so the ids come from
-				// the slot rather than from the button text.
+			auto hotkeyRow = [](Hotkeys::Slot a_slot, const char* a_label, const std::string& a_keyboard, const std::string& a_gamepad) {
+				// Two rows carry the same label in translation, so the ids come from the
+				// slot and the device instead of the button text.
 				IG::PushID(static_cast<int>(a_slot));
 				IG::TextUnformatted(a_label);
-				IG::SameLine(280.0f);
-				const auto shown = a_value.empty() ? std::string(I18n::T("Not set", "未设置")) : a_value;
-				IG::TextUnformatted(shown.c_str());
-				IG::SameLine();
-				if (g_hotkeyRow == static_cast<int>(a_slot)) {
-					IG::TextDisabled(I18n::Tr("recording..."));
-				} else {
-					if (IG::Button(I18n::TrId("Record keyboard"))) {
-						Hotkeys::BeginCapture(a_slot, Hotkeys::Input::kKeyboard);
-						g_hotkeyRow = static_cast<int>(a_slot);
-					}
-					IG::SameLine();
-					if (IG::Button(I18n::TrId("Record controller"))) {
-						Hotkeys::BeginCapture(a_slot, Hotkeys::Input::kGamepad);
-						g_hotkeyRow = static_cast<int>(a_slot);
-					}
-					IG::SameLine();
-					if (IG::SmallButton(I18n::TrId("Clear"))) {
-						applyHotkey(a_slot, std::string{});
-					}
+				IG::SameLine(240.0f);
+				const auto notSet = std::string(I18n::T("Not set", "未设置"));
+				const auto keyboard = a_keyboard.empty() ? notSet : a_keyboard;
+				IG::PushID(1);
+				if (IG::Button(keyboard.c_str())) {
+					Hotkeys::BeginCapture(a_slot, Hotkeys::Input::kKeyboard);
 				}
+				IG::PopID();
+				IG::SameLine();
+				const auto gamepad = a_gamepad.empty() ? notSet : a_gamepad;
+				IG::PushID(2);
+				if (IG::Button(gamepad.c_str())) {
+					Hotkeys::BeginCapture(a_slot, Hotkeys::Input::kGamepad);
+				}
+				IG::PopID();
+				IG::SameLine();
+				IG::PushID(3);
+				if (IG::SmallButton(I18n::TrId("Clear"))) {
+					ApplyHotkeySetting(a_slot, Hotkeys::Input::kKeyboard, std::string{});
+					ApplyHotkeySetting(a_slot, Hotkeys::Input::kGamepad, std::string{});
+				}
+				IG::PopID();
 				IG::PopID();
 			};
 
-			hotkeyRow(Hotkeys::Slot::kRandomOutfit, I18n::Tr("Random outfit"), settings.randomOutfitHotkey);
-			hotkeyRow(Hotkeys::Slot::kQuickPicker, I18n::Tr("Quick picker"), settings.quickPickerHotkey);
+			hotkeyRow(Hotkeys::Slot::kRandomOutfit, I18n::Tr("Random outfit"), settings.randomOutfitHotkey, settings.randomOutfitGamepadHotkey);
+			hotkeyRow(Hotkeys::Slot::kQuickPicker, I18n::Tr("Quick picker"), settings.quickPickerHotkey, settings.quickPickerGamepadHotkey);
+			IG::TextDisabled(I18n::Tr("Click a value to record it: the left one takes the keyboard and the mouse, the right one the controller. Both keep working."));
 			{
 				// The power key is not recorded: it is whatever the player bound to
 				// Shout/Power in the game settings, keyboard or controller.
 				const auto bound = Hotkeys::GamePowerKeyText();
 				IG::TextUnformatted(I18n::Tr("Change Outfit power key"));
-				IG::SameLine(280.0f);
+				IG::SameLine(240.0f);
 				if (bound.empty()) {
 					IG::TextDisabled(I18n::Tr("no key bound in the game settings"));
 				} else {
@@ -1870,53 +1878,6 @@ namespace SOS::Menu
 				}
 			}
 			IG::TextDisabled(I18n::Tr("This only fires while the \"Change Outfit\" power is the one selected in your magic menu."));
-
-			// The recorder is its own window. It is raised every frame while it is
-			// open, because the framework draws its own windows later in the frame
-			// and would otherwise paint the settings page over it.
-			if (Hotkeys::CaptureActive()) {
-				IG::SetNextWindowPos(IG::MainViewportCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-				IG::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Always);
-				IG::SetNextWindowFocus();
-				bool open = true;
-				IG::BeginWindow(I18n::T("Set a hotkey", "设置热键"), &open,
-					ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
-				const bool pad = Hotkeys::CaptureDevice() == Hotkeys::Input::kGamepad;
-				IG::TextWrapped(pad ? I18n::Tr("Recording the controller: hold up to four buttons, then let go of all of them.")
-									: I18n::Tr("Recording the keyboard and the mouse: hold up to four keys, then let go of all of them."));
-				IG::Spacing();
-				const auto typed = Hotkeys::CaptureText();
-				if (typed.empty()) {
-					IG::TextDisabled(I18n::Tr("Waiting for input..."));
-				} else {
-					IG::TextUnformatted(typed.c_str());
-				}
-				if (Hotkeys::CaptureOverflowed()) {
-					IG::TextWrapped(I18n::Tr("Only the first four keys are used."));
-				}
-				IG::Spacing();
-				IG::TextDisabled(I18n::Tr("Release every key when you are done; the chord is stored in the ini right away."));
-				IG::TextDisabled(I18n::Tr("Press Esc to cancel."));
-				IG::Spacing();
-				if (IG::Button(I18n::TrId("Cancel"))) {
-					Hotkeys::CancelCapture();
-					g_hotkeyRow = -1;
-				}
-				IG::SameLine();
-				if (IG::Button(I18n::TrId("Clear"))) {
-					if (g_hotkeyRow >= 0) {
-						applyHotkey(static_cast<Hotkeys::Slot>(g_hotkeyRow), std::string{});
-					}
-					Hotkeys::CancelCapture();
-					g_hotkeyRow = -1;
-				}
-				IG::EndWindow();
-				if (!open) {
-					Hotkeys::CancelCapture();
-					g_hotkeyRow = -1;
-				}
-			}
-
 
 			IG::SeparatorText(I18n::Tr("Random outfit"));
 			if (IG::Checkbox(I18n::TrId("Favourites only"), &settings.randomFavoritesOnly)) {
@@ -1968,16 +1929,105 @@ namespace SOS::Menu
 			IG::TextDisabled(I18n::Tr("ImGui host: %s"), ImGuiApi::HostName());
 		}
 
+		// The recorder window. It is drawn after the page (which is greyed out while
+		// it is open) and is sized from the settings window, so it always lands in
+		// the middle of the page the user is looking at.
+		void RenderHotkeyCapture()
+		{
+			{
+				Hotkeys::Slot  slot{};
+				Hotkeys::Input device{};
+				std::string    text;
+				if (Hotkeys::TakeCaptureResult(slot, device, text)) {
+					ApplyHotkeySetting(slot, device, text);
+				}
+			}
+
+			if (!Hotkeys::CaptureActive()) {
+				return;
+			}
+
+			ImVec2     origin{ 0.0f, 0.0f };
+			ImVec2     size{ 0.0f, 0.0f };
+			const bool haveRect = IG::GetWindowPos(&origin) && IG::GetWindowSize(&size) && size.x > 0.0f && size.y > 0.0f;
+			if (haveRect) {
+				IG::SetNextWindowPos(ImVec2{ origin.x + size.x * 0.5f, origin.y + size.y * 0.5f }, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+				IG::SetNextWindowSize(ImVec2{ std::clamp(size.x * 0.8f, 300.0f, 680.0f), 0.0f }, ImGuiCond_Always);
+			} else {
+				IG::SetNextWindowPos(IG::MainViewportCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+				IG::SetNextWindowSize(ImVec2{ 420.0f, 0.0f }, ImGuiCond_Always);
+			}
+			IG::SetNextWindowFocus();
+			bool open = true;
+			IG::BeginWindow(I18n::T("Set a hotkey", "设置热键"), &open,
+				ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
+					ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoNav);
+			const bool pad = Hotkeys::CaptureDevice() == Hotkeys::Input::kGamepad;
+			IG::TextWrapped(pad ? I18n::Tr("Recording the controller: hold up to four buttons, then let go of all of them.")
+								: I18n::Tr("Recording the keyboard and the mouse: hold up to four keys, then let go of all of them."));
+			IG::Spacing();
+			const auto typed = Hotkeys::CaptureText();
+			if (typed.empty()) {
+				if (Hotkeys::CaptureArmed()) {
+					IG::TextDisabled(I18n::Tr("Listening..."));
+				} else {
+					IG::TextDisabled(I18n::Tr("Let go of the keys you are holding first."));
+				}
+			} else {
+				IG::Text("%s", typed.c_str());
+			}
+			switch (Hotkeys::CaptureProblem()) {
+			case 1:
+				IG::TextWrapped(I18n::Tr("Too many keys at once; only four can be used."));
+				break;
+			case 2:
+				IG::TextWrapped(I18n::Tr("That combination cannot be used."));
+				break;
+			case 3:
+				IG::TextWrapped(I18n::Tr("Those keys were not held together; try again."));
+				break;
+			default:
+				break;
+			}
+			IG::Spacing();
+			IG::TextDisabled(I18n::Tr("The chord is stored in the ini as soon as every key is released."));
+			IG::TextDisabled(I18n::Tr("Press Esc or the controller's Back button to cancel."));
+			IG::Spacing();
+			if (IG::Button(I18n::TrId("Cancel"))) {
+				open = false;
+			}
+			IG::EndWindow();
+			if (!open) {
+				Hotkeys::CancelCapture();
+			}
+		}
+
+		void RenderSettings()
+		{
+			// While a hotkey is being recorded the page underneath is disabled and
+			// greyed out: the recorder owns the input, so nothing else may act on it.
+			const bool lock = Hotkeys::CaptureActive() && IG::DisabledReady();
+			if (lock) {
+				IG::BeginDisabled(true);
+			}
+			RenderSettingsBody();
+			if (lock) {
+				IG::EndDisabled();
+			}
+			RenderHotkeyCapture();
+		}
+
 		void UpdateTextInputState()
 		{
 			// ImGui is not thread-safe: sample the focused-widget state here on the
 			// render thread and let the input sink read the cached value.
 			Hotkeys::SetTextInputActive(MenuBridge::TextInputActive());
 			// While a hotkey is being recorded the host must not see the keys that
-			// are being recorded: a controller button that records a chord would
-			// otherwise also activate whatever the menu has focused. The recorder
-			// itself never reads ImGui input, it polls the devices.
-			IG::SetMenuInputSuppressed(Hotkeys::CaptureActive() && MenuBridge::EventCallbackAvailable());
+			// are being recorded: the framework turns controller buttons into menu
+			// navigation inside its own window, so swallowing the raw input events is
+			// not enough. The recorder itself never reads ImGui input, it polls the
+			// devices, so the host can stop accepting events unconditionally.
+			IG::SetMenuInputSuppressed(Hotkeys::CaptureActive());
 			Hotkeys::Tick();
 		}
 

@@ -118,8 +118,14 @@ namespace SOS
 		if (const char* hotkey = ini.GetValue("RandomOutfit", "Hotkey", randomOutfitHotkey.c_str())) {
 			randomOutfitHotkey = hotkey;
 		}
+		if (const char* hotkey = ini.GetValue("RandomOutfit", "HotkeyGamepad", randomOutfitGamepadHotkey.c_str())) {
+			randomOutfitGamepadHotkey = hotkey;
+		}
 		if (const char* hotkey = ini.GetValue("RandomOutfit", "QuickPickerHotkey", quickPickerHotkey.c_str())) {
 			quickPickerHotkey = hotkey;
+		}
+		if (const char* hotkey = ini.GetValue("RandomOutfit", "QuickPickerHotkeyGamepad", quickPickerGamepadHotkey.c_str())) {
+			quickPickerGamepadHotkey = hotkey;
 		}
 		if (const char* key = ini.GetValue("RandomOutfit", "QuickPickerKey", quickPickerKey.c_str())) {
 			quickPickerKey = key;
@@ -230,7 +236,9 @@ namespace SOS
 		ini.SetLongValue("Compatibility", "ReillusionGapMs", reillusionGapMs);
 		ini.SetBoolValue("Compatibility", "MorphProviderFirst", morphProviderFirst);
 		ini.SetValue("RandomOutfit", "Hotkey", randomOutfitHotkey.c_str());
+		ini.SetValue("RandomOutfit", "HotkeyGamepad", randomOutfitGamepadHotkey.c_str());
 		ini.SetValue("RandomOutfit", "QuickPickerHotkey", quickPickerHotkey.c_str());
+		ini.SetValue("RandomOutfit", "QuickPickerHotkeyGamepad", quickPickerGamepadHotkey.c_str());
 		ini.SetValue("RandomOutfit", "QuickPickerKey", quickPickerKey.c_str());
 		ini.SetBoolValue("RandomOutfit", "FavoritesOnly", randomFavoritesOnly);
 		ini.SetBoolValue("RandomOutfit", "ExcludeCurrent", randomExcludeCurrent);

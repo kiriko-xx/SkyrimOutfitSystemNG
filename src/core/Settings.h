@@ -85,8 +85,14 @@ namespace SOS
 		bool morphProviderFirst{ true };
 
 		// [RandomOutfit]
+		// One binding per device: the keyboard chord and the controller chord are
+		// separate values, so recording one never replaces the other and both stay
+		// usable. [RandomOutfit] Hotkey / HotkeyGamepad, QuickPickerHotkey /
+		// QuickPickerHotkeyGamepad.
 		std::string randomOutfitHotkey{ "ctrl+shift+O" };
+		std::string randomOutfitGamepadHotkey{};
 		std::string quickPickerHotkey{ "ctrl+shift+L" };
+		std::string quickPickerGamepadHotkey{};
 
 		// [RandomOutfit] - a single key without modifiers that opens the quick
 		// picker the moment it is pressed. The "Change Outfit" lesser power that

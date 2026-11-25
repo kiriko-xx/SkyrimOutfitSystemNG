@@ -224,6 +224,17 @@ namespace SOS::ImGuiApi
 				::GetProcAddress(a_module, "igSetNextWindowFocus"));
 			table.hasWindowFocus = table.extras.SetNextWindowFocus != nullptr;
 
+			table.extras.BeginDisabled = reinterpret_cast<decltype(table.extras.BeginDisabled)>(
+				::GetProcAddress(a_module, "igBeginDisabled"));
+			table.extras.EndDisabled = reinterpret_cast<decltype(table.extras.EndDisabled)>(
+				::GetProcAddress(a_module, "igEndDisabled"));
+			table.hasDisabled = table.extras.BeginDisabled != nullptr && table.extras.EndDisabled != nullptr;
+			if (!table.hasDisabled) {
+				SKSE::log::debug("ImGuiApi: igBeginDisabled/igEndDisabled are missing in {}; the page under the hotkey recorder stays active.",
+					a_label);
+			}
+
+
 			table.hasExtras = extrasTotal == extrasResolved;
 			table.hasWindowPlumbing = table.extras.Begin && table.extras.End &&
 				table.extras.SetNextWindowPos && table.extras.SetNextWindowSize;
