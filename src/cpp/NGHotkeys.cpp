@@ -766,6 +766,23 @@ namespace SOS::Hotkeys
 			g_captureState.store(static_cast<int>(CaptureState::kArmed), std::memory_order_relaxed);
 		}
 
+		// Leaves the "wait for a neutral state" phase as soon as nothing is held.
+		// It cannot be driven by input events alone: the recorder is opened with a click
+		// that the recorder itself ignores, so with nothing held no event ever arrives
+		// and the page would keep asking the player to let go of keys that are not
+		// pressed.
+		void PromoteCaptureLocked()
+		{
+			if (static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed)) != CaptureState::kWaiting) {
+				return;
+			}
+			if (!g_captureDown.empty()) {
+				return;
+			}
+			g_captureState.store(static_cast<int>(CaptureState::kArmed), std::memory_order_relaxed);
+			g_captureQuietMs = NowMs();
+		}
+
 		void FeedCapture(const Trigger& a_trigger, bool a_down)
 		{
 			// A recording that was started for one device ignores the other one, so a
@@ -788,6 +805,42 @@ namespace SOS::Hotkeys
 			AdvanceCaptureLocked();
 		}
 
+		// Feeds one raw event to the recorder. The caller swallows every event while a
+		// recording runs - mouse motion, sticks and wheel included - so the menu
+		// behind the recorder neither moves nor activates anything with the keys that
+		// are being recorded. Returns true when the event asks to end the recording
+		// (Esc on the keyboard, Back on the controller).
+		bool FeedEvent(RE::InputEvent* a_event)
+		{
+			auto* button = a_event ? a_event->AsButtonEvent() : nullptr;
+			if (!button) {
+				return false;
+			}
+			const auto device = button->GetDevice();
+			if (device != RE::INPUT_DEVICE::kKeyboard && device != RE::INPUT_DEVICE::kGamepad) {
+				return false;
+			}
+			Trigger trigger;
+			trigger.device = device == RE::INPUT_DEVICE::kGamepad ? Dev::kGamepad : Dev::kKeyboard;
+			trigger.code = button->GetIDCode();
+			if (trigger.device == Dev::kKeyboard) {
+				const auto modifier = ModifierForScan(trigger.code);
+				if (modifier != 0) {
+					trigger.code = modifier;
+				}
+			}
+			const bool down = button->IsDown();
+			const bool up = button->IsUp();
+			if (!down && !up) {
+				return false;
+			}
+			if (down && trigger.device == CaptureDeviceDev() && IsCaptureCancel(trigger)) {
+				return true;
+			}
+			FeedCapture(trigger, down);
+			return false;
+		}
+
 		// Runs from the render thread every frame while the recorder is open.
 		void CheckCaptureSettle()
 		{
@@ -795,6 +848,7 @@ namespace SOS::Hotkeys
 				return;
 			}
 			std::lock_guard lock(g_captureMutex);
+			PromoteCaptureLocked();
 			const auto state = static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed));
 			if (state != CaptureState::kSettling || !g_captureDown.empty()) {
 				return;
@@ -849,12 +903,16 @@ namespace SOS::Hotkeys
 			if (!getState) {
 				return false;
 			}
-			PadState state{};
-			if (getState(0, &state) != 0) {
-				return false;
+			// Which slot the pad sits in is not fixed (a wheel or a virtual device
+			// can take slot 0), so ask every index instead of only the first one.
+			for (std::uint32_t index = 0; index < 4; ++index) {
+				PadState state{};
+				if (getState(index, &state) == 0) {
+					a_state = state;
+					return true;
+				}
 			}
-			a_state = state;
-			return true;
+			return false;
 		}
 
 		void PollDevices(std::vector<Trigger>& a_now)
@@ -913,6 +971,8 @@ namespace SOS::Hotkeys
 		{
 			static std::uint32_t cachedKeyboard = 0;
 			static std::uint32_t cachedGamepad = 0;
+			static std::uint32_t lastKeyboard = 0xFFFFFFFFu;
+			static std::uint32_t lastGamepad = 0xFFFFFFFFu;
 			static std::uint64_t cachedAt = 0;
 			const auto           now = NowMs();
 			if (cachedAt == 0 || now - static_cast<std::int64_t>(cachedAt) > 1000) {
@@ -926,12 +986,26 @@ namespace SOS::Hotkeys
 						cachedKeyboard = keyboard;
 					}
 					if (gamepad != 0 && gamepad != 0xFF) {
-						const auto mask = SKSE::InputMap::GamepadKeycodeToMask(gamepad);
-						if (mask != 0 && mask != 0xFF) {
+						// The mapping is either already the button mask ButtonEvent
+						// reports (0x0001 .. 0x8000, 0x0009/0x000A for the triggers)
+						// or SKSE's macro keycode (266 .. 281). Accepting both shapes
+						// is what keeps the controller half of the power key alive:
+						// feeding a mask into the keycode conversion returns zero and
+						// the controller binding silently disappears.
+						std::uint32_t mask = gamepad;
+						if (gamepad >= SKSE::InputMap::kMacro_GamepadOffset && gamepad < SKSE::InputMap::kMaxMacros) {
+							mask = SKSE::InputMap::GamepadKeycodeToMask(gamepad);
+						}
+						if (mask != 0 && mask != 0xFF && mask <= 0xFFFF) {
 							cachedGamepad = mask;
 						}
 					}
 				}
+			}
+			if (cachedKeyboard != lastKeyboard || cachedGamepad != lastGamepad) {
+				lastKeyboard = cachedKeyboard;
+				lastGamepad = cachedGamepad;
+				SKSE::log::debug("Hotkeys: the power key is 0x{:02X} on the keyboard and 0x{:04X} on the controller.", cachedKeyboard, cachedGamepad);
 			}
 			a_keyboard = Trigger{ Dev::kKeyboard, cachedKeyboard };
 			a_gamepad = Trigger{ Dev::kGamepad, cachedGamepad };
@@ -949,6 +1023,36 @@ namespace SOS::Hotkeys
 			Fire();
 		}
 
+		// The shipped esp is a light plugin, so the power sits in the 0x800 .. 0xFFF
+		// range of our own file. Looking it up by editor ID or by the pre-1.5.65 id
+		// can miss once the esp was rebuilt; "a spell of our own plugin in the light
+		// range" is the part that survives a rebuild.
+		RE::SpellItem* FirstOwnPower()
+		{
+			auto* dataHandler = RE::TESDataHandler::GetSingleton();
+			if (!dataHandler) {
+				return nullptr;
+			}
+			for (auto* spell : dataHandler->GetFormArray<RE::SpellItem>()) {
+				if (!spell) {
+					continue;
+				}
+				const auto* file = spell->GetFile(0);
+				if (!file) {
+					continue;
+				}
+				const std::string_view filename = file->GetFilename();
+				if (filename != "SkyrimOutfitSystem.esp") {
+					continue;
+				}
+				const auto local = spell->GetLocalFormID();
+				if (local >= 0x800 && local <= 0xFFF) {
+					return spell;
+				}
+			}
+			return nullptr;
+		}
+
 		// True while the "Change Outfit" lesser power is the one the player has
 		// selected in the magic menu. Pressing the power key is ours to handle only
 		// then: with no power selected, or with any other power equipped, the key
@@ -956,12 +1060,23 @@ namespace SOS::Hotkeys
 		bool OurPowerSelected()
 		{
 			static RE::TESForm* cached = nullptr;
+			static std::int64_t  lastTryMs = 0;
 			if (!cached) {
+				// Resolving the power walks every spell in the load order, so a
+				// missing esp must not turn every key press into that walk.
+				const auto now = NowMs();
+				if (lastTryMs != 0 && now - lastTryMs < 2000) {
+					return false;
+				}
+				lastTryMs = now;
 				cached = RE::TESForm::LookupByEditorID<RE::SpellItem>("SkyrimOutfitSystemQuickslotSpell");
 				if (!cached) {
 					if (auto* dataHandler = RE::TESDataHandler::GetSingleton()) {
 						cached = dataHandler->LookupForm<RE::SpellItem>(0x000182F, "SkyrimOutfitSystem.esp");
 					}
+				}
+				if (!cached) {
+					cached = FirstOwnPower();
 				}
 				if (cached) {
 					SKSE::log::debug("Hotkeys: the Change Outfit power is {:08X}.", cached->GetFormID());
@@ -979,7 +1094,7 @@ namespace SOS::Hotkeys
 
 		// True when the trigger is one of the keys the game has bound to Shout/Power,
 		// keyboard or controller.
-		bool IsPowerKey(const Trigger& a_trigger)
+		bool IsGamePowerKey(const Trigger& a_trigger)
 		{
 			Trigger keyboard{};
 			Trigger gamepad{};
@@ -989,12 +1104,63 @@ namespace SOS::Hotkeys
 			return (keyboard.code != 0 && Same(a_trigger, keyboard)) || (gamepad.code != 0 && Same(a_trigger, gamepad));
 		}
 
+		// The ini key that opens the quick picker without waiting for the cast
+		// animation. It is a binding of its own: by default it names the same key the
+		// game uses, but it may also name a controller button the game does not bind
+		// to Shout - the only way a controller user gets the short path, and the
+		// reason the ini text accepts "pad:lb" here as well.
+		Chord QuickslotKeyChord()
+		{
+			std::lock_guard lock(g_chordMutex);
+			return g_quickKey;
+		}
+
+		bool QuickslotKeyHeld()
+		{
+			const auto chord = QuickslotKeyChord();
+			return chord.valid() && AllDown(chord);
+		}
+
+		bool IsQuickslotKey(const Trigger& a_trigger)
+		{
+			const auto chord = QuickslotKeyChord();
+			if (!chord.valid() || !Contains(chord.triggers, a_trigger)) {
+				return false;
+			}
+			return AllDown(chord);
+		}
+
+		// Any key that may open the quick picker: the game's own Shout/Power binding
+		// on either device, or the ini key.
+		bool IsPowerKey(const Trigger& a_trigger)
+		{
+			return IsGamePowerKey(a_trigger) || IsQuickslotKey(a_trigger);
+		}
+
+		bool PowerKeyHeld()
+		{
+			Trigger keyboard{};
+			Trigger gamepad{};
+			if (GamePowerKeys(keyboard, gamepad)) {
+				if ((keyboard.code != 0 && IsHeld(keyboard)) || (gamepad.code != 0 && IsHeld(gamepad))) {
+					return true;
+				}
+			}
+			return QuickslotKeyHeld();
+		}
+
 		// One press of the game's own power key, handled on the press itself. The
 		// caller consumes the event, so the game never casts the power and there is
 		// no cast animation left to feel like a cooldown.
-		bool HandlePowerPress(bool a_blocked)
+		//
+		// The return value says whether the event was handled, i.e. whether the
+		// caller has to take it out of the queue. The ini key opens the window even
+		// when another power is the selected one, but then the press is left to the
+		// game so an unrelated shout keeps working.
+		bool HandlePowerPress(const Trigger& a_trigger, bool a_blocked)
 		{
-			if (!OurPowerSelected()) {
+			const bool ours = OurPowerSelected();
+			if (!ours && !IsQuickslotKey(a_trigger)) {
 				return false;
 			}
 			// While a menu owns the input the key is not ours: swallowing it there
@@ -1003,17 +1169,17 @@ namespace SOS::Hotkeys
 				return false;
 			}
 			if (g_latchedQuickKey) {
-				return true;
+				return ours;
 			}
 			g_latchedQuickKey = true;
 			const auto now = NowMs();
 			const auto last = g_lastQuickslotOpenMs.load(std::memory_order_relaxed);
 			if (last != 0 && now - last < kQuickslotOpenCooldownMs) {
-				return true;
+				return ours;
 			}
 			g_lastQuickslotOpenMs.store(now, std::memory_order_relaxed);
 			FireQuickslotKey();
-			return true;
+			return ours;
 		}
 
 		// Polled variant for the case where the front run of the power key never
@@ -1021,18 +1187,11 @@ namespace SOS::Hotkeys
 		// held).
 		void CheckPowerKey(bool a_blocked)
 		{
-			if (!OurPowerSelected()) {
+			if (!PowerKeyHeld()) {
 				g_latchedQuickKey = false;
 				return;
 			}
-			Trigger keyboard{};
-			Trigger gamepad{};
-			if (!GamePowerKeys(keyboard, gamepad)) {
-				g_latchedQuickKey = false;
-				return;
-			}
-			const bool down = (keyboard.code != 0 && IsHeld(keyboard)) || (gamepad.code != 0 && IsHeld(gamepad));
-			if (!down) {
+			if (!OurPowerSelected() && !QuickslotKeyHeld()) {
 				g_latchedQuickKey = false;
 				return;
 			}
@@ -1144,11 +1303,23 @@ namespace SOS::Hotkeys
 					return RE::BSEventNotifyControl::kContinue;
 				}
 
-				const bool capturing = g_capturing.load(std::memory_order_relaxed);
 				bool       swallow = false;
 				const bool blocked = FiringBlocked();
 
 				for (auto* event = *a_event; event; event = event->next) {
+					if (g_capturing.load(std::memory_order_relaxed)) {
+						// The recorder is modal and owns every device. All events of the
+						// batch are taken out of the queue - buttons, sticks, mouse motion
+						// and the wheel - so the menu behind it neither navigates nor
+						// activates anything with the keys being recorded, and the pointer
+						// stops moving as well. Esc and the controller's Back end the
+						// recording; the rest is fed to the recorder.
+						if (FeedEvent(event)) {
+							CancelCapture();
+						}
+						swallow = true;
+						continue;
+					}
 					auto* button = event->AsButtonEvent();
 					if (!button) {
 						continue;
@@ -1174,30 +1345,16 @@ namespace SOS::Hotkeys
 						continue;
 					}
 
-					if (capturing) {
-						// The recorder is modal. While it is open every button event is taken
-						// out of the queue, so the framework menu cannot navigate or activate
-						// the entry that opened the recorder with the very keys being
-						// recorded (a pad "A" used to both record and confirm, which is also
-						// why chords never came out longer than one button).
-						if (down && trigger.device == CaptureDeviceDev() && IsCaptureCancel(trigger)) {
-							CancelCapture();
-							break;
-						}
-						FeedCapture(trigger, down);
-						swallow = true;
-						continue;
-					}
-
 					Remember(trigger, down);
 
 					if (down && IsPowerKey(trigger)) {
-						// The game's own Shout/Power key. It is handled here, on the press,
-						// and the event is consumed: letting the game cast the power as well
-						// is what used to add the cast animation on top of our own timer,
-						// which felt like a cooldown that never went away. With another power
+						// The game's own Shout/Power key, or the ini key that skips the
+						// cast animation. It is handled here, on the press, and the event
+						// is consumed: letting the game cast the power as well is what
+						// used to add the cast animation on top of our own timer, which
+						// felt like a cooldown that never went away. With another power
 						// equipped (or none) the key is passed through.
-						if (HandlePowerPress(blocked)) {
+						if (HandlePowerPress(trigger, blocked)) {
 							swallow = true;
 						}
 					}
@@ -1358,7 +1515,9 @@ namespace SOS::Hotkeys
 			g_captureResultSlot = -1;
 			g_captureResultDevice = 0;
 			g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
-			g_captureState.store(static_cast<int>(CaptureState::kWaiting), std::memory_order_relaxed);
+			// Nothing held means the recorder can listen right away; otherwise the keys
+			// that are held (the button that opened it, usually) have to be released first.
+			g_captureState.store(static_cast<int>(g_captureDown.empty() ? CaptureState::kArmed : CaptureState::kWaiting), std::memory_order_relaxed);
 			g_captureStartedMs = NowMs();
 			g_captureQuietMs = g_captureStartedMs;
 		}
@@ -1387,6 +1546,19 @@ namespace SOS::Hotkeys
 			g_captureQuietMs = 0;
 		}
 		ForgetAll();
+	}
+
+	void FeedInputEvent(RE::InputEvent* a_event)
+	{
+		if (!g_capturing.load(std::memory_order_relaxed)) {
+			return;
+		}
+		for (auto* event = a_event; event; event = event->next) {
+			if (FeedEvent(event)) {
+				CancelCapture();
+				return;
+			}
+		}
 	}
 
 	bool CaptureActive()

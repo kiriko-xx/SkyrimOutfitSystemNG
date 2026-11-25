@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(SkyrimOutfitSystemNG VERSION 1.5.71 LANGUAGES CXX)
+project(SkyrimOutfitSystemNG VERSION 1.5.72 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

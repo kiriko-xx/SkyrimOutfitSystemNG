@@ -2061,18 +2061,17 @@ namespace SOS::Menu
 			}
 
 			// While a hotkey is being recorded the keys belong to the recorder only.
-			// Returning true removes the event from the queue, which is what keeps
-			// the menu (and its gamepad navigation) from acting on them.
+			// The event is handed to the recorder and removed from the queue, which is
+			// what keeps the menu - and its pad navigation - from acting on it.
 			if (Hotkeys::CaptureActive()) {
-				bool swallowed = false;
-				for (auto* event = a_event; event; event = event->next) {
-					if (event->AsButtonEvent()) {
-						swallowed = true;
-					}
-				}
-				if (swallowed) {
-					return true;
-				}
+				Hotkeys::FeedInputEvent(a_event);
+				return true;
+			}
+
+			// On 3.18+ the framework turns the pad into ImGui keys for our window
+			// itself; taking the events out of the queue here would break that.
+			if (!g_rawGamepad.load(std::memory_order_acquire)) {
+				return false;
 			}
 
 			if (!g_quickWindow || !g_quickWindow->IsOpen.load(std::memory_order_acquire)) {
@@ -2518,22 +2517,29 @@ void RenderQuickPickerSectionThunk()
 		g_quickWindow = MenuBridge::AddWindow(RenderQuickPickerThunk);
 		if (g_quickWindow) {
 			LOG(debug, "Menu: quick picker window created.");
-			// 3.18 is the oldest framework build we have confirmed working with the
-			// quick picker; 3.9 and older never deliver gamepad keys to a custom
-			// AddWindow window. Keep a raw-input fallback only below 3.18. On 3.18+
-			// stay on the framework's own translation path: registering the callback
-			// would remove every gamepad event from the queue before the framework's
-			// menu sees it.
+			// The callback is registered on every framework build, and it is the
+			// recorder that needs it: once the framework menu is open the game no
+			// longer dispatches button events to plugins, so a controller button
+			// pressed while a hotkey is being recorded only reaches us here - and
+			// without the callback the framework's own menu acts on it (a recorded
+			// "LB" used to close the whole menu, "LT"/"RT" navigated it).
+			//
+			// Outside a recording the callback stays out of the way: on 3.18+ it
+			// returns false and the framework keeps translating the pad into ImGui
+			// keys for the quick picker. 3.18 is the oldest build confirmed to do
+			// that, so only below it the callback also drives the picker itself.
 			const float frameworkVersion = MenuBridge::FrameworkVersion();
 			const bool  legacyGamepad = frameworkVersion <= 0.0f || frameworkVersion < 3.18f;
-			if (legacyGamepad && MenuBridge::RegisterInputEvent(OnFrameworkInput)) {
-				g_rawGamepad.store(true, std::memory_order_release);
-				LOG(info, "Menu: raw gamepad input enabled for the quick picker (framework {} is older than 3.18).", frameworkVersion);
+			if (MenuBridge::RegisterInputEvent(OnFrameworkInput)) {
+				g_rawGamepad.store(legacyGamepad, std::memory_order_release);
+				if (legacyGamepad) {
+					LOG(info, "Menu: raw gamepad input enabled for the quick picker (framework {} is older than 3.18).", frameworkVersion);
+				} else {
+					LOG(info, "Menu: input callback registered; the framework {} translates the pad for the quick picker.", frameworkVersion);
+				}
 			} else {
 				g_rawGamepad.store(false, std::memory_order_release);
-				if (!legacyGamepad) {
-					LOG(info, "Menu: SKSE Menu Framework {} handles gamepad input for the quick picker.", frameworkVersion);
-				}
+				LOG(warn, "Menu: the framework did not accept the input callback; controller buttons are not taken away from it while a hotkey is being recorded.");
 			}
 		} else {
 			LOG(warn, "Menu: the framework did not create a standalone window; the quick picker stays a menu page.");

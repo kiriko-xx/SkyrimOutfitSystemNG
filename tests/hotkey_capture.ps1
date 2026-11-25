@@ -9,11 +9,14 @@ $ErrorActionPreference = 'Stop'
 #  - one key table feeds the parser, the formatter and the polling, so what the
 #    page shows is what fires
 #  - the Shout/Power key is read in the same code space the rest of the file uses,
-#    acted on only while our own power is selected, and consumed on the press
+#    on both devices, acted on only while our own power is selected (or while the
+#    ini key is pressed), and consumed on the press
 #  - a recording settles only after a quiet moment, so a chord pressed one key
 #    after the other is still recorded as a chord
 #  - a row keeps one binding per device, both fire, and the recorder is a modal
-#    window that disables the page underneath and stops the host input
+#    window that disables the page underneath, stops the host input and eats every
+#    event of the batch - including the ones the framework menu would act on,
+#    which is why the menu input callback is registered on every framework build
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $failures = 0
 
@@ -76,13 +79,26 @@ Assert-Contains $hotkeys 'bool CachedTextInputActive()' 'a text field keeps the 
 # ---- the power key ----
 Assert-Contains $hotkeys 'RE::BSWin32GamepadDevice::Keys' 'controller codes come from the button masks the engine uses'
 Assert-Contains $hotkeys 'GamepadKeycodeToMask' 'the game power binding is converted into that same space'
+Assert-Contains $hotkeys 'kMacro_GamepadOffset' 'a control-map keycode is recognised by its range before it is converted'
+Assert-Contains $hotkeys 'SKSE::InputMap::GamepadKeycodeToMask(gamepad)' 'only a keycode is converted, a raw mask is kept as it is'
+Assert-Contains $hotkeys 'std::uint32_t mask = gamepad;' 'the mask survives when the engine reports it directly'
+Assert-Contains $hotkeys 'the power key is 0x{:02X} on the keyboard and 0x{:04X} on the controller' 'the resolved pad binding is visible in the log'
 Assert-Contains $hotkeys 'bool OurPowerSelected()' 'the plugin checks its own power is the selected one'
 Assert-Contains $hotkeys 'SkyrimOutfitSystemQuickslotSpell' 'the power is looked up by editor id'
 Assert-Contains $hotkeys 'selectedPower' 'the check is against the selected power of the player'
+Assert-Contains $hotkeys 'RE::SpellItem* FirstOwnPower()' 'a rebuilt esp is still found by the file it lives in'
+Assert-Contains $hotkeys 'GetLocalFormID()' 'the fallback looks in the light range of our own plugin'
+Assert-Contains $hotkeys 'bool IsGamePowerKey(const Trigger& a_trigger)' 'the game Shout/Power binding is recognised on both devices'
+Assert-Contains $hotkeys 'bool IsQuickslotKey(const Trigger& a_trigger)' 'the ini key opens the window as well'
 Assert-Contains $hotkeys 'bool IsPowerKey(const Trigger& a_trigger)' 'the Shout/Power key is recognised'
-Assert-Contains $hotkeys 'if (!OurPowerSelected()) {' 'nothing happens while another power is equipped'
+Assert-Contains $hotkeys 'const bool ours = OurPowerSelected();' 'the press is ours only while our power is the selected one'
+Assert-Contains $hotkeys 'if (!ours && !IsQuickslotKey(a_trigger)) {' 'nothing happens while another power is equipped and the ini key is not it'
+Assert-Contains $hotkeys 'return ours;' 'with another power equipped the ini key still opens the window, the event stays with the game'
 Assert-Contains $hotkeys 'swallow = true;' 'that press is consumed, so the game does not cast the power'
+Assert-Contains $hotkeys 'if (HandlePowerPress(trigger, blocked)) {' 'the press is handled on the press itself'
+Assert-Contains $hotkeys 'bool PowerKeyHeld()' 'the polled path knows both devices and the ini key'
 Assert-Contains $hotkeys 'kQuickslotOpenCooldownMs' 'only our own timer throttles the power key'
+Assert-Absent $hotkeys 'InterruptCast' 'no extra address-library id is added just to stop a cast'
 
 # ---- the recorder: one device at a time, settle before accepting ----
 $hotkeysH = Read-RepoFile 'src/cpp/include/NGHotkeys.h'
@@ -120,6 +136,19 @@ Assert-Contains $hotkeys 'bool IsCaptureCancel(' 'Esc and the controller back bu
 Assert-Contains $hotkeys 'void AdvanceCaptureLocked()' 'the state machine advances in one place'
 Assert-Contains $hotkeys 'void FailCaptureLocked(' 'a rejected chord is reported instead of silently kept'
 Assert-Contains $hotkeys 'kCaptureTimeoutMs' 'a forgotten recording does not lock the page forever'
+
+# ---- the recorder is modal: the whole batch is eaten ----
+Assert-Contains $hotkeys 'bool FeedEvent(RE::InputEvent* a_event)' 'one place feeds an event to the recorder'
+Assert-Contains $hotkeys 'void FeedInputEvent(RE::InputEvent* a_event)' 'the menu callback feeds the recorder as well'
+Assert-Contains $hotkeys 'if (g_capturing.load(std::memory_order_relaxed)) {' 'the sink asks the recorder before anything else'
+Assert-Contains $hotkeys 'if (FeedEvent(event)) {' 'the event that ends a recording is the one the recorder sees'
+Assert-Contains $hotkeys 'swallow = true;
+						continue;' 'the recording eats the event instead of handling it'
+Assert-Contains $hotkeys 'void FeedInputEvent(RE::InputEvent* a_event)
+	{
+		if (!g_capturing' 'feeding without a recording does nothing'
+Assert-Contains $hotkeysH 'void FeedInputEvent(RE::InputEvent* a_event);' 'the recorder feed is declared for the menu'
+Assert-Contains $hotkeysH 'class InputEvent;' 'the declaration needs no engine header'
 
 # ---- the page under the recorder is disabled, the host stops taking input ----
 $imGuiH = Read-RepoFile 'src/cpp/include/ImGuiApi.h'
@@ -168,6 +197,16 @@ Assert-Contains $menu 'a_eventType != MenuBridge::kEventMenuOpened && a_eventTyp
 Assert-Contains $menu 'Hotkeys::NotifyMenuState(open);' 'the hotkeys are muted while the menu is up'
 Assert-Contains $menu 'MenuBridge::RegisterEventCallback(OnFrameworkMenuEvent);' 'the lifecycle callback is registered'
 Assert-Contains $menu 'IG::SetMenuInputSuppressed(false);' 'the menu gives the host input back'
+
+# ---- the menu input callback belongs to the recorder, on every framework ----
+Assert-Contains $menu 'MenuBridge::RegisterInputEvent(OnFrameworkInput)' 'the input callback is registered on every framework build'
+Assert-Absent $menu 'if (legacyGamepad && MenuBridge::RegisterInputEvent(OnFrameworkInput))' 'a recording needs the callback even where the framework translates the pad itself'
+Assert-Contains $menu 'g_rawGamepad.store(legacyGamepad, std::memory_order_release);' 'only the picker fallback stays limited to the old frameworks'
+Assert-Contains $menu 'Hotkeys::FeedInputEvent(a_event);' 'the events the framework would act on are handed to the recorder instead'
+Assert-Contains $menu 'if (!g_rawGamepad.load(std::memory_order_acquire)) {' 'outside a recording the framework keeps the pad on the new frameworks'
+Assert-Contains $menu 'Hotkeys::CaptureActive()) {' 'the recorder is asked before the pad fallback runs'
+Assert-Contains $menu 'the framework did not accept the input callback' 'a refused callback is reported'
+
 
 $i18n = Read-RepoFile 'src/cpp/I18n.cpp'
 Assert-Absent $i18n 'and the mouse' 'the translation table has no mouse promise either'

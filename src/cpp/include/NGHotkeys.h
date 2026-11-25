@@ -3,6 +3,11 @@
 #include <cstddef>
 #include <string>
 
+namespace RE
+{
+	class InputEvent;
+}
+
 namespace SOS::Hotkeys
 {
 	// Installs the input sink. Every hotkey is a chord of 1 to 4 keyboard keys or
@@ -56,6 +61,13 @@ namespace SOS::Hotkeys
 	};
 
 	void BeginCapture(Slot a_slot, Input a_device = Input::kKeyboard);
+
+	// Feeds raw events to a running recording. The input sink calls this itself
+	// while the game is playing; the settings page calls it with the events the
+	// framework hands to its input callback, because the game stops dispatching
+	// button events to plugins once the framework menu is open. Nothing happens
+	// when no recording runs.
+	void FeedInputEvent(RE::InputEvent* a_event);
 
 	// The device the running recording listens to. Only meaningful while
 	// CaptureActive() is true.
