@@ -547,6 +547,188 @@ namespace SOS::Hotkeys
 			}
 		}
 
+
+		// ---- polling -----------------------------------------------------------
+
+		// While one of the framework menus is open the game stops handing button
+		// events to plugins, so both recording and the "open the picker right away"
+		// key would silently do nothing. Polling the devices from the render thread
+		// covers that case and is a no-op otherwise (the latches keep it idempotent).
+		struct ScanVk
+		{
+			std::uint32_t scan;
+			int           vk;
+		};
+
+		const std::vector<ScanVk>& ScanVkTable()
+		{
+			static const std::vector<ScanVk> table{
+				{ 0x01, VK_ESCAPE }, { 0x0E, VK_BACK }, { 0x0F, VK_TAB }, { 0x1C, VK_RETURN }, { 0x39, VK_SPACE },
+				{ 0x02, '1' }, { 0x03, '2' }, { 0x04, '3' }, { 0x05, '4' }, { 0x06, '5' },
+				{ 0x07, '6' }, { 0x08, '7' }, { 0x09, '8' }, { 0x0A, '9' }, { 0x0B, '0' },
+				{ 0x10, 'Q' }, { 0x11, 'W' }, { 0x12, 'E' }, { 0x13, 'R' }, { 0x14, 'T' }, { 0x15, 'Y' },
+				{ 0x16, 'U' }, { 0x17, 'I' }, { 0x18, 'O' }, { 0x19, 'P' },
+				{ 0x1E, 'A' }, { 0x1F, 'S' }, { 0x20, 'D' }, { 0x21, 'F' }, { 0x22, 'G' }, { 0x23, 'H' },
+				{ 0x24, 'J' }, { 0x25, 'K' }, { 0x26, 'L' },
+				{ 0x2C, 'Z' }, { 0x2D, 'X' }, { 0x2E, 'C' }, { 0x2F, 'V' }, { 0x30, 'B' }, { 0x31, 'N' }, { 0x32, 'M' },
+				{ 0x3B, VK_F1 }, { 0x3C, VK_F2 }, { 0x3D, VK_F3 }, { 0x3E, VK_F4 }, { 0x3F, VK_F5 }, { 0x40, VK_F6 },
+				{ 0x41, VK_F7 }, { 0x42, VK_F8 }, { 0x43, VK_F9 }, { 0x44, VK_F10 }, { 0x57, VK_F11 }, { 0x58, VK_F12 },
+				{ 0x52, VK_INSERT }, { 0x53, VK_DELETE }, { 0x47, VK_HOME }, { 0x4F, VK_END },
+				{ 0x49, VK_PRIOR }, { 0x51, VK_NEXT }, { 0x48, VK_UP }, { 0x50, VK_DOWN },
+				{ 0x4B, VK_LEFT }, { 0x4D, VK_RIGHT }
+			};
+			return table;
+		}
+
+		struct PadState
+		{
+			std::uint32_t packet;
+			std::uint32_t buttons;
+			std::uint8_t  leftTrigger;
+			std::uint8_t  rightTrigger;
+			std::uint8_t  rest[10];
+		};
+
+		bool ReadPad(PadState& a_state)
+		{
+			using GetStateFn = std::uint32_t(__stdcall*)(std::uint32_t, PadState*);
+			static GetStateFn getState = []() -> GetStateFn {
+				for (const auto* name : { L"xinput1_4.dll", L"xinput1_3.dll", L"xinput9_1_0.dll" }) {
+					if (auto* module = ::LoadLibraryW(name)) {
+						if (auto* fn = reinterpret_cast<GetStateFn>(::GetProcAddress(module, "XInputGetState"))) {
+							return fn;
+						}
+					}
+				}
+				return nullptr;
+			}();
+			if (!getState) {
+				return false;
+			}
+			PadState state{};
+			if (getState(0, &state) != 0) {
+				return false;
+			}
+			a_state = state;
+			return true;
+		}
+
+		void PollDevices(std::vector<Trigger>& a_now)
+		{
+			for (const auto& entry : ScanVkTable()) {
+				if ((::GetAsyncKeyState(entry.vk) & 0x8000) != 0) {
+					a_now.push_back(Trigger{ Dev::kKeyboard, entry.scan });
+				}
+			}
+			if ((::GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0) {
+				a_now.push_back(Trigger{ Dev::kKeyboard, kModCtrl });
+			}
+			if ((::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) {
+				a_now.push_back(Trigger{ Dev::kKeyboard, kModShift });
+			}
+			if ((::GetAsyncKeyState(VK_MENU) & 0x8000) != 0) {
+				a_now.push_back(Trigger{ Dev::kKeyboard, kModAlt });
+			}
+
+			PadState pad{};
+			if (ReadPad(pad)) {
+				static constexpr std::uint32_t kPadButtons[] = {
+					0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
+					0x0100, 0x0200, 0x1000, 0x2000, 0x4000, 0x8000
+				};
+				for (const auto button : kPadButtons) {
+					if ((pad.buttons & button) != 0) {
+						a_now.push_back(Trigger{ Dev::kGamepad, button });
+					}
+				}
+				if (pad.leftTrigger > 30) {
+					a_now.push_back(Trigger{ Dev::kGamepad, 0x0009 });
+				}
+				if (pad.rightTrigger > 30) {
+					a_now.push_back(Trigger{ Dev::kGamepad, 0x000A });
+				}
+			}
+		}
+
+		void PollTick()
+		{
+			static std::vector<Trigger> last;
+			std::vector<Trigger>        now;
+			PollDevices(now);
+
+			const bool capturing = g_capturing.load(std::memory_order_relaxed);
+			for (const auto& trigger : now) {
+				if (Contains(last, trigger)) {
+					continue;
+				}
+				if (capturing) {
+					FeedCapture(trigger, true);
+				} else {
+					Remember(trigger, true);
+				}
+			}
+			for (const auto& trigger : last) {
+				if (Contains(now, trigger)) {
+					continue;
+				}
+				if (capturing) {
+					FeedCapture(trigger, false);
+				} else {
+					Remember(trigger, false);
+				}
+			}
+			last = now;
+
+			if (capturing || now.empty()) {
+				return;
+			}
+
+			Chord random;
+			Chord quick;
+			Chord quickKey;
+			{
+				std::lock_guard lock(g_chordMutex);
+				random = g_random;
+				quick = g_quick;
+				quickKey = g_quickKey;
+			}
+
+			const bool inputBlocked = CachedTextInputActive();
+			auto*      ui = RE::UI::GetSingleton();
+			const bool consoleOpen = ui && ui->IsMenuOpen(RE::Console::MENU_NAME);
+			const bool menuOpen = ui && ui->GameIsPaused();
+
+			if (random.valid()) {
+				if (!AllDown(random)) {
+					g_latchedRandom = false;
+				} else if (!g_latchedRandom && !inputBlocked && !consoleOpen) {
+					g_latchedRandom = true;
+					Fire();
+				}
+			}
+			if (quick.valid()) {
+				if (!AllDown(quick)) {
+					g_latchedQuick = false;
+				} else if (!g_latchedQuick && !inputBlocked && !consoleOpen) {
+					g_latchedQuick = true;
+					FireQuickPicker();
+				}
+			}
+			if (quickKey.valid()) {
+				if (!AllDown(quickKey)) {
+					g_latchedQuickKey = false;
+				} else if (!g_latchedQuickKey && !inputBlocked && !consoleOpen && !menuOpen) {
+					g_latchedQuickKey = true;
+					const auto nowMs = NowMs();
+					const auto lastOpen = g_lastQuickslotOpenMs.load(std::memory_order_relaxed);
+					if (!Menu::QuickPickerVisible() && (lastOpen == 0 || nowMs - lastOpen >= kQuickslotOpenCooldownMs)) {
+						g_lastQuickslotOpenMs.store(nowMs, std::memory_order_relaxed);
+						FireQuickslotKey();
+					}
+				}
+			}
+		}
+
 		class InputSink : public RE::BSTEventSink<RE::InputEvent*>
 		{
 		public:
@@ -660,6 +842,11 @@ namespace SOS::Hotkeys
 		};
 
 		InputSink g_sink;
+	}
+
+	void Tick()
+	{
+		PollTick();
 	}
 
 	bool Install()

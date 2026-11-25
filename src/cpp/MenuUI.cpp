@@ -1938,6 +1938,7 @@ namespace SOS::Menu
 			// ImGui is not thread-safe: sample the focused-widget state here on the
 			// render thread and let the input sink read the cached value.
 			Hotkeys::SetTextInputActive(MenuBridge::TextInputActive());
+			Hotkeys::Tick();
 		}
 
 		bool __stdcall OnFrameworkInput(RE::InputEvent* a_event)

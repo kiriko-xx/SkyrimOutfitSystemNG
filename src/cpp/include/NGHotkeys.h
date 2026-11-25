@@ -11,6 +11,10 @@ namespace SOS::Hotkeys
 	// that hotkey.
 	bool Install();
 	void Reload();
+	// Called from the render thread every frame. Polls the keyboard and the
+	// pad so the settings page can record keys even when the game sends no
+	// input events while its menu is open.
+	void Tick();
 	void SetTextInputActive(bool a_active);
 
 	// ---- hotkey capture (settings page) ---------------------------------
