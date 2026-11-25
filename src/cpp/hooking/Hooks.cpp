@@ -47,6 +47,13 @@ namespace Hooking {
                 LOG(critical, "{}: the trampoline is full; this hook stays disabled.", a_name);
                 return false;
             }
+            // A hook may end up on code a plugin owns rather than on the game function
+            // itself, and that code can sit anywhere; CommonLib ends the process when the
+            // five-byte branch does not reach, so the distance is checked here instead.
+            if (!BranchInRange(a_site, reinterpret_cast<std::uintptr_t>(code))) {
+                LOG(critical, "{}: the hook site {} is out of reach of the trampoline stub; this hook stays disabled so the game keeps running.", a_name, ModuleOwner(a_site));
+                return false;
+            }
 
             LOG(debug, "Patching {} at addr = {:x}. base = {:x}", a_name, a_site, REL::Module::get().base());
             g_branchTrampoline->write_branch<5>(a_site, code);
@@ -245,11 +252,23 @@ namespace Hooking {
                     LOG(warn, "CustomSkinPlayer: this build's address library has no entry for the visitor of the skinning pass; the display set will only be attached from the deferred pass.");
                 }
 
-                const auto entry = InventoryChanges_ExecuteVisitorOnWorn.address();
+                const auto declared = InventoryChanges_ExecuteVisitorOnWorn.address();
+                // Another plugin may already have hooked this function, and then its entry
+                // reads as a jump into that plugin's detour instead of the prologue of the
+                // game function. Chaining on top of it keeps the display half working;
+                // 1.5.64 and earlier gave up here and left the illusion off for the whole
+                // session (an SE 1.5.97 report showed E9 2B AE D7 FF at the entry where the
+                // shipped executable has 48 89 5C 24 10).
+                const auto entry = FollowEntryJumps("CustomSkinPlayer", declared);
+                if (!entry) {
+                    LOG(err, "CustomSkinPlayer: the worn visitor at {} could not be reached through the code that sits at its entry; the hook stays disabled.", ModuleOwner(declared));
+                    LogSiteBytes("CustomSkinPlayer", declared);
+                    return;
+                }
                 constexpr std::size_t kStolen = 5;
                 const auto copied = CopyableEntryLength(entry, kStolen);
                 if (copied != kStolen) {
-                    LOG(err, "CustomSkinPlayer: the entry of the worn visitor at rva {:x} starts with a sequence this hook cannot copy into a trampoline; the hook stays disabled.", entry - REL::Module::get().base());
+                    LOG(err, "CustomSkinPlayer: the entry of the worn visitor at {} starts with a sequence this hook cannot copy into a trampoline; the hook stays disabled.", ModuleOwner(entry));
                     LogSiteBytes("CustomSkinPlayer", entry);
                     return;
                 }
@@ -312,7 +331,7 @@ namespace Hooking {
                 // skinning pass or from the deferred pass it drives itself.
                 SetSiteHookInstalled(g_customSkinPlayerInstalled);
                 if (g_customSkinPlayerInstalled) {
-                    LOG(info, "CustomSkinPlayer: the worn visitor is hooked at its entry (rva {:x}), so the display set is attached inside the pass that fills the biped.", entry - REL::Module::get().base());
+                    LOG(info, "CustomSkinPlayer: the worn visitor is hooked at {} (declared at {}), so the display set is attached inside the pass that fills the biped.", ModuleOwner(entry), ModuleOwner(declared));
                 } else {
                     LOG(warn, "CustomSkinPlayer: the display set will be attached from the deferred pass after each skinning update, because the worn visitor of this game build could not be hooked.");
                 }

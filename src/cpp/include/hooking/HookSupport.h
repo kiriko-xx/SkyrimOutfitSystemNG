@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <string>
 #include <vector>
 
 #include "REL/Relocation.h"
@@ -121,6 +122,41 @@ namespace Hooking
 	// a_needed must land on an instruction boundary. Anything else returns 0 so the
 	// caller does not copy a rip-relative or relative instruction into the trampoline.
 	std::size_t CopyableEntryLength(std::uintptr_t a_entry, std::size_t a_needed);
+
+	// Identity of the module that owns a_address - the game executable or an SKSE plugin
+	// dll - in the form "<file name> + 0x<rva>". A log line that names the owner says
+	// whose code sits at an address; a bare pointer does not.
+	std::string ModuleOwner(std::uintptr_t a_address);
+
+	// Follows the branch another plugin wrote at a function entry when it hooked that
+	// function before this plugin.
+	//
+	// Hooking a function at its entry assumes the entry still holds the prologue of the
+	// game function. When another plugin has already replaced it with a five-byte jump to
+	// its own detour, the bytes there are a relative branch: copied into a trampoline they
+	// would branch to the wrong place, so the entry hook used to disable itself and the
+	// illusion stayed off for the whole session (reported on 1.5.64, SE 1.5.97, with a
+	// run time entry of E9 2B AE D7 FF where the shipped executable has 48 89 5C 24 10).
+	//
+	// Chaining on top of the other plugin keeps both of them working: the branch stays
+	// where it is, and this hook goes on the code the branch lands on. That detour runs to
+	// completion - it returns to the injected code like a function returns to its caller -
+	// and only then is the display set attached, exactly as when the entry belongs to the
+	// game function itself.
+	//
+	// Returns a_entry itself when its first bytes are real code, the end of the jump chain
+	// otherwise, and 0 - after logging why - when the chain cannot be followed safely
+	// (unreadable memory, a jump that loops, more than eight hops, a target that is not
+	// executable code). a_firstJump, when given, receives the target of the branch at
+	// a_entry, or 0 when there was none.
+	std::uintptr_t FollowEntryJumps(const char* a_hook, std::uintptr_t a_entry, std::uintptr_t* a_firstJump = nullptr);
+
+	// True when a five-byte relative branch at a_site can reach a_target. CommonLib's
+	// trampoline terminates the process when the displacement does not fit, which is fine
+	// for its own writers - they know both ends - but not for a hook that may land on code
+	// another plugin owns: there the hook has to stay disabled instead of taking the game
+	// down with it.
+	bool BranchInRange(std::uintptr_t a_site, std::uintptr_t a_target);
 
 	// How far before a call the visitor it is handed is loaded. Both passes of the AE
 	// skinning routine load theirs inside this window.

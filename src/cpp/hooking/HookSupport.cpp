@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <format>
+#include <limits>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -41,6 +42,48 @@ namespace Hooking
 			const auto begin = text.address();
 			const auto end = begin + text.size();
 			return a_address >= begin && a_address + a_size <= end;
+		}
+
+		// Committed and readable across [a_address, a_address + a_size). The pages under
+		// these addresses can belong to another module, so a plain dereference is not an
+		// option: reading an uncommitted page kills the process.
+		bool Readable(std::uintptr_t a_address, std::size_t a_size)
+		{
+			auto at = a_address;
+			auto left = a_size;
+			while (left > 0) {
+				MEMORY_BASIC_INFORMATION info{};
+				if (::VirtualQuery(reinterpret_cast<LPCVOID>(at), &info, sizeof(info)) == 0) return false;
+				if (info.State != MEM_COMMIT) return false;
+				if ((info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0) return false;
+				const auto regionEnd = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
+				if (regionEnd <= at) return false;
+				const auto step = static_cast<std::size_t>(regionEnd - at);
+				const auto used = step < left ? step : left;
+				at += used;
+				left -= used;
+			}
+			return true;
+		}
+
+		// True when the page holding a_address holds code. A detour written by another
+		// plugin may live in a region that plugin allocated next to the game executable, so
+		// the check is on the protection the page ended up with, not on its module.
+		bool Executable(std::uintptr_t a_address)
+		{
+			MEMORY_BASIC_INFORMATION info{};
+			if (::VirtualQuery(reinterpret_cast<LPCVOID>(a_address), &info, sizeof(info)) == 0) return false;
+			if (info.State != MEM_COMMIT) return false;
+			if (info.Type == MEM_IMAGE) return true;
+			switch (info.Protect & 0xFF) {
+			case PAGE_EXECUTE:
+			case PAGE_EXECUTE_READ:
+			case PAGE_EXECUTE_READWRITE:
+			case PAGE_EXECUTE_WRITECOPY:
+				return true;
+			default:
+				return false;
+			}
 		}
 
 		// Target of the branch located at a_site, or 0 when the bytes there are not one
@@ -446,6 +489,29 @@ namespace Hooking
 			a_hook, module.version().string(), ModuleFileStamp(), module.base(), text.address() - module.base(), text.size());
 	}
 
+	namespace
+	{
+		// ModRM byte of "mov [rsp+disp8], r64" (mod = 01, rm = 100 = the SIB byte that
+		// follows). 0x44 / 0x4C / 0x54 / 0x5C / 0x64 / 0x6C / 0x74 / 0x7C: the registers a
+		// compiler spills into the home space at the start of a function.
+		bool IsStackStoreModrm(std::uint8_t a_modrm)
+		{
+			switch (a_modrm) {
+			case 0x44:
+			case 0x4C:
+			case 0x54:
+			case 0x5C:
+			case 0x64:
+			case 0x6C:
+			case 0x74:
+			case 0x7C:
+				return true;
+			default:
+				return false;
+			}
+		}
+	}
+
 	std::size_t CopyableEntryLength(std::uintptr_t a_entry, std::size_t a_needed)
 	{
 		const auto* bytes = reinterpret_cast<const std::uint8_t*>(a_entry);
@@ -454,14 +520,24 @@ namespace Hooking
 			const auto left = a_needed - used;
 			const auto* at = bytes + used;
 			std::size_t length = 0;
-			if (left >= 5 && at[0] == 0x48 && at[1] == 0x89 && (at[2] == 0x5C || at[2] == 0x6C || at[2] == 0x74 || at[2] == 0x7C) && at[3] == 0x24) {
-				length = 5;// mov [rsp+disp8], rbx / rbp / rsi / rdi
-			} else if (left >= 5 && at[0] == 0x4C && at[1] == 0x89 && at[2] == 0x44 && at[3] == 0x24) {
-				length = 5;// mov [rsp+disp8], r8
+			if (left >= 5 && at[0] == 0x48 && at[1] == 0x89 && at[3] == 0x24 && IsStackStoreModrm(at[2])) {
+				length = 5;// mov [rsp+disp8], rbx / rbp / rsi / rdi / rax / rcx / rdx / rsp
+			} else if (left >= 5 && at[0] == 0x4C && at[1] == 0x89 && at[3] == 0x24 && IsStackStoreModrm(at[2])) {
+				length = 5;// mov [rsp+disp8], r8 .. r15
 			} else if (left >= 3 && at[0] == 0x48 && at[1] == 0x8B && (at[2] == 0xC4 || at[2] == 0xEC)) {
 				length = 3;// mov rax, rsp / mov rbp, rsp
+			} else if (left >= 3 && at[0] == 0x4C && at[1] == 0x8B && at[2] == 0xDC) {
+				length = 3;// mov r11, rsp
+			} else if (left >= 5 && at[0] == 0x48 && at[1] == 0x8D && (at[2] == 0x6C || at[2] == 0x64) && at[3] == 0x24) {
+				length = 5;// lea rbp / rsp, [rsp+disp8]
+			} else if (left >= 4 && at[0] == 0x48 && at[1] == 0x83 && (at[2] == 0xEC || at[2] == 0xE4)) {
+				length = 4;// sub rsp, imm8 / and rsp, imm8
+			} else if (left >= 7 && at[0] == 0x48 && at[1] == 0x81 && at[2] == 0xEC) {
+				length = 7;// sub rsp, imm32
 			} else if (left >= 2 && at[0] == 0x41 && at[1] >= 0x50 && at[1] <= 0x57) {
 				length = 2;// push r8 .. r15
+			} else if (left >= 2 && at[0] == 0x40 && at[1] >= 0x50 && at[1] <= 0x57) {
+				length = 2;// push rbx / rbp / rsi / rdi behind a redundant REX prefix
 			} else if (at[0] >= 0x50 && at[0] <= 0x57) {
 				length = 1;// push rax .. rdi
 			}
@@ -471,6 +547,108 @@ namespace Hooking
 			used += length;
 		}
 		return used;
+	}
+
+	std::string ModuleOwner(std::uintptr_t a_address)
+	{
+		::HMODULE module = nullptr;
+		if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCWSTR>(a_address), &module) ||
+			!module) {
+			return std::string{ "no module" };
+		}
+		wchar_t path[MAX_PATH * 4]{};
+		if (::GetModuleFileNameW(module, path, static_cast<DWORD>(_countof(path))) == 0) {
+			return std::string{ "nameless module" };
+		}
+		std::wstring_view full{ path };
+		const auto cut = full.find_last_of(L"\\/");
+		const auto name = cut == std::wstring_view::npos ? full : full.substr(cut + 1);
+		std::string narrow;
+		narrow.reserve(name.size());
+		for (const auto ch : name) {
+			narrow.push_back(ch < 0x80 ? static_cast<char>(ch) : '?');
+		}
+		return std::format("{} + 0x{:X}", narrow, a_address - reinterpret_cast<std::uintptr_t>(module));
+	}
+
+	bool BranchInRange(std::uintptr_t a_site, std::uintptr_t a_target)
+	{
+		const auto displacement = static_cast<std::ptrdiff_t>(a_target) - static_cast<std::ptrdiff_t>(a_site + 5);
+		return displacement >= (std::numeric_limits<std::int32_t>::min)() && displacement <= (std::numeric_limits<std::int32_t>::max)();
+	}
+
+	std::uintptr_t FollowEntryJumps(const char* a_hook, std::uintptr_t a_entry, std::uintptr_t* a_firstJump)
+	{
+		constexpr int kMaxHops = 8;
+		if (a_firstJump) *a_firstJump = 0;
+
+		auto site = a_entry;
+		std::uintptr_t seen[kMaxHops]{};
+		int hops = 0;
+		while (hops < kMaxHops) {
+			if (!Readable(site, 8)) {
+				LOG(err, "{}: the bytes at {} cannot be read; the hook stays disabled so the game keeps running.", a_hook, ModuleOwner(site));
+				return 0;
+			}
+			const auto* bytes = reinterpret_cast<const std::uint8_t*>(site);
+			const char* shape = nullptr;
+			std::uintptr_t target = 0;
+			if (bytes[0] == 0xE9) {
+				shape = "jmp rel32";
+				const auto rel = *reinterpret_cast<const std::int32_t*>(site + 1);
+				target = site + 5 + static_cast<std::uintptr_t>(static_cast<std::ptrdiff_t>(rel));
+			} else if (bytes[0] == 0xEB) {
+				shape = "jmp rel8";
+				const auto rel = *reinterpret_cast<const std::int8_t*>(site + 1);
+				target = site + 2 + static_cast<std::uintptr_t>(static_cast<std::ptrdiff_t>(rel));
+			} else if (bytes[0] == 0xFF && bytes[1] == 0x25) {
+				shape = "jmp [rip+disp32]";
+				const auto rel = *reinterpret_cast<const std::int32_t*>(site + 2);
+				const auto slot = site + 6 + static_cast<std::uintptr_t>(static_cast<std::ptrdiff_t>(rel));
+				if (!Readable(slot, sizeof(std::uintptr_t))) {
+					LOG(err, "{}: the slot of the {} at {} cannot be read; the hook stays disabled so the game keeps running.", a_hook, shape, ModuleOwner(site));
+					return 0;
+				}
+				target = *reinterpret_cast<const std::uintptr_t*>(slot);
+			} else if (bytes[0] == 0x48 && bytes[1] == 0xFF && bytes[2] == 0x25) {
+				shape = "jmp [rip+disp32]";
+				const auto rel = *reinterpret_cast<const std::int32_t*>(site + 3);
+				const auto slot = site + 7 + static_cast<std::uintptr_t>(static_cast<std::ptrdiff_t>(rel));
+				if (!Readable(slot, sizeof(std::uintptr_t))) {
+					LOG(err, "{}: the slot of the {} at {} cannot be read; the hook stays disabled so the game keeps running.", a_hook, shape, ModuleOwner(site));
+					return 0;
+				}
+				target = *reinterpret_cast<const std::uintptr_t*>(slot);
+			} else {
+				break;// real code: this is where the hook belongs
+			}
+
+			if (target == 0) {
+				LOG(err, "{}: the {} at {} has no target; the hook stays disabled so the game keeps running.", a_hook, shape, ModuleOwner(site));
+				return 0;
+			}
+			if (hops == 0 && a_firstJump) *a_firstJump = target;
+			for (int i = 0; i < hops; ++i) {
+				if (seen[i] == target) {
+					LOG(err, "{}: the jumps starting at {} loop back to {}; the hook stays disabled so the game keeps running.", a_hook, ModuleOwner(a_entry), ModuleOwner(target));
+					return 0;
+				}
+			}
+			LOG(warn, "{}: {} starts with a {}, which another plugin wrote when it hooked this function; the hook goes on {} instead, so both keep working.", a_hook, ModuleOwner(site), shape, ModuleOwner(target));
+			seen[hops++] = target;
+			site = target;
+		}
+
+		if (hops == kMaxHops) {
+			LOG(err, "{}: more than {} jumps in a row start at {}; the hook stays disabled so the game keeps running.", a_hook, kMaxHops, ModuleOwner(a_entry));
+			return 0;
+		}
+		if (!Executable(site)) {
+			LOG(err, "{}: the jump chain ends at {}, which holds no code; the hook stays disabled so the game keeps running.", a_hook, ModuleOwner(site));
+			return 0;
+		}
+		return site;
 	}
 
 	std::uintptr_t FindWornPassCall(const char* a_hook, const REL::RelocationID& a_host, const REL::RelocationID& a_target, const REL::RelocationID& a_anchorVTable, std::ptrdiff_t a_preferredOffset)
