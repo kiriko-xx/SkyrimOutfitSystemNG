@@ -11,8 +11,14 @@ $ErrorActionPreference = 'Stop'
 #  - the Shout/Power key is read in the same code space the rest of the file uses,
 #    on both devices, acted on only while our own power is selected (or while the
 #    ini key is pressed), and consumed on the press
-#  - a recording settles only after a quiet moment, so a chord pressed one key
-#    after the other is still recorded as a chord
+#  - the recorder is FreeClimb's: it owns the device it records (the events are
+#    unlinked from the input queue on the device polls, before anything is
+#    dispatched, so Escape, Back and the shoulder buttons never reach the menu),
+#    nothing is accepted until the device is neutral, and a chord is stored only
+#    once every key of it was released - a modifier pressed on its way to Alt+O is
+#    therefore never stored on its own
+#  - the Change Outfit power is recognised by the plugin file it comes from: the
+#    esp and its scripts are optional installs, so nothing searches the load order
 #  - a row keeps one binding per device, both fire, and the recorder is a modal
 #    window that disables the page underneath, stops the host input and eats every
 #    event of the batch - including the ones the framework menu would act on,
@@ -54,9 +60,9 @@ $pollTick = Get-Block $hotkeys 'void PollTick()' 'class InputSink'
 Assert-Absent $pollTick 'FireRandomThrottled()' 'the device polling never fires a binding'
 Assert-Absent $pollTick 'FireQuickPicker()' 'the device polling never fires a binding'
 Assert-Absent $pollTick 'CheckChords(' 'the device polling never fires a binding'
-Assert-Contains $pollTick 'if (!capturing) {' 'the polling gives up at once when nothing is being recorded'
-Assert-Contains $pollTick 'CheckCaptureSettle();' 'the polling drives the recorder'
-Assert-Contains $pollTick 'CheckCaptureTimeout();' 'a forgotten recording still times out'
+Assert-Contains $pollTick 'if (!g_capturing.load(std::memory_order_relaxed)) {' 'the polling gives up at once when nothing is being recorded'
+Assert-Contains $pollTick 'PollCapture();' 'the polling drives the recorder'
+Assert-Contains $hotkeys 'CheckCaptureTimeout();' 'a forgotten recording still times out'
 
 # ---- an open menu mutes every hotkey ----
 Assert-Contains $hotkeys 'std::atomic<bool> g_frameworkMenuOpen' 'the menu state is remembered'
@@ -84,10 +90,13 @@ Assert-Contains $hotkeys 'SKSE::InputMap::GamepadKeycodeToMask(gamepad)' 'only a
 Assert-Contains $hotkeys 'std::uint32_t mask = gamepad;' 'the mask survives when the engine reports it directly'
 Assert-Contains $hotkeys 'the power key is 0x{:02X} on the keyboard and 0x{:04X} on the controller' 'the resolved pad binding is visible in the log'
 Assert-Contains $hotkeys 'bool OurPowerSelected()' 'the plugin checks its own power is the selected one'
-Assert-Contains $hotkeys 'SkyrimOutfitSystemQuickslotSpell' 'the power is looked up by editor id'
 Assert-Contains $hotkeys 'selectedPower' 'the check is against the selected power of the player'
-Assert-Contains $hotkeys 'RE::SpellItem* FirstOwnPower()' 'a rebuilt esp is still found by the file it lives in'
-Assert-Contains $hotkeys 'GetLocalFormID()' 'the fallback looks in the light range of our own plugin'
+Assert-Contains $hotkeys 'constexpr std::string_view kPowerPlugin = "SkyrimOutfitSystem.esp";' 'the power is recognised by the plugin it comes from'
+Assert-Contains $hotkeys 'bool SameFilename(' 'the plugin name is compared without caring about case'
+Assert-Absent $hotkeys 'FirstOwnPower' 'the load order is never searched for the power'
+Assert-Absent $hotkeys 'GetFormArray' 'the load order is never walked for the power'
+Assert-Absent $hotkeys 'SkyrimOutfitSystemQuickslotSpell' 'no editor id is looked up either'
+Assert-Absent $hotkeys 'lastTryMs' 'nothing is retried on a timer any more'
 Assert-Contains $hotkeys 'bool IsGamePowerKey(const Trigger& a_trigger)' 'the game Shout/Power binding is recognised on both devices'
 Assert-Contains $hotkeys 'bool IsQuickslotKey(const Trigger& a_trigger)' 'the ini key opens the window as well'
 Assert-Contains $hotkeys 'bool IsPowerKey(const Trigger& a_trigger)' 'the Shout/Power key is recognised'
@@ -126,29 +135,67 @@ Assert-Contains $hotkeys 'bool AnyChordBound(' 'either binding counts as bound'
 Assert-Contains $hotkeys 'bool AnyChordDown(' 'either binding can fire'
 Assert-Contains $hotkeys 'Chord OnlyDevice(' 'an old single-string value can be split by device'
 Assert-Contains $hotkeys 'AppendChord(' 'the old value is merged instead of dropped'
-Assert-Contains $hotkeys 'if (a_trigger.device != CaptureDeviceDev()) {' 'the other device is ignored while recording'
 Assert-Contains $hotkeys 'enum class CaptureState' 'the recording has the FreeClimb states'
-Assert-Contains $hotkeys 'kSettling' 'a chord that was pressed key after key is still one chord'
-Assert-Contains $hotkeys 'void CheckCaptureSettle()' 'accepting waits for a quiet moment'
-Assert-Contains $hotkeys 'kCaptureSettleMs' 'the quiet window is a named constant'
+Assert-Absent $hotkeys 'kSettling' 'a chord is not ended by a quiet moment any more'
+Assert-Absent $hotkeys 'kCaptureSettleMs' 'the settle window is gone'
+Assert-Absent $hotkeys 'g_captureQuietMs' 'no quiet moment is timed'
+Assert-Absent $hotkeys 'g_captureDown' 'the recorder works on what is held, not on a down list'
+Assert-Contains $hotkeys 'bool SampleCapture(Dev a_device, const std::vector<Trigger>& a_pressed)' 'one snapshot is all the state machine needs'
+Assert-Contains $hotkeys 'if (state == CaptureState::kWaiting) {' 'nothing is accepted before the device is neutral'
+Assert-Contains $hotkeys 'if (pressed.empty()) {' 'an empty device is what ends a recording'
+Assert-Contains $hotkeys 'bool Covered(' 'a released key is told apart from a new one'
+Assert-Contains $hotkeys 'FailCaptureLocked(CaptureProblem::kNotTogether);' 'keys pressed one after the other are refused, not stored one by one'
+Assert-Contains $hotkeys 'if (pressed.empty()) {
+					g_captureState.store(static_cast<int>(CaptureState::kArmed)' 'the recorder starts listening once nothing is held'
 Assert-Contains $hotkeys 'bool ValidCaptureChord(' 'a chord is rejected when it cannot be used'
 Assert-Contains $hotkeys 'bool IsCaptureCancel(' 'Esc and the controller back button cancel a recording'
-Assert-Contains $hotkeys 'void AdvanceCaptureLocked()' 'the state machine advances in one place'
 Assert-Contains $hotkeys 'void FailCaptureLocked(' 'a rejected chord is reported instead of silently kept'
 Assert-Contains $hotkeys 'kCaptureTimeoutMs' 'a forgotten recording does not lock the page forever'
+Assert-Absent $hotkeys 'AdvanceCaptureLocked' 'the chord is no longer accumulated key by key'
+Assert-Absent $hotkeys 'PromoteCaptureLocked' 'the waiting phase ends on a snapshot, not on a timer'
 
-# ---- the recorder is modal: the whole batch is eaten ----
-Assert-Contains $hotkeys 'bool FeedEvent(RE::InputEvent* a_event)' 'one place feeds an event to the recorder'
-Assert-Contains $hotkeys 'void FeedInputEvent(RE::InputEvent* a_event)' 'the menu callback feeds the recorder as well'
+# ---- the recorder owns the device: the events never reach the menu ----
+Assert-Absent $hotkeys 'bool FeedEvent(RE::InputEvent* a_event)' 'no event of a recording is fed to a chord builder'
+Assert-Contains $hotkeys 'bool EventAsksCancel(RE::InputEvent* a_event)' 'Esc and Back are recognised on the events as well'
+Assert-Contains $hotkeys 'void FilterInputQueue()' 'the recorder takes its events off the input queue'
+Assert-Contains $hotkeys 'RE::BSInputEventQueue::GetSingleton()' 'the queue the game is about to dispatch is the one filtered'
+Assert-Contains $hotkeys 'auto*&      head = queue->GetQueueHead();' 'the queue head is followed, not copied'
+Assert-Contains $hotkeys 'tail = previous;' 'the queue tail survives removing the last event'
+Assert-Contains $hotkeys 'previous->next = next;' 'the event is unlinked instead of marked'
+Assert-Contains $hotkeys 'bool FilterEvent(RE::InputEvent* a_event, bool& a_cancel)' 'one place decides what leaves the queue'
+Assert-Contains $hotkeys 'class QueueOwnership' 'a key swallowed on the way down is swallowed on the way up'
+Assert-Contains $hotkeys 'if (a_up) {' 'the release of an owned key is eaten as well'
+Assert-Contains $hotkeys 'return a_capturing;' 'a key the recorder does not know is still eaten'
+Assert-Contains $hotkeys 'void KeyboardPollHook(RE::BSWin32KeyboardDevice* a_device, float a_delta)' 'the keyboard poll is hooked'
+Assert-Contains $hotkeys 'void GamepadPollHook(RE::BSPCGamepadDeviceHandler* a_handler, float a_delta)' 'the controller poll is hooked'
+Assert-Contains $hotkeys 'if (g_keyboardPoll) {' 'the original keyboard poll still runs'
+Assert-Contains $hotkeys 'if (g_gamepadPoll) {' 'the original controller poll still runs'
+Assert-Contains $hotkeys 'Hooking::InstallVFunc(' 'the slot is replaced through the checked helper'
+Assert-Contains $hotkeys 'Hooking::IdExists(a_table)' 'an unknown table is never resolved'
+Assert-Contains $hotkeys 'static const REL::RelocationID keyboardTable{ 285449, 236808 };' 'the keyboard table is a single relocation id'
+Assert-Contains $hotkeys 'static const REL::RelocationID gamepadTable{ 285457, 236813 };' 'the controller table is a single relocation id'
+Assert-Contains $hotkeys 'void InstallInputHooks()' 'the device hooks are installed in one place'
+Assert-Contains $hotkeys 'InstallInputHooks();
+		g_installed = true;' 'installing the sink installs the device hooks'
+Assert-Contains $hotkeys 'a_device->GetRuntimeData().curState' 'the recorder reads the state the game built the events from'
+Assert-Contains $hotkeys 'std::uint32_t KnownScanCode(std::uint32_t a_dik)' 'only keys the ini can name are recorded'
+Assert-Contains $hotkeys 'skyrim_cast<RE::BSWin32GamepadDevice*>(delegate)' 'the pad behind the handler is the one that is read'
+Assert-Contains $hotkeys 'pad->GetRuntimeData().currentState.gamepad' 'the pad buttons and triggers are read from the device'
 Assert-Contains $hotkeys 'if (g_capturing.load(std::memory_order_relaxed)) {' 'the sink asks the recorder before anything else'
-Assert-Contains $hotkeys 'if (FeedEvent(event)) {' 'the event that ends a recording is the one the recorder sees'
-Assert-Contains $hotkeys 'swallow = true;
-						continue;' 'the recording eats the event instead of handling it'
+Assert-Contains $hotkeys 'if (EventAsksCancel(event)) {' 'the event that ends a recording is the one the recorder sees'
+Assert-Contains $hotkeys 'swallow = true;' 'the recording eats the event instead of handling it'
 Assert-Contains $hotkeys 'void FeedInputEvent(RE::InputEvent* a_event)
 	{
-		if (!g_capturing' 'feeding without a recording does nothing'
+		// The events of a recording are unlinked' 'feeding without a recording does nothing'
 Assert-Contains $hotkeysH 'void FeedInputEvent(RE::InputEvent* a_event);' 'the recorder feed is declared for the menu'
 Assert-Contains $hotkeysH 'class InputEvent;' 'the declaration needs no engine header'
+
+$vtableH = Read-RepoFile 'src/cpp/include/hooking/VTableHook.h'
+Assert-Contains $vtableH 'void* InstallVFunc(' 'the virtual table helper is declared'
+$vtable = Read-RepoFile 'src/cpp/hooking/VTableHook.cpp'
+Assert-Contains $vtable 'InterlockedCompareExchangePointer' 'the slot is replaced atomically'
+Assert-Contains $vtable 'VirtualProtect' 'the table is made writable for the exchange'
+Assert-Contains $vtable 'return nullptr;' 'a refused slot replacement hands nothing back'
 
 # ---- the page under the recorder is disabled, the host stops taking input ----
 $imGuiH = Read-RepoFile 'src/cpp/include/ImGuiApi.h'
@@ -230,5 +277,5 @@ if ($failures -gt 0) {
     Write-Output "HOTKEY_CAPTURE_FAILED: $failures problem(s)"
     exit 1
 }
-Write-Output 'HOTKEY_CAPTURE_OK: firing comes from the input sink only, an open menu mutes every binding, one key table feeds parse/format/poll, the power key is read in the button-mask space and consumed, and a recording settles after a quiet moment'
+Write-Output 'HOTKEY_CAPTURE_OK: firing comes from the input sink only, an open menu mutes every binding, one key table feeds parse/format/poll, the power key is read in the button-mask space and consumed, and a recording owns the device it records: it is unlinked from the queue, nothing is taken until the device is neutral, and a chord lands only once every key of it is released'
 exit 0
