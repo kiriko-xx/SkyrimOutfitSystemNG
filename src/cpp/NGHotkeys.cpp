@@ -9,8 +9,7 @@
 #include "SceneOutfits.h"
 #include "compat/ModCompat.h"
 #include "core/Settings.h"
-#include "hooking/HookSupport.h"
-#include "hooking/VTableHook.h"
+#include "input/FreeClimbCapture.h"
 
 #include <algorithm>
 #include <atomic>
@@ -597,19 +596,19 @@ namespace SOS::Hotkeys
 
 		// ---- capture ----------------------------------------------------------
 		//
-		// The recorder is modelled on FreeClimb's, and so are the four rules below;
-		// each of them used to be a bug of its own:
-		//   * it is modal - the keys it records are taken off the input queue before
-		//     the menu, the framework or the game see them (see the queue filter
-		//     further down), so Escape, the controller's Back button and the shoulder
-		//     buttons no longer act on the menu behind the recorder;
-		//   * it accepts nothing until whatever was held when it opened was released,
-		//     so the click that opened it never becomes part of the chord;
-		//   * the chord is what is held down at one moment, and it is only stored once
-		//     every key of it is released again - so pressing Alt on its way to Alt+O
-		//     does not store "Alt";
-		//   * a key released before the next one went down is refused as "not pressed
-		//     together" instead of being stored as a one-key chord.
+		// The recorder is FreeClimb's, copied unchanged (see input/FreeClimbCapture.h):
+		// it compares what is held right now against what it has collected so far and
+		// stores a chord only once every key of it has been released again. That is what
+		// makes Alt on its way to Alt+O harmless, what refuses keys that were pressed one
+		// after the other, and what keeps the click that opened the window out of the
+		// chord.
+		//
+		// While a recording runs the menu framework is told to stop reading input
+		// (IG::SetMenuInputSuppressed) and the events this sink is handed are eaten, so
+		// Escape, the controller's Back button and the shoulder buttons no longer act on
+		// the menu behind the recorder. No device is hooked and the input queue is not
+		// touched: the state is polled from Win32 and XInput, which is what keeps working
+		// on every game build.
 
 		enum class CaptureState : int
 		{
@@ -641,6 +640,9 @@ namespace SOS::Hotkeys
 		// A recording that is left open (the player walked away) must not keep the
 		// host from reading input for the rest of the session.
 		constexpr std::int64_t kCaptureTimeoutMs = 20000;
+
+		// FreeClimb's state machine for the running recording; g_captureMutex guards it.
+		fc::BindingCapture g_capture;
 
 		Dev CaptureDeviceDev()
 		{
@@ -677,144 +679,96 @@ namespace SOS::Hotkeys
 			return IsCaptureCancel(trigger);
 		}
 
-		// Refuses the combinations the game cannot use, so a refused recording tells
-		// the user instead of silently storing a hotkey that never fires.
-		bool ValidCaptureChord(Dev a_device, const std::vector<Trigger>& a_triggers)
+		// ---- converting between FreeClimb's numbering and this plugin's ------
+		//
+		// FreeClimb numbers the pad buttons in the order XInput reports them and keeps
+		// the two triggers as slots 14 and 15; the ini, the input events and the pad
+		// keys of this plugin use the masks the engine reports instead.
+		constexpr std::uint32_t kPadButtons[] = {
+			0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
+			0x0100, 0x0200, 0x1000, 0x2000, 0x4000, 0x8000
+		};
+		// An analogue trigger counts as pressed from this value on.
+		constexpr std::uint8_t kPadTriggerOn = 30;
+
+		std::uint32_t GamepadCodeForIndex(unsigned a_index)
 		{
-			if (a_triggers.empty() || a_triggers.size() > kMaxChordKeys) {
-				return false;
+			if (a_index < 14) {
+				return kPadButtons[a_index];
 			}
-			bool ctrl = false;
-			bool alt = false;
-			bool tab = false;
-			bool f4 = false;
-			bool del = false;
-			for (const auto& trigger : a_triggers) {
-				if (trigger.device != a_device) {
-					return false;
-				}
-				if (a_device == Dev::kGamepad) {
-					using Keys = RE::BSWin32GamepadDevice::Keys;
-					// Back cancels a recording and Start belongs to the game menu.
-					if (trigger.code == Keys::kBack || trigger.code == Keys::kStart) {
-						return false;
+			return a_index == 14 ? RE::BSWin32GamepadDevice::Keys::kLeftTrigger : RE::BSWin32GamepadDevice::Keys::kRightTrigger;
+		}
+
+		// FreeClimb keeps the physical left and right modifier apart; the ini folds them
+		// onto one trigger, so a recorded chord is folded the same way.
+		std::uint32_t KeyCodeForTrigger(fc::KeyCode a_key)
+		{
+			switch (fc::keyGroup(a_key)) {
+			case fc::anyShift:
+				return kModShift;
+			case fc::anyControl:
+				return kModCtrl;
+			case fc::anyAlt:
+				return kModAlt;
+			default:
+				return static_cast<std::uint32_t>(a_key);
+			}
+		}
+
+		std::vector<Trigger> TriggersOf(const fc::BindingCaptureResult& a_result)
+		{
+			std::vector<Trigger> triggers;
+			if (a_result.device == fc::BindingCaptureDevice::gamepad) {
+				for (unsigned i = 0; i < 16; ++i) {
+					if ((a_result.gamepad & fc::gamepadButtonMask(i)) != 0) {
+						triggers.push_back(Trigger{ Dev::kGamepad, GamepadCodeForIndex(i) });
 					}
-					continue;
 				}
-				if (trigger.code == 0x01) {  // Esc cancels a recording
-					return false;
-				}
-				ctrl = ctrl || trigger.code == kModCtrl;
-				alt = alt || trigger.code == kModAlt;
-				tab = tab || trigger.code == 0x0F;
-				f4 = f4 || trigger.code == 0x3E;
-				del = del || trigger.code == 0xD3;
+				return triggers;
 			}
-			if (a_device == Dev::kGamepad) {
-				return true;
+			for (unsigned i = 0; i < a_result.keyboard.count; ++i) {
+				triggers.push_back(Trigger{ Dev::kKeyboard, KeyCodeForTrigger(a_result.keyboard.keys[i]) });
 			}
-			// The combinations the game or Windows keeps for itself.
-			if (alt && (tab || f4)) {
-				return false;
-			}
-			return !(ctrl && alt && del);
+			return triggers;
 		}
 
-		// Every trigger of a_subset is part of a_superset.
-		bool Covered(const std::vector<Trigger>& a_subset, const std::vector<Trigger>& a_superset)
+		int ProblemOf(fc::BindingCaptureError a_error)
 		{
-			return std::all_of(a_subset.begin(), a_subset.end(), [&](const Trigger& t) { return Contains(a_superset, t); });
+			switch (a_error) {
+			case fc::BindingCaptureError::tooMany:
+				return static_cast<int>(CaptureProblem::kTooMany);
+			case fc::BindingCaptureError::invalid:
+				return static_cast<int>(CaptureProblem::kInvalid);
+			case fc::BindingCaptureError::notSimultaneous:
+				return static_cast<int>(CaptureProblem::kNotTogether);
+			default:
+				return static_cast<int>(CaptureProblem::kNone);
+			}
 		}
 
-		void FailCaptureLocked(CaptureProblem a_problem)
+		// Called with g_captureMutex held: mirrors what the recorder holds right now so
+		// that the window can show it.
+		void SyncCaptureLocked(const fc::BindingCaptureResult& a_result)
 		{
-			g_captureProblem.store(static_cast<int>(a_problem), std::memory_order_relaxed);
-			g_captureCandidate.clear();
-			// Listen again once everything is released, so a refused chord can be
-			// retried without closing the window.
-			g_captureState.store(static_cast<int>(CaptureState::kWaiting), std::memory_order_relaxed);
+			g_captureCandidate = TriggersOf(a_result);
+			g_captureState.store(static_cast<int>(a_result.status == fc::BindingCaptureStatus::armed ? CaptureState::kArmed : CaptureState::kWaiting),
+				std::memory_order_relaxed);
 		}
 
-		void FinishCaptureLocked()
+		// Called with g_captureMutex held: the chord is complete and every key of it has
+		// been released again.
+		void StoreCaptureLocked(const fc::BindingCaptureResult& a_result)
 		{
+			g_captureCandidate = TriggersOf(a_result);
 			Chord chord;
 			chord.triggers = g_captureCandidate;
 			g_captureResult = Format(chord);
 			g_captureResultSlot = g_captureSlot.load(std::memory_order_relaxed);
-			g_captureResultDevice = g_captureDevice.load(std::memory_order_relaxed);
+			g_captureResultDevice = a_result.device == fc::BindingCaptureDevice::gamepad ? 1 : 0;
+			g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
 			g_captureState.store(static_cast<int>(CaptureState::kCaptured), std::memory_order_relaxed);
 			SKSE::log::debug("Hotkeys: recorded '{}' for the {} device.", g_captureResult, g_captureResultDevice == 0 ? "keyboard" : "controller");
 		}
-
-		// One snapshot of the recorded device: a_pressed is every key of that device
-		// that is down right now. Returns true when the snapshot asks to end the
-		// recording.
-		//
-		// This is the whole state machine: the device only reports what is held, and
-		// the recorder compares that with what it has collected so far.
-		bool SampleCapture(Dev a_device, const std::vector<Trigger>& a_pressed)
-		{
-			std::lock_guard lock(g_captureMutex);
-			const auto state = static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed));
-			if (state != CaptureState::kWaiting && state != CaptureState::kArmed) {
-				return false;
-			}
-
-			// A recording that was started for one device ignores the other one, so a
-			// palm on the controller cannot put a button into a keyboard chord (and the
-			// keyboard cannot pollute a controller chord).
-			std::vector<Trigger> pressed;
-			for (const auto& trigger : a_pressed) {
-				if (trigger.device != a_device) {
-					continue;
-				}
-				if (IsCaptureCancel(trigger)) {
-					return true;
-				}
-				if (!Contains(pressed, trigger)) {
-					pressed.push_back(trigger);
-				}
-			}
-
-			if (state == CaptureState::kWaiting) {
-				// Only a neutral device starts a chord.
-				if (pressed.empty()) {
-					g_captureState.store(static_cast<int>(CaptureState::kArmed), std::memory_order_relaxed);
-				}
-				return false;
-			}
-
-			if (pressed.empty()) {
-				// Everything released: this is the result, and nothing was pressed
-				// after the last key of the chord.
-				if (!g_captureCandidate.empty()) {
-					FinishCaptureLocked();
-				}
-				return false;
-			}
-			if (Covered(pressed, g_captureCandidate)) {
-				return false;  // part of the chord was released; wait for the rest
-			}
-			if (!Covered(g_captureCandidate, pressed)) {
-				// A key of the chord went up and a different one went down: the player
-				// pressed the keys one after the other instead of together.
-				FailCaptureLocked(CaptureProblem::kNotTogether);
-				return false;
-			}
-			g_captureCandidate = pressed;
-			if (g_captureCandidate.size() > kMaxChordKeys) {
-				FailCaptureLocked(CaptureProblem::kTooMany);
-				return false;
-			}
-			if (!ValidCaptureChord(a_device, g_captureCandidate)) {
-				FailCaptureLocked(CaptureProblem::kInvalid);
-				return false;
-			}
-			g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
-			g_captureState.store(static_cast<int>(CaptureState::kArmed), std::memory_order_relaxed);
-			return false;
-		}
-
 		void CheckCaptureTimeout()
 		{
 			if (g_captureStartedMs == 0) {
@@ -833,17 +787,6 @@ namespace SOS::Hotkeys
 		// plugins, so the recorder would see nothing. The poll feeds the recorder
 		// only: it never fires a hotkey, because the keys that reach it were typed
 		// into the menu.
-
-		// The pad buttons ButtonEvent reports as XInput masks, in the order XInput
-		// numbers them. The two triggers are axes rather than bits, so they are read
-		// from their own fields and reported as the two pseudo masks ButtonEvent uses
-		// for them.
-		constexpr std::uint32_t kPadButtons[] = {
-			0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
-			0x0100, 0x0200, 0x1000, 0x2000, 0x4000, 0x8000
-		};
-		// An analogue trigger counts as pressed from this value on.
-		constexpr std::uint8_t kPadTriggerOn = 30;
 
 		struct PadState
 		{
@@ -882,13 +825,36 @@ namespace SOS::Hotkeys
 			return false;
 		}
 
-		void PollDevices(std::vector<Trigger>& a_now)
+		// The physical modifier keys: the ini folds them onto one trigger, so the key
+		// table carries them only as pseudo codes, but the recorder has to see them.
+		struct ModifierEntry
 		{
+			std::uint32_t scan;
+			int           vk;
+		};
+
+		constexpr ModifierEntry kModifierKeys[] = {
+			{ 0x1D, VK_LCONTROL }, { 0x9D, VK_RCONTROL },
+			{ 0x2A, VK_LSHIFT },   { 0x36, VK_RSHIFT },
+			{ 0x38, VK_LMENU },    { 0xB8, VK_RMENU }
+		};
+
+		// One snapshot of both devices in the shape FreeClimb's recorder wants. It is
+		// polled instead of hooked, so no engine address is involved.
+		void PollDevices(fc::BindingCaptureSnapshot& a_snapshot)
+		{
+			a_snapshot.keyboard.reset();
 			for (const auto& entry : KeyTable()) {
-				if ((::GetAsyncKeyState(entry.vk) & 0x8000) != 0) {
-					a_now.push_back(Trigger{ Dev::kKeyboard, entry.scan });
+				if (entry.scan >= 0x100) {
+					// The modifier groups are pseudo codes, not scan codes.
+					continue;
 				}
+				a_snapshot.keyboard.set(entry.scan, (::GetAsyncKeyState(entry.vk) & 0x8000) != 0);
 			}
+			for (const auto& entry : kModifierKeys) {
+				a_snapshot.keyboard.set(entry.scan, (::GetAsyncKeyState(entry.vk) & 0x8000) != 0);
+			}
+			a_snapshot.keyboardValid = true;
 
 			static PadState lastPad{};
 			static bool     lastPadValid = false;
@@ -901,321 +867,79 @@ namespace SOS::Hotkeys
 				// "every button released" in the middle of a chord.
 				pad = lastPad;
 			}
-			if (!lastPadValid) {
-				return;
-			}
-			for (const auto button : kPadButtons) {
-				if ((pad.buttons & button) != 0) {
-					a_now.push_back(Trigger{ Dev::kGamepad, button });
-				}
-			}
-			if (pad.leftTrigger > kPadTriggerOn) {
-				a_now.push_back(Trigger{ Dev::kGamepad, RE::BSWin32GamepadDevice::Keys::kLeftTrigger });
-			}
-			if (pad.rightTrigger > kPadTriggerOn) {
-				a_now.push_back(Trigger{ Dev::kGamepad, RE::BSWin32GamepadDevice::Keys::kRightTrigger });
-			}
-		}
-
-		// ---- input queue filter ---------------------------------------------
-		//
-		// A recording has to own the whole device, not just the events our own sink
-		// happens to see: the framework menu turns the same events into its own
-		// navigation and closes itself on Escape, on the controller's Back button and
-		// on the shoulder buttons, and returning kStop from a sink only stops the
-		// sinks that come after ours. FreeClimb solves this by running on the poll of
-		// the two devices and taking the recorded events out of BSInputEventQueue
-		// before anything is dispatched from it. This is the same mechanism, so the
-		// keys never reach the menu, the framework or the game at all - and it needs
-		// no address library ids beyond the two tables themselves, which keeps working
-		// when a build recompiles the functions around them.
-
-		std::atomic<bool> g_keyboardHook{ false };
-		std::atomic<bool> g_gamepadHook{ false };
-
-		// Which keys the recorder has taken off the queue. The release of a key that
-		// was swallowed on the way down has to be swallowed as well: an orphan "up"
-		// leaves the menu thinking the key was never pressed, and an orphan "down"
-		// leaves it thinking the key is still held.
-		class QueueOwnership
-		{
-		public:
-			// Same rules as FreeClimb's ownership filter. Returns true when the event
-			// has to be removed from the queue.
-			bool Filter(Dev a_device, std::uint32_t a_code, bool a_down, bool a_up, bool a_capturing)
-			{
-				const auto index = IndexOf(a_device, a_code);
-				if (index >= kSlots) {
-					// A key the recorder does not know: swallowed while recording, so
-					// nothing it cannot record still works the menu.
-					return a_capturing;
-				}
-				const bool previous = m_owned[index];
-				if (a_up) {
-					m_owned[index] = false;
-					return previous;
-				}
-				if (a_down) {
-					m_owned[index] = a_capturing;
-					return a_capturing;
-				}
-				return a_capturing || previous;
-			}
-
-			void Clear() { m_owned.reset(); }
-
-		private:
-			static constexpr std::size_t kKeyboardSlots = 256;
-			static constexpr std::size_t kGamepadSlots = 16;
-			static constexpr std::size_t kSlots = kKeyboardSlots + kGamepadSlots;
-
-			static std::size_t IndexOf(Dev a_device, std::uint32_t a_code)
-			{
-				if (a_device == Dev::kKeyboard) {
-					// Keyboard events carry the DirectInput scan code, which is exactly
-					// the index used here.
-					return a_code < kKeyboardSlots ? a_code : kSlots;
-				}
-				// ButtonEvent reports the pad buttons as the XInput masks, so the index
-				// is the bit, not the mask; the triggers use 0x0009 and 0x000A and are
-				// mapped onto the two slots after Y.
-				using Keys = RE::BSWin32GamepadDevice::Keys;
-				if (a_code == Keys::kLeftTrigger) {
-					return kKeyboardSlots + 14;
-				}
-				if (a_code == Keys::kRightTrigger) {
-					return kKeyboardSlots + 15;
-				}
-				std::size_t bit = 0;
-				for (auto mask = a_code; mask > 1; mask >>= 1) {
-					++bit;
-				}
-				return bit < kGamepadSlots ? kKeyboardSlots + bit : kSlots;
-			}
-
-			std::bitset<kSlots> m_owned;
-		};
-
-		std::mutex     g_ownershipMutex;
-		QueueOwnership g_ownership;
-
-		// The scan code the recorder works with for a DirectInput code, or 0 when the
-		// key has no name in the ini and therefore cannot be part of a chord.
-		std::uint32_t KnownScanCode(std::uint32_t a_dik)
-		{
-			const auto modifier = ModifierForScan(a_dik);
-			if (modifier != 0) {
-				return modifier;
-			}
-			return NameForScan(a_dik).empty() ? 0 : a_dik;
-		}
-
-		bool FilterEvent(RE::InputEvent* a_event, bool& a_cancel)
-		{
-			const auto device = a_event->GetDevice();
-			if (device != RE::INPUT_DEVICE::kKeyboard && device != RE::INPUT_DEVICE::kGamepad) {
-				return false;
-			}
-			const bool capturing = g_capturing.load(std::memory_order_relaxed);
-			const auto dev = device == RE::INPUT_DEVICE::kGamepad ? Dev::kGamepad : Dev::kKeyboard;
-			auto*      button = a_event->AsButtonEvent();
-			if (!button) {
-				// Sticks and the rest of the device: nothing moves while recording.
-				return capturing;
-			}
-			const auto raw = button->GetIDCode();
-			if (capturing && button->IsDown() && IsCaptureCancel(Trigger{ dev, raw })) {
-				a_cancel = true;
-			}
-			return g_ownership.Filter(dev, raw, button->IsDown(), button->IsUp(), capturing);
-		}
-
-		// Walks the queue that is about to be dispatched and unlinks everything the
-		// recorder owns.
-		void FilterInputQueue()
-		{
-			auto* queue = RE::BSInputEventQueue::GetSingleton();
-			if (!queue) {
-				return;
-			}
-			bool cancel = false;
-			{
-				std::lock_guard lock(g_ownershipMutex);
-				auto*&      head = queue->GetQueueHead();
-				auto*&      tail = queue->GetQueueTail();
-				RE::InputEvent* previous = nullptr;
-				for (auto* event = head; event;) {
-					auto* next = event->next;
-					if (FilterEvent(event, cancel)) {
-						if (previous) {
-							previous->next = next;
-						} else {
-							head = next;
-						}
-						if (tail == event) {
-							tail = previous;
-						}
-					} else {
-						previous = event;
+			a_snapshot.gamepadValid = lastPadValid;
+			a_snapshot.gamepad = 0;
+			if (lastPadValid) {
+				for (unsigned i = 0; i < 14; ++i) {
+					if ((pad.buttons & kPadButtons[i]) != 0) {
+						a_snapshot.gamepad = static_cast<fc::GamepadChord>(a_snapshot.gamepad | fc::gamepadButtonMask(i));
 					}
-					event = next;
+				}
+				if (pad.leftTrigger > kPadTriggerOn) {
+					a_snapshot.gamepad = static_cast<fc::GamepadChord>(a_snapshot.gamepad | fc::gamepadButtonMask(14));
+				}
+				if (pad.rightTrigger > kPadTriggerOn) {
+					a_snapshot.gamepad = static_cast<fc::GamepadChord>(a_snapshot.gamepad | fc::gamepadButtonMask(15));
 				}
 			}
-			if (cancel) {
-				CancelCapture();
+
+			// The click, the button or the key that opened the recorder is still down when
+			// the first snapshot is taken; FreeClimb refuses to arm while anything is held,
+			// which is how that press stays out of the chord.
+			const auto mouseDown = [](int a_vk) { return (::GetAsyncKeyState(a_vk) & 0x8000) != 0; };
+			bool       neutral = a_snapshot.gamepad == 0 && !mouseDown(VK_LBUTTON) && !mouseDown(VK_RBUTTON);
+			for (const bool down : a_snapshot.keyboard.down) {
+				neutral = neutral && !down;
 			}
+			a_snapshot.activationHeld = !neutral;
 		}
 
-		// The recorder reads the same state the game built this frame's events from,
-		// so what it stores and what the menu would have seen cannot disagree.
-		void SampleKeyboardDevice(RE::BSWin32KeyboardDevice* a_device)
-		{
-			if (!a_device) {
-				return;
-			}
-			const auto&          state = a_device->GetRuntimeData().curState;
-			std::vector<Trigger> pressed;
-			for (std::uint32_t dik = 0; dik < 256; ++dik) {
-				if ((state[dik] & 0x80) == 0) {
-					continue;
-				}
-				const auto code = KnownScanCode(dik);
-				if (code != 0) {
-					pressed.push_back(Trigger{ Dev::kKeyboard, code });
-				}
-			}
-			if (SampleCapture(Dev::kKeyboard, pressed)) {
-				CancelCapture();
-			}
-		}
-
-		RE::BSWin32GamepadDevice* CurrentPad(RE::BSPCGamepadDeviceHandler* a_handler)
-		{
-			if (!a_handler) {
-				return nullptr;
-			}
-			auto* delegate = a_handler->GetRuntimeData().currentPCGamePadDelegate;
-			if (!delegate || !delegate->IsEnabled()) {
-				return nullptr;
-			}
-			return skyrim_cast<RE::BSWin32GamepadDevice*>(delegate);
-		}
-
-		void SampleGamepadDevice(RE::BSPCGamepadDeviceHandler* a_handler)
-		{
-			auto* pad = CurrentPad(a_handler);
-			if (!pad) {
-				return;
-			}
-			const auto&          raw = pad->GetRuntimeData().currentState.gamepad;
-			std::vector<Trigger> pressed;
-			for (const auto button : kPadButtons) {
-				if ((raw.buttons & button) != 0) {
-					pressed.push_back(Trigger{ Dev::kGamepad, button });
-				}
-			}
-			if (raw.leftTrigger > kPadTriggerOn) {
-				pressed.push_back(Trigger{ Dev::kGamepad, RE::BSWin32GamepadDevice::Keys::kLeftTrigger });
-			}
-			if (raw.rightTrigger > kPadTriggerOn) {
-				pressed.push_back(Trigger{ Dev::kGamepad, RE::BSWin32GamepadDevice::Keys::kRightTrigger });
-			}
-			if (SampleCapture(Dev::kGamepad, pressed)) {
-				CancelCapture();
-			}
-		}
-
-		// Poll runs on slot 2 of the device's virtual table (00 destructor, 01
-		// Initialize, 02 Poll). The original is always called first: the device has to
-		// update its state before it can be read.
-		using KeyboardPollFn = void (*)(RE::BSWin32KeyboardDevice*, float);
-
-		KeyboardPollFn g_keyboardPoll{ nullptr };
-
-		void KeyboardPollHook(RE::BSWin32KeyboardDevice* a_device, float a_delta)
-		{
-			if (g_keyboardPoll) {
-				g_keyboardPoll(a_device, a_delta);
-			}
-			if (g_capturing.load(std::memory_order_relaxed)) {
-				SampleKeyboardDevice(a_device);
-			}
-			FilterInputQueue();
-		}
-
-		using GamepadPollFn = void (*)(RE::BSPCGamepadDeviceHandler*, float);
-
-		GamepadPollFn g_gamepadPoll{ nullptr };
-
-		void GamepadPollHook(RE::BSPCGamepadDeviceHandler* a_handler, float a_delta)
-		{
-			if (g_gamepadPoll) {
-				g_gamepadPoll(a_handler, a_delta);
-			}
-			if (g_capturing.load(std::memory_order_relaxed)) {
-				SampleGamepadDevice(a_handler);
-			}
-			FilterInputQueue();
-		}
-
-		void InstallVTableHook(const char* a_name, const REL::RelocationID& a_table, void* a_hook, void** a_original, std::atomic<bool>& a_installed)
-		{
-			constexpr std::size_t kPollSlot = 2;
-			// Resolving an id the address library does not know ends the process, so
-			// both tables are checked before anything touches them.
-			if (!Hooking::IdExists(a_table)) {
-				SKSE::log::error("Hotkeys: the virtual table for {} is not in the address library of this build; the recorder falls back to polling, which cannot stop the menu from acting on the keys it records.", a_name);
-				return;
-			}
-			void* original = nullptr;
-			if (!Hooking::InstallVFunc(a_name, a_table.address(), kPollSlot, a_hook, &original)) {
-				SKSE::log::error("Hotkeys: the poll of {} could not be hooked; the recorder falls back to polling, which cannot stop the menu from acting on the keys it records.", a_name);
-				return;
-			}
-			*a_original = original;
-			a_installed.store(true, std::memory_order_relaxed);
-		}
-
-		void InstallInputHooks()
-		{
-			// The tables the address library publishes for the two devices. Same ids
-			// CommonLibSSE-NG lists for VTABLE_BSWin32KeyboardDevice and
-			// VTABLE_BSPCGamepadDeviceHandler.
-			static const REL::RelocationID keyboardTable{ 285449, 236808 };
-			static const REL::RelocationID gamepadTable{ 285457, 236813 };
-
-			void* keyboardOriginal = nullptr;
-			InstallVTableHook("the keyboard device", keyboardTable,
-				reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(&KeyboardPollHook)), &keyboardOriginal, g_keyboardHook);
-			g_keyboardPoll = reinterpret_cast<KeyboardPollFn>(keyboardOriginal);
-
-			void* gamepadOriginal = nullptr;
-			InstallVTableHook("the controller device", gamepadTable,
-				reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(&GamepadPollHook)), &gamepadOriginal, g_gamepadHook);
-			g_gamepadPoll = reinterpret_cast<GamepadPollFn>(gamepadOriginal);
-
-			if (g_keyboardHook.load(std::memory_order_relaxed) && g_gamepadHook.load(std::memory_order_relaxed)) {
-				SKSE::log::info("Hotkeys: the recorder now owns the keyboard and the controller while it is open.");
-			}
-		}
-
-		// Runs from the render thread every frame while the recorder is open: the
-		// heartbeat that ends a recording nobody finishes, and the source of key state
-		// when the device hooks could not be installed.
+		// Runs from the render thread every frame while the recorder is open: one
+		// snapshot, one call into FreeClimb's state machine, and the heartbeat that ends
+		// a recording nobody finishes.
 		void PollCapture()
 		{
 			if (!g_capturing.load(std::memory_order_relaxed)) {
 				return;
 			}
-			const auto device = CaptureDeviceDev();
-			const bool hooked = device == Dev::kGamepad ? g_gamepadHook.load(std::memory_order_relaxed) : g_keyboardHook.load(std::memory_order_relaxed);
-			if (!hooked) {
-				std::vector<Trigger> now;
-				PollDevices(now);
-				if (SampleCapture(device, now)) {
-					CancelCapture();
-					return;
+
+			fc::BindingCaptureSnapshot snapshot;
+			PollDevices(snapshot);
+
+			bool captured = false;
+			bool cancelled = false;
+			{
+				std::lock_guard                   lock(g_captureMutex);
+				const fc::BindingCaptureResult& result = g_capture.sample(snapshot);
+				switch (result.status) {
+				case fc::BindingCaptureStatus::captured:
+					StoreCaptureLocked(result);
+					captured = true;
+					break;
+				case fc::BindingCaptureStatus::cancelled:
+					cancelled = true;
+					break;
+				case fc::BindingCaptureStatus::error:
+					// FreeClimb stops on a refused combination. Here the reason is shown in
+					// the window and the recorder listens again, so the player can simply
+					// press a different chord.
+					g_captureProblem.store(ProblemOf(result.error), std::memory_order_relaxed);
+					g_captureCandidate.clear();
+					g_captureState.store(static_cast<int>(CaptureState::kWaiting), std::memory_order_relaxed);
+					g_capture.begin(g_captureDevice.load(std::memory_order_relaxed) == 0 ? fc::BindingCaptureDevice::keyboard : fc::BindingCaptureDevice::gamepad);
+					break;
+				default:
+					SyncCaptureLocked(result);
+					break;
 				}
+			}
+			if (cancelled) {
+				SKSE::log::debug("Hotkeys: the recording was cancelled; nothing was stored.");
+				CancelCapture();
+				return;
+			}
+			if (captured) {
+				return;
 			}
 			CheckCaptureTimeout();
 		}
@@ -1498,8 +1222,8 @@ namespace SOS::Hotkeys
 
 		void PollTick()
 		{
-			// Firing is driven by the input sink and, while the recorder is open, by the
-			// device hooks; this is only the recorder's heartbeat.
+			// Firing is driven by the input sink; while the recorder is open this is its
+			// sampling and its heartbeat, and the settings page calls it every frame.
 			if (!g_capturing.load(std::memory_order_relaxed)) {
 				return;
 			}
@@ -1528,12 +1252,12 @@ namespace SOS::Hotkeys
 
 				for (auto* event = *a_event; event; event = event->next) {
 					if (g_capturing.load(std::memory_order_relaxed)) {
-						// The recorder is modal and owns every device. It is normally
-						// emptied off the input queue on the device polls (see
-						// FilterInputQueue), before anything is dispatched; returning
-						// kStop here keeps the batch away from the sinks behind this one
-						// as well, for the case where the device hooks are not installed.
-						// Esc and the controller's Back end the recording.
+							// The recorder owns the input while it is open: the snapshot it works on is
+						// polled (see PollDevices), so nothing has to be collected here - the events
+						// are only kept away from the rest of the game. The menu framework is told to
+						// stop reading input as well (IG::SetMenuInputSuppressed), which is what keeps
+						// Escape, Back and the shoulder buttons off the menu. Escape and Back end
+						// the recording.
 						if (EventAsksCancel(event)) {
 							CancelCapture();
 						}
@@ -1652,7 +1376,6 @@ namespace SOS::Hotkeys
 
 		Reload();
 		manager->AddEventSink<RE::InputEvent*>(&g_sink);
-		InstallInputHooks();
 		g_installed = true;
 		SKSE::log::debug("Hotkeys: input sink registered (random '{}', quick picker '{}', quickslot key '{}').",
 			Settings::Get().randomOutfitHotkey, Settings::Get().quickPickerHotkey, Settings::Get().quickPickerKey);
@@ -1732,8 +1455,8 @@ namespace SOS::Hotkeys
 			g_captureStartedMs = NowMs();
 		}
 		{
-			std::lock_guard lock(g_ownershipMutex);
-			g_ownership.Clear();
+			std::lock_guard lock(g_captureMutex);
+			g_capture.begin(wanted == Dev::kGamepad ? fc::BindingCaptureDevice::gamepad : fc::BindingCaptureDevice::keyboard);
 		}
 		g_captureSlot.store(static_cast<int>(a_slot), std::memory_order_relaxed);
 		g_capturing.store(true, std::memory_order_relaxed);
@@ -1751,25 +1474,21 @@ namespace SOS::Hotkeys
 		g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
 		{
 			std::lock_guard lock(g_captureMutex);
+			g_capture.reset();
 			g_captureCandidate.clear();
 			g_captureResult.clear();
 			g_captureResultSlot = -1;
 			g_captureResultDevice = 0;
 			g_captureStartedMs = 0;
 		}
-		{
-			std::lock_guard lock(g_ownershipMutex);
-			g_ownership.Clear();
-		}
 		ForgetAll();
 	}
 
 	void FeedInputEvent(RE::InputEvent* a_event)
 	{
-		// The events of a recording are unlinked from the input queue on the device
-		// polls, before anything is dispatched, so the menu framework never sees them.
-		// This is the last place that still catches Esc and Back when those hooks are
-		// not in place.
+		// The recorder works on its own polled snapshot, so this is only where the
+		// events the framework hands us are used to recognise Escape and the
+		// controller's Back button.
 		if (!g_capturing.load(std::memory_order_relaxed)) {
 			return;
 		}
@@ -1816,6 +1535,7 @@ namespace SOS::Hotkeys
 	bool TakeCaptureResult(Slot& a_slot, Input& a_device, std::string& a_text)
 	{
 		std::lock_guard lock(g_captureMutex);
+		g_capture.reset();
 		if (static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed)) != CaptureState::kCaptured || g_captureResultSlot < 0) {
 			return false;
 		}
