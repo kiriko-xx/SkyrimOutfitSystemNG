@@ -35,6 +35,19 @@ namespace SOS::Hotkeys
 	bool PowerActionJustHandled();
 	void SetTextInputActive(bool a_active);
 
+	// ---- taking the recorded keys off the input queue --------------------
+	//
+	// The recorder's window has to own the keyboard and the pad completely: Escape,
+	// Back and the shoulder buttons must end the recording instead of acting on the
+	// menu framework underneath it. A sink cannot do that (the queue is dispatched to
+	// every sink), so the two device polls are hooked and the events are unlinked from
+	// the queue before anything is dispatched - this is FreeClimb's mechanism, using
+	// the vtable constants CommonLibSSE-NG publishes. Both hooks are best effort: a
+	// slot that cannot be hooked only logs a warning.
+	void InstallInputFilters();
+	// Forgets which keys an earlier recording took off the queue.
+	void ResetInputOwnership();
+
 	// ---- hotkey capture (settings page) ---------------------------------
 	//
 	// The settings page shows a button per hotkey. Clicking it starts a capture:

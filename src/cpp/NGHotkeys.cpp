@@ -915,6 +915,10 @@ namespace SOS::Hotkeys
 				case fc::BindingCaptureStatus::captured:
 					StoreCaptureLocked(result);
 					captured = true;
+					// The recording is over: stop taking the player's keys off the queue
+					// right away instead of on the next frame, when the page has already
+					// picked the result up.
+					g_capturing.store(false, std::memory_order_relaxed);
 					break;
 				case fc::BindingCaptureStatus::cancelled:
 					cancelled = true;
@@ -1252,11 +1256,12 @@ namespace SOS::Hotkeys
 
 				for (auto* event = *a_event; event; event = event->next) {
 					if (g_capturing.load(std::memory_order_relaxed)) {
-							// The recorder owns the input while it is open: the snapshot it works on is
+						// The recorder owns the input while it is open: the snapshot it works on is
 						// polled (see PollDevices), so nothing has to be collected here - the events
-						// are only kept away from the rest of the game. The menu framework is told to
-						// stop reading input as well (IG::SetMenuInputSuppressed), which is what keeps
-						// Escape, Back and the shoulder buttons off the menu. Escape and Back end
+						// are only kept away from the rest of the game. The events themselves are
+						// taken off the queue by the device hooks (see InputQueueFilter.cpp), which
+						// is what keeps Escape, Back and the shoulder buttons off the menu, and the
+						// menu framework is told to stop reading input as well. Escape and Back end
 						// the recording.
 						if (EventAsksCancel(event)) {
 							CancelCapture();
@@ -1376,6 +1381,9 @@ namespace SOS::Hotkeys
 
 		Reload();
 		manager->AddEventSink<RE::InputEvent*>(&g_sink);
+		// The recorder takes the player's keys off the input queue while it runs, the
+		// way FreeClimb does; a slot that cannot be hooked is only a warning.
+		InstallInputFilters();
 		g_installed = true;
 		SKSE::log::debug("Hotkeys: input sink registered (random '{}', quick picker '{}', quickslot key '{}').",
 			Settings::Get().randomOutfitHotkey, Settings::Get().quickPickerHotkey, Settings::Get().quickPickerKey);
@@ -1462,6 +1470,8 @@ namespace SOS::Hotkeys
 		g_capturing.store(true, std::memory_order_relaxed);
 		// Whatever is held right now is not part of the new chord.
 		ForgetAll();
+		// Keys a previous recording took off the queue must not stay marked as ours.
+		ResetInputOwnership();
 		SKSE::log::debug("Hotkeys: recording the {} hotkey of slot {}; waiting for a neutral state.",
 			wanted == Dev::kGamepad ? "controller" : "keyboard", static_cast<int>(a_slot));
 	}
@@ -1535,7 +1545,9 @@ namespace SOS::Hotkeys
 	bool TakeCaptureResult(Slot& a_slot, Input& a_device, std::string& a_text)
 	{
 		std::lock_guard lock(g_captureMutex);
-		g_capture.reset();
+		// This runs every frame while the window is open, so it must not touch the
+		// running recorder: resetting it here threw away the whole recording (that is
+		// what made 1.5.74 record nothing at all).
 		if (static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed)) != CaptureState::kCaptured || g_captureResultSlot < 0) {
 			return false;
 		}

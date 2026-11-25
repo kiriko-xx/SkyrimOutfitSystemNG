@@ -15,11 +15,17 @@ $ErrorActionPreference = 'Stop'
 #    it looks at what is held right now, nothing is accepted before the device is
 #    neutral, and a chord is stored only once every key of it was released - a
 #    modifier pressed on its way to Alt+O is therefore never stored on its own
-#  - nothing is hooked and the input queue is never touched (that is what a game
-#    update would break): the recorder polls Win32 and XInput, and the menu is kept
-#    out of a recording through what the menu framework and ImGui already publish
-#    (SetMenuInputSuppressed drops the events, clears the held keys and stops the
-#    host from accepting events)
+#  - while a recording runs, the recorded keys are taken off the engine's input
+#    queue the way FreeClimb does it: the keyboard poll and the pad poll are hooked
+#    through the vtable constants CommonLibSSE-NG publishes
+#    (RE::VTABLE_BSWin32KeyboardDevice / RE::VTABLE_BSPCGamepadDeviceHandler, no
+#    hand written address-library id), the original poll still runs first, and the
+#    events are unlinked before anything is dispatched - so Escape, Back and the
+#    shoulder buttons reach the recording instead of the framework menu. Both hooks
+#    are best effort and say so in the log; with no recording running they return
+#    without touching the queue. The framework and ImGui suppression stays as the
+#    second layer (SetMenuInputSuppressed drops the events, clears the held keys and
+#    stops the host from accepting events)
 #  - the Change Outfit power is recognised by the plugin file it comes from: the
 #    esp and its scripts are optional installs, so nothing searches the load order
 #  - a row keeps one binding per device, both fire, and the recorder is a modal
@@ -155,25 +161,36 @@ Assert-Absent $hotkeys 'AdvanceCaptureLocked' 'the chord is not accumulated key 
 Assert-Absent $hotkeys 'PromoteCaptureLocked' 'the waiting phase ends on a snapshot, not on a timer'
 Assert-Absent $hotkeys 'kCaptureSettleMs' 'no quiet moment ends a chord'
 
-# ---- nothing is hooked: the recorder owns the input through the framework only ----
-Assert-Absent $hotkeys 'VTableHook' 'the recorder no longer patches a virtual table'
-Assert-Absent $hotkeys 'Hooking::' 'the recorder uses no address-library hook helper at all'
-Assert-Absent $hotkeys 'REL::RelocationID' 'no raw engine table is named any more'
-Assert-Absent $hotkeys '285449' 'the keyboard device table id is gone'
-Assert-Absent $hotkeys '285457' 'the controller device table id is gone'
-Assert-Absent $hotkeys 'BSInputEventQueue' 'the input queue of the game is never touched'
-Assert-Absent $hotkeys 'GetQueueHead' 'no event is unlinked from the queue'
-Assert-Absent $hotkeys 'QueueOwnership' 'the per-key ownership filter is gone with the hooks'
-Assert-Absent $hotkeys 'FilterInputQueue' 'nothing is filtered off the queue any more'
-Assert-Absent $hotkeys 'KeyboardPollHook' 'the keyboard poll is not hooked'
-Assert-Absent $hotkeys 'GamepadPollHook' 'the controller poll is not hooked'
-Assert-Absent $hotkeys 'SampleKeyboardDevice' 'no device runtime data is read'
-Assert-Absent $hotkeys 'currentPCGamePadDelegate' 'the pad delegate is not reached behind the handler'
-Assert-Absent $hotkeys 'KnownScanCode' 'the recorder takes the keys the key table already names'
-Assert-Absent $hotkeys 'SampleCapture' 'the recorder is the copied object, not a local loop'
-Assert-Absent $hotkeys 'ValidCaptureChord' 'the chord rules live with the copied recorder'
-Assert-Absent $hotkeys 'FailCaptureLocked' 'a refused chord is reported through the copied result'
-Assert-Absent $hotkeys 'Covered(' 'no home-made released-key test is left'
+# ---- the recorded keys are taken off the queue before anything is dispatched ----
+$filter = Read-RepoFile 'src/cpp/InputQueueFilter.cpp'
+Assert-Contains $hotkeys 'InstallInputFilters();' 'the queue filter is installed together with the input sink'
+Assert-Contains $hotkeysH 'void InstallInputFilters();' 'the filter belongs to the hotkey interface'
+Assert-Contains $hotkeysH 'void ResetInputOwnership();' 'the filter can forget what an earlier recording took'
+Assert-Contains $hotkeys 'ResetInputOwnership();' 'a new recording starts with nothing marked as taken'
+Assert-Contains $filter 'RE::VTABLE_BSWin32KeyboardDevice[0]' 'the keyboard vtable comes from the CommonLib constant'
+Assert-Contains $filter 'RE::VTABLE_BSPCGamepadDeviceHandler[0]' 'the pad vtable comes from the CommonLib constant'
+Assert-Absent $filter '285449' 'no hand written keyboard table id'
+Assert-Absent $filter '285457' 'no hand written pad table id'
+Assert-Contains $filter 'constexpr std::size_t kKeyboardPollSlot = 2;' 'the keyboard poll is the third vtable entry'
+Assert-Contains $filter 'constexpr std::size_t kGamepadPollSlot = 2;' 'the pad poll is the third vtable entry'
+Assert-Contains $filter 'void RemoveInputEvents(' 'the queue walk is the copied one'
+Assert-Contains $filter 'queue->GetQueueHead(), queue->GetQueueTail()' 'the engine input queue is what is walked'
+Assert-Contains $filter 'if (!CaptureActive() && !g_ownership.Pending()) {' 'nothing is filtered unless a recording runs or a taken key is still open'
+Assert-Contains $filter 'const bool capturing = CaptureActive();' 'the recorder decides whether the queue is filtered'
+Assert-Contains $filter 'button->IsDown(), button->IsUp(), capturing' 'press and release are both handed to the filter'
+Assert-Contains $filter 'if (a_up) {' 'the release of a taken key is taken as well'
+Assert-Contains $filter '_owned.set(index, a_capturing);' 'a taken key stays marked until it is released'
+Assert-Contains $filter 'SKSE::InputMap::GamepadMaskToKeycode(code)' 'a pad button mask is turned into its key code'
+Assert-Contains $filter 'SKSE::InputMap::kMacro_GamepadOffset' 'the gamepad offset is removed before the filter sees the code'
+Assert-Contains $filter '::VirtualProtect(location, sizeof(void*), PAGE_EXECUTE_READWRITE, &previous)' 'the vtable slot is written through a writable page'
+Assert-Contains $filter '::InterlockedCompareExchangePointer(' 'the slot is replaced atomically'
+Assert-Contains $filter '::VirtualQuery(' 'the slot is checked before it is touched'
+Assert-Contains $filter 'g_keyboardPoll(a_device, a_timeDelta);' 'the original keyboard poll still runs first'
+Assert-Contains $filter 'g_gamepadPoll(a_handler, a_timeDelta);' 'the original pad poll still runs first'
+Assert-Contains $filter 'the keyboard poll slot could not be hooked' 'a missing slot is reported instead of assumed'
+Assert-Contains $filter 'the controller poll slot could not be hooked' 'a missing slot is reported instead of assumed'
+Assert-Absent $hotkeys 'BSInputEventQueue' 'the hotkey file itself never walks the queue'
+Assert-Absent $hotkeys 'VTableHook' 'no home made vtable hook class is back'
 Assert-Absent $hotkeys 'InterruptCast' 'no extra address-library id is added just to stop a cast'
 
 $fcC = Read-RepoFile 'src/cpp/include/input/FreeClimbCapture.h'
@@ -205,7 +222,12 @@ Assert-Contains $hotkeys 'a_snapshot.activationHeld = !neutral;' 'the click that
 Assert-Contains $hotkeys 'StoreCaptureLocked(result)' 'a finished chord is stored in one place'
 Assert-Contains $hotkeys 'SyncCaptureLocked(result)' 'what the recorder holds is mirrored for the window'
 Assert-Contains $hotkeys 'g_capture.begin(wanted == Dev::kGamepad ? fc::BindingCaptureDevice::gamepad : fc::BindingCaptureDevice::keyboard);' 'a recording starts in the waiting state'
-Assert-Contains $hotkeys 'g_capture.reset();' 'the recorder is reset when a recording ends'
+$takeResult = Get-Block $hotkeys 'bool TakeCaptureResult(Slot& a_slot, Input& a_device' "`t`treturn true;"
+Assert-Absent $takeResult 'g_capture.reset();' 'the window asking for a result never resets the running recorder'
+$cancelCapture = Get-Block $hotkeys 'void CancelCapture()' 'void FeedInputEvent'
+Assert-Contains $cancelCapture 'g_capture.reset();' 'the recorder is reset when a recording ends'
+$pollCapture = Get-Block $hotkeys 'void PollCapture()' 'bool IsHeld('
+Assert-Contains $pollCapture 'g_capturing.store(false, std::memory_order_relaxed);' 'a finished recording stops taking keys off the queue at once'
 Assert-Contains $hotkeys 'case fc::BindingCaptureStatus::error:' 'a refused chord is explained instead of dropped'
 Assert-Contains $hotkeys 'g_captureProblem.store(ProblemOf(result.error)' 'the reason of a refusal reaches the window'
 Assert-Contains $hotkeys 'case fc::BindingCaptureStatus::cancelled:' 'Escape and Back end a recording through the recorder itself'
@@ -290,5 +312,5 @@ if ($failures -gt 0) {
     Write-Output "HOTKEY_CAPTURE_FAILED: $failures problem(s)"
     exit 1
 }
-Write-Output 'HOTKEY_CAPTURE_OK: firing comes from the input sink only, an open menu mutes every binding, one key table feeds parse/format/poll, the power key is read in the button-mask space and consumed, and the recorder is the FreeClimb state machine copied into input/FreeClimbCapture.h: nothing is hooked, the input queue is untouched, nothing is taken until the device is neutral, and a chord lands only once every key of it is released'
+Write-Output 'HOTKEY_CAPTURE_OK: firing comes from the input sink only, an open menu mutes every binding, one key table feeds parse/format/poll, the power key is read in the button-mask space and consumed, and the recorder is the FreeClimb state machine copied into input/FreeClimbCapture.h: the recorded keys are taken off the engine queue by two best-effort device poll hooks (CommonLib vtable constants, nothing else hooked, idle when no recording runs), nothing is taken until the device is neutral, and a chord lands only once every key of it is released'
 exit 0

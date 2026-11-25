@@ -26,11 +26,11 @@
 // recorder opened has been released - which is what keeps Alt out of an Alt+O
 // recording and the click out of every recording.
 //
-// Not copied on purpose: FreeClimb's binding sets (movement keys, hop), its
-// gameplay ownership filter and its settings menu. The ownership filter is what
-// FreeClimb uses to take the recorded keys off the input queue; this plugin does
-// not touch the input queue at all, it leaves the menu to the menu framework
-// (see the note in NGHotkeys.cpp).
+// Not copied here: FreeClimb's binding sets (movement keys, hop) and its settings
+// menu. FreeClimb's ownership filter, which takes the recorded keys off the input
+// queue, is ported in InputQueueFilter.cpp together with the two device poll hooks
+// that call it - that is the half which keeps Escape, Back and the shoulder buttons
+// away from the menu framework while a recording runs.
 // ---------------------------------------------------------------------------
 
 namespace fc
