@@ -491,7 +491,11 @@ namespace {
 
 extern "C" {
 bool plugin_main(const SKSE::LoadInterface* a_skse) {
-    SKSE::Init(a_skse);
+    // CommonLibSSE-NG writes "<plugin name>.log" and one line into it by default
+    // (SKSE::InitInfo::log). That left a stray SkyrimOutfitSystemNG.log beside the
+    // real OutfitSystemNG.log, so the default logger is turned off and
+    // InitializeLog() below stays the only owner of the log file.
+    SKSE::Init(a_skse, SKSE::InitInfo{ .log = false });
 
     SOS::Settings::Get().Load();
     InitializeLog();

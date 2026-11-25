@@ -204,7 +204,9 @@ namespace SOS::I18n
 			{ "No outfit matches the filter.", "没有符合过滤条件的幻化。" },
 			{ "Outfit page size", "幻化列表每页数量" },
 			{ "Quick picker page size", "快速选择每页数量" },
-			{ "W/S: select   A/D: page   E: wear   R: random   X: remove   Esc: close", "W/S：选择   A/D：翻页   E：穿戴   R：随机   X：取消幻化   Esc：关闭" },
+			// 1.5.77: the quick picker hints are split per device and Tab closes too
+			{ "W/S: select   A/D: page   E: wear   R: random   X: remove   Esc/Tab: close", "W/S：选择   A/D：翻页   E：穿戴   R：随机   X：取消幻化   Esc/Tab：关闭" },
+			{ "Controller: D-pad: select/page   A: wear   Y: random   X: remove   B: close", "手柄：十字键 选择/翻页   A：穿戴   Y：随机   X：取消幻化   B：关闭" },
 			{ "List width and page sizes are stored in the ini and shared by the quick picker.", "列表宽度与每页数量保存在 ini 中，快速选择窗口共用。" },
 			{ "Translation file reloaded.", "语言文件已重新加载。" },
 			{ "Outfit removed.", "已取消幻化。" },

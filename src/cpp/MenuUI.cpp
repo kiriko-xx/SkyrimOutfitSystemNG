@@ -737,8 +737,10 @@ namespace SOS::Menu
 				g_padRandom.store(false, std::memory_order_relaxed);
 				g_padRemove.store(false, std::memory_order_relaxed);
 			}
-			// Esc always closes, also while the search box has focus.
-			if (IG::IsKeyPressed(ImGuiKey_Escape) || (!rawGamepad && IG::IsKeyPressed(ImGuiKey_GamepadFaceRight)) ||
+			// Esc and Tab close, also while the search box has focus: nothing
+			// behind the search box wants Tab, so both keys mean "leave".
+			if (IG::IsKeyPressed(ImGuiKey_Escape) || IG::IsKeyPressed(ImGuiKey_Tab) ||
+				(!rawGamepad && IG::IsKeyPressed(ImGuiKey_GamepadFaceRight)) ||
 				(rawGamepad && g_padClose.exchange(false, std::memory_order_relaxed))) {
 				CloseQuickPicker();
 			}
@@ -807,7 +809,20 @@ namespace SOS::Menu
 				CloseQuickPicker();
 			}
 
-			IG::TextDisabled(I18n::Tr("W/S: select   A/D: page   E: wear   R: random   X: remove   Esc: close"));
+			// One hint line per device. A line that does not fit the current
+			// window width is printed wrapped instead of being cut off at the
+			// edge, because the picker can be resized and translated hints are
+			// wider than the English ones.
+			const auto hintLine = [](const char* a_text) {
+				const char* text = I18n::Tr(a_text);
+				if (IG::CalcTextSize(text).x > IG::ContentRegionAvail().x) {
+					IG::TextWrapped("%s", text);
+				} else {
+					IG::TextDisabled("%s", text);
+				}
+			};
+			hintLine("W/S: select   A/D: page   E: wear   R: random   X: remove   Esc/Tab: close");
+			hintLine("Controller: D-pad: select/page   A: wear   Y: random   X: remove   B: close");
 		}
 
 		void RenderQuickPicker()
