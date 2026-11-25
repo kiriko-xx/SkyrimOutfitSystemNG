@@ -516,14 +516,28 @@ namespace SOS::Hotkeys
 		std::vector<Trigger> g_captureKeys;
 		std::vector<Trigger> g_captureDown;
 		bool        g_captureDone{ false };
+		std::uint64_t g_captureLastDownMs{ 0 };
+		// A single dropped read must not cut a chord short: the chord is only accepted
+		// once every captured key has been up for a moment (kCaptureSettleMs).
+		constexpr std::uint64_t kCaptureSettleMs = 150;
 		bool        g_captureOverflow{ false };
 		std::string g_captureResult;
 		int         g_captureResultSlot{ -1 };
+
+		void FinishCaptureLocked()
+		{
+			Chord chord;
+			chord.triggers = g_captureKeys;
+			g_captureResult = Format(chord);
+			g_captureResultSlot = g_captureSlot.load(std::memory_order_relaxed);
+			g_captureDone = true;
+		}
 
 		void FeedCapture(const Trigger& a_trigger, bool a_down)
 		{
 			std::lock_guard lock(g_captureMutex);
 			if (a_down) {
+				g_captureLastDownMs = NowMs();
 				if (!Contains(g_captureDown, a_trigger)) {
 					g_captureDown.push_back(a_trigger);
 				}
@@ -538,13 +552,20 @@ namespace SOS::Hotkeys
 			}
 
 			g_captureDown.erase(std::remove_if(g_captureDown.begin(), g_captureDown.end(), [&](const Trigger& t) { return Same(t, a_trigger); }), g_captureDown.end());
-			if (g_captureDown.empty() && !g_captureKeys.empty()) {
-				Chord chord;
-				chord.triggers = g_captureKeys;
-				g_captureResult = Format(chord);
-				g_captureResultSlot = g_captureSlot.load(std::memory_order_relaxed);
-				g_captureDone = true;
+		}
+
+		// Called once per frame while capturing: accepts the chord after every key has
+		// been released for kCaptureSettleMs, so a missed poll cannot truncate it.
+		void CheckCaptureSettle()
+		{
+			std::lock_guard lock(g_captureMutex);
+			if (g_captureDone || g_captureKeys.empty() || !g_captureDown.empty()) {
+				return;
 			}
+			if (NowMs() - g_captureLastDownMs < kCaptureSettleMs) {
+				return;
+			}
+			FinishCaptureLocked();
 		}
 
 
@@ -630,8 +651,18 @@ namespace SOS::Hotkeys
 				a_now.push_back(Trigger{ Dev::kKeyboard, kModAlt });
 			}
 
-			PadState pad{};
+			static PadState lastPad{};
+			static bool     lastPadValid = false;
+			PadState        pad{};
 			if (ReadPad(pad)) {
+				lastPad = pad;
+				lastPadValid = true;
+			} else if (lastPadValid) {
+				// Keep the last known state for one frame: a dropped XInput read must
+				// not look like "every button released" in the middle of a chord.
+				pad = lastPad;
+			}
+			if (lastPadValid) {
 				static constexpr std::uint32_t kPadButtons[] = {
 					0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
 					0x0100, 0x0200, 0x1000, 0x2000, 0x4000, 0x8000
@@ -678,6 +709,16 @@ namespace SOS::Hotkeys
 				}
 			}
 			last = now;
+
+			if (capturing) {
+				for (const auto& trigger : now) {
+					if (trigger.device == Dev::kKeyboard && trigger.code == 0x01) {
+						CancelCapture();
+						return;
+					}
+				}
+				CheckCaptureSettle();
+			}
 
 			if (capturing || now.empty()) {
 				return;
@@ -747,6 +788,7 @@ namespace SOS::Hotkeys
 				}
 
 				const bool capturing = g_capturing.load(std::memory_order_relaxed);
+				bool       swallow = false;
 
 				const bool inputBlocked = CachedTextInputActive();
 				auto*      ui = RE::UI::GetSingleton();
@@ -783,7 +825,17 @@ namespace SOS::Hotkeys
 					}
 
 					if (capturing) {
+						// The capture window is modal. While it is open the events are
+						// swallowed so the framework menu does not navigate or activate
+						// items with the very keys the user is recording (a pad "A" used
+						// to both record and confirm, which is also why chords never
+						// came out longer than one button).
+						if (trigger.device == Dev::kKeyboard && trigger.code == 0x01) {
+							CancelCapture();
+							break;
+						}
 						FeedCapture(trigger, down);
+						swallow = true;
 						continue;
 					}
 
@@ -837,7 +889,10 @@ namespace SOS::Hotkeys
 						}
 					}
 				}
-				return RE::BSEventNotifyControl::kContinue;
+				if (capturing) {
+					CheckCaptureSettle();
+				}
+				return swallow ? RE::BSEventNotifyControl::kStop : RE::BSEventNotifyControl::kContinue;
 			}
 		};
 
@@ -921,6 +976,7 @@ namespace SOS::Hotkeys
 			g_captureResultSlot = -1;
 			g_captureDone = false;
 			g_captureOverflow = false;
+			g_captureLastDownMs = NowMs();
 		}
 		g_captureSlot.store(static_cast<int>(a_slot), std::memory_order_relaxed);
 		g_capturing.store(true, std::memory_order_relaxed);
