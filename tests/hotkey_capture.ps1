@@ -26,6 +26,15 @@ $ErrorActionPreference = 'Stop'
 #    without touching the queue. The framework and ImGui suppression stays as the
 #    second layer (SetMenuInputSuppressed drops the events, clears the held keys and
 #    stops the host from accepting events)
+#  - a chord is checked against the devices themselves, never against what the
+#    sink happened to see: our own window swallows the key release, so a key that
+#    stayed in the sink's idea of "held" used to make a recorded Alt+O fire on Alt
+#    alone and a recorded LB+up fire on LB alone
+#  - the pad state has to be the structure XInput writes, with the buttons as a
+#    WORD: reading them as a DWORD moved both trigger axes onto a stick and made
+#    LT and RT look released for ever, in both recorder windows
+#  - a controller chord is shown in the order its buttons went down in, not in
+#    bit order
 #  - the Change Outfit power is recognised by the plugin file it comes from: the
 #    esp and its scripts are optional installs, so nothing searches the load order
 #  - a row keeps one binding per device, both fire, and the recorder is a modal
@@ -308,9 +317,48 @@ Assert-Contains $bridge '"IsAnyBlockingWindowOpened"' 'the blocking-window query
 Assert-Contains $bridge 'bool AnyBlockingWindowOpened()' 'the blocking-window query is implemented'
 Assert-Contains $bridge 'if (!resolved) {' 'a failed lookup is not cached before the framework loaded'
 
+
+# ---- a chord is checked against the devices, not against the sink's memory ----
+$downBlock = Get-Block $hotkeys 'bool Down(const Trigger& a_trigger)' 'bool AllDown(const Chord& a_chord)'
+Assert-Contains $downBlock 'return PadDown(a_trigger);' 'a controller chord is checked against the pad itself'
+Assert-Contains $downBlock 'vk = VkForScan(a_trigger.code);' 'a keyboard chord is checked against the keyboard itself'
+Assert-Contains $downBlock '(::GetAsyncKeyState(vk) & 0x8000) != 0' 'a key only counts as down while the keyboard reports it'
+Assert-Contains $downBlock 'if (vk != 0) {' 'the key table decides, the sink memory is only the last resort'
+Assert-Contains $hotkeys 'int VkForScan(std::uint32_t a_code)' 'a scan code is turned into a virtual key through the key table'
+$isHeldBlock = Get-Block $hotkeys 'bool IsHeld(const Trigger& a_trigger)' 'The key the player has actually bound to Shout/Power'
+Assert-Contains $isHeldBlock 'return Down(a_trigger);' 'the polled path asks the devices as well'
+
+# ---- the pad state is the structure XInput writes ----
+$padState = Get-Block $hotkeys 'struct PadState' 'bool ReadPad('
+Assert-Contains $padState 'std::uint16_t buttons;' 'the buttons are the WORD the engine writes'
+Assert-Absent $padState 'std::uint32_t buttons;' 'reading the buttons as a DWORD moved both triggers onto a stick axis'
+Assert-Contains $padState 'leftTrigger;' 'the left trigger is read as its own byte'
+Assert-Contains $padState 'rightTrigger;' 'the right trigger is read as its own byte'
+Assert-Contains $hotkeys 'static_assert(sizeof(PadState) == 16' 'the pad state has to be as large as the structure the engine writes'
+Assert-Contains $hotkeys 'PadSnapshot PhysicalPad()' 'the pad is read once per chord check'
+Assert-Contains $hotkeys 'if (ReadPad(pad)) {' 'the pad is read through XInput'
+Assert-Absent $hotkeys 'return PadSnapshot{ pad, true };' 'a failed read does not pretend the pad is neutral'
+Assert-Contains $hotkeys 'bool PadDown(const Trigger& a_trigger)' 'a pad button is checked against the pad itself'
+Assert-Contains $hotkeys 'return pad.state.leftTrigger > kPadTriggerOn;' 'the left trigger is compared as an axis'
+Assert-Contains $hotkeys 'return pad.state.rightTrigger > kPadTriggerOn;' 'the right trigger is compared as an axis'
+Assert-Contains $hotkeys 'return (pad.state.buttons & a_trigger.code) != 0;' 'a real button is compared against the button mask'
+
+# ---- a controller chord keeps the order its buttons went down in ----
+Assert-Contains $hotkeys 'std::vector<unsigned> g_captureOrder;' 'the order of a pad chord is remembered'
+Assert-Contains $hotkeys 'void RememberCaptureOrderLocked(const fc::BindingCaptureResult& a_result)' 'the order is filled from the recorder snapshot'
+Assert-Contains $hotkeys 'RememberCaptureOrderLocked(result);' 'every snapshot feeds the order'
+$triggersOf = Get-Block $hotkeys 'std::vector<Trigger> TriggersOf(' 'int ProblemOf('
+Assert-Contains $triggersOf 'for (const auto index : g_captureOrder) {' 'the pad chord is listed in the order the buttons went down'
+Assert-Contains $triggersOf 'std::find(g_captureOrder.begin(), g_captureOrder.end(), i) != g_captureOrder.end()' 'a button the order already knows is not listed twice'
+if (([regex]::Matches($hotkeys, 'g_captureOrder\.clear\(\)')).Count -ne 4) {
+    Write-Output 'FAIL the recorded order is dropped in every path that ends a recording'
+    $script:failures++
+}
+Assert-Contains $takeResult 'g_captureOrder.clear();' 'the order does not survive into the next recording'
+
 if ($failures -gt 0) {
     Write-Output "HOTKEY_CAPTURE_FAILED: $failures problem(s)"
     exit 1
 }
-Write-Output 'HOTKEY_CAPTURE_OK: firing comes from the input sink only, an open menu mutes every binding, one key table feeds parse/format/poll, the power key is read in the button-mask space and consumed, and the recorder is the FreeClimb state machine copied into input/FreeClimbCapture.h: the recorded keys are taken off the engine queue by two best-effort device poll hooks (CommonLib vtable constants, nothing else hooked, idle when no recording runs), nothing is taken until the device is neutral, and a chord lands only once every key of it is released'
+Write-Output 'HOTKEY_CAPTURE_OK: firing comes from the input sink only, an open menu mutes every binding, one key table feeds parse/format/poll, the power key is read in the button-mask space and consumed, and the recorder is the FreeClimb state machine copied into input/FreeClimbCapture.h: the recorded keys are taken off the engine queue by two best-effort device poll hooks (CommonLib vtable constants, nothing else hooked, idle when no recording runs), nothing is taken until the device is neutral, and a chord lands only once every key of it is released, a chord is then checked against the devices themselves so an eaten key release cannot leave a key behind, the pad state is the structure XInput writes (LT and RT included), and a pad chord keeps the order its buttons went down in'
 exit 0

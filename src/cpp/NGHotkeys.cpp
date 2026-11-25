@@ -191,6 +191,18 @@ namespace SOS::Hotkeys
 			return {};
 		}
 
+		// The virtual key GetAsyncKeyState wants for a scan code, or 0 when the
+		// table does not name that key.
+		int VkForScan(std::uint32_t a_code)
+		{
+			for (const auto& entry : KeyTable()) {
+				if (entry.scan == a_code) {
+					return entry.vk;
+				}
+			}
+			return 0;
+		}
+
 		std::uint32_t GamepadCodeFor(std::string_view a_token)
 		{
 			for (const auto& entry : PadTable()) {
@@ -441,10 +453,25 @@ namespace SOS::Hotkeys
 			return !GameWindowFocused();
 		}
 
+		// Defined with the pad polling further down; declared here because the
+		// chord checks below are what asks for it.
+		bool PadDown(const Trigger& a_trigger);
+
+		// True while the trigger is physically down.
+		//
+		// Neither device is asked "did the sink see a key-down?" any more. While one
+		// of our own windows is open the game stops handing button events to plugins,
+		// so the key-up is eaten with them and a key that was remembered as held
+		// stayed in the chord for the rest of the session: a recorded Alt+O then
+		// fired on Alt alone as soon as the quick picker had been opened once, and a
+		// recorded LB+up fired on LB alone.
 		bool Down(const Trigger& a_trigger)
 		{
-			if (a_trigger.device == Dev::kKeyboard && a_trigger.code >= kModCtrl) {
-				int vk = 0;
+			if (a_trigger.device == Dev::kGamepad) {
+				return PadDown(a_trigger);
+			}
+			int vk = 0;
+			if (a_trigger.code >= kModCtrl) {
 				if (a_trigger.code == kModCtrl) {
 					vk = VK_CONTROL;
 				} else if (a_trigger.code == kModShift) {
@@ -452,8 +479,13 @@ namespace SOS::Hotkeys
 				} else {
 					vk = VK_MENU;
 				}
+			} else {
+				vk = VkForScan(a_trigger.code);
+			}
+			if (vk != 0) {
 				return (::GetAsyncKeyState(vk) & 0x8000) != 0;
 			}
+			// A key the table does not name: fall back to what the sink saw.
 			std::lock_guard lock(g_heldMutex);
 			return Contains(g_held, a_trigger);
 		}
@@ -633,6 +665,11 @@ namespace SOS::Hotkeys
 		std::atomic<int>  g_captureProblem{ 0 };
 		std::mutex        g_captureMutex;
 		std::vector<Trigger> g_captureCandidate;
+		// The controller buttons of the running recording in the order they went
+		// down: the window shows the chord the way it was pressed, not in the order
+		// XInput numbers its buttons in (LB then the d-pad is "pad:lb+pad:up").
+		// Guarded by g_captureMutex.
+		std::vector<unsigned> g_captureOrder;
 		std::string          g_captureResult;
 		int                  g_captureResultSlot{ -1 };
 		int                  g_captureResultDevice{ 0 };
@@ -715,14 +752,26 @@ namespace SOS::Hotkeys
 			}
 		}
 
+		// Called with g_captureMutex held (it reads g_captureOrder).
 		std::vector<Trigger> TriggersOf(const fc::BindingCaptureResult& a_result)
 		{
 			std::vector<Trigger> triggers;
 			if (a_result.device == fc::BindingCaptureDevice::gamepad) {
-				for (unsigned i = 0; i < 16; ++i) {
-					if ((a_result.gamepad & fc::gamepadButtonMask(i)) != 0) {
-						triggers.push_back(Trigger{ Dev::kGamepad, GamepadCodeForIndex(i) });
+				// The order the buttons went down in comes first; anything the order
+				// does not know yet follows by bit number.
+				for (const auto index : g_captureOrder) {
+					if (index < 16 && (a_result.gamepad & fc::gamepadButtonMask(index)) != 0) {
+						triggers.push_back(Trigger{ Dev::kGamepad, GamepadCodeForIndex(index) });
 					}
+				}
+				for (unsigned i = 0; i < 16; ++i) {
+					if ((a_result.gamepad & fc::gamepadButtonMask(i)) == 0) {
+						continue;
+					}
+					if (std::find(g_captureOrder.begin(), g_captureOrder.end(), i) != g_captureOrder.end()) {
+						continue;
+					}
+					triggers.push_back(Trigger{ Dev::kGamepad, GamepadCodeForIndex(i) });
 				}
 				return triggers;
 			}
@@ -743,6 +792,23 @@ namespace SOS::Hotkeys
 				return static_cast<int>(CaptureProblem::kNotTogether);
 			default:
 				return static_cast<int>(CaptureProblem::kNone);
+			}
+		}
+
+		// Called with g_captureMutex held: remembers the order in which the buttons of
+		// a controller chord went down.
+		void RememberCaptureOrderLocked(const fc::BindingCaptureResult& a_result)
+		{
+			if (a_result.device != fc::BindingCaptureDevice::gamepad) {
+				return;
+			}
+			for (unsigned i = 0; i < 16; ++i) {
+				if ((a_result.gamepad & fc::gamepadButtonMask(i)) == 0) {
+					continue;
+				}
+				if (std::find(g_captureOrder.begin(), g_captureOrder.end(), i) == g_captureOrder.end()) {
+					g_captureOrder.push_back(i);
+				}
 			}
 		}
 
@@ -791,11 +857,16 @@ namespace SOS::Hotkeys
 		struct PadState
 		{
 			std::uint32_t packet;
-			std::uint32_t buttons;
+			// XINPUT_GAMEPAD starts with wButtons, a WORD, so the two trigger axes
+			// sit at offsets 6 and 7. Reading the buttons as a DWORD moved both
+			// triggers onto the first stick axis and made LT and RT look released
+			// for ever, which is why they could not be recorded.
+			std::uint16_t buttons;
 			std::uint8_t  leftTrigger;
 			std::uint8_t  rightTrigger;
-			std::uint8_t  rest[10];
+			std::int16_t  thumbs[4];
 		};
+		static_assert(sizeof(PadState) == 16, "PadState has to match XINPUT_STATE, which XInputGetState writes");
 
 		bool ReadPad(PadState& a_state)
 		{
@@ -823,6 +894,56 @@ namespace SOS::Hotkeys
 				}
 			}
 			return false;
+		}
+
+		struct PadSnapshot
+		{
+			PadState state{};
+			bool     valid{};
+		};
+
+		// The pad as XInput reports it right now, cached for a few milliseconds
+		// because every chord check asks for it once per button event.
+		PadSnapshot PhysicalPad()
+		{
+			static std::mutex    cacheMutex;
+			static PadState      last{};
+			static bool          lastValid = false;
+			static std::uint64_t at = 0;
+			std::lock_guard      lock(cacheMutex);
+			const auto           now = NowMs();
+			if (at != 0 && now - static_cast<std::int64_t>(at) < 8) {
+				return PadSnapshot{ last, lastValid };
+			}
+			at = static_cast<std::uint64_t>(now);
+			PadState pad{};
+			if (ReadPad(pad)) {
+				last = pad;
+				lastValid = true;
+			}
+			// A dropped XInput read must not look like "every button released".
+			return PadSnapshot{ last, lastValid };
+		}
+
+		// True while the controller button (or trigger) is physically held.
+		//
+		// The two triggers are compared as axes, not as bits of the button mask:
+		// the engine code of the left trigger is 0x0009, which also contains the
+		// d-pad bits 0x0001 and 0x0008.
+		bool PadDown(const Trigger& a_trigger)
+		{
+			using Keys     = RE::BSWin32GamepadDevice::Keys;
+			const auto pad = PhysicalPad();
+			if (!pad.valid) {
+				return false;
+			}
+			if (a_trigger.code == Keys::kLeftTrigger) {
+				return pad.state.leftTrigger > kPadTriggerOn;
+			}
+			if (a_trigger.code == Keys::kRightTrigger) {
+				return pad.state.rightTrigger > kPadTriggerOn;
+			}
+			return (pad.state.buttons & a_trigger.code) != 0;
 		}
 
 		// The physical modifier keys: the ini folds them onto one trigger, so the key
@@ -911,6 +1032,7 @@ namespace SOS::Hotkeys
 			{
 				std::lock_guard                   lock(g_captureMutex);
 				const fc::BindingCaptureResult& result = g_capture.sample(snapshot);
+				RememberCaptureOrderLocked(result);
 				switch (result.status) {
 				case fc::BindingCaptureStatus::captured:
 					StoreCaptureLocked(result);
@@ -929,6 +1051,7 @@ namespace SOS::Hotkeys
 					// press a different chord.
 					g_captureProblem.store(ProblemOf(result.error), std::memory_order_relaxed);
 					g_captureCandidate.clear();
+					g_captureOrder.clear();
 					g_captureState.store(static_cast<int>(CaptureState::kWaiting), std::memory_order_relaxed);
 					g_capture.begin(g_captureDevice.load(std::memory_order_relaxed) == 0 ? fc::BindingCaptureDevice::keyboard : fc::BindingCaptureDevice::gamepad);
 					break;
@@ -950,8 +1073,7 @@ namespace SOS::Hotkeys
 
 		bool IsHeld(const Trigger& a_trigger)
 		{
-			std::lock_guard lock(g_heldMutex);
-			return Contains(g_held, a_trigger);
+			return Down(a_trigger);
 		}
 
 		// The key the player has actually bound to Shout/Power in the game settings.
@@ -1452,6 +1574,7 @@ namespace SOS::Hotkeys
 			std::lock_guard lock(g_captureMutex);
 			g_captureDevice.store(wanted == Dev::kGamepad ? 1 : 0, std::memory_order_relaxed);
 			g_captureCandidate.clear();
+			g_captureOrder.clear();
 			g_captureResult.clear();
 			g_captureResultSlot = -1;
 			g_captureResultDevice = 0;
@@ -1486,6 +1609,7 @@ namespace SOS::Hotkeys
 			std::lock_guard lock(g_captureMutex);
 			g_capture.reset();
 			g_captureCandidate.clear();
+			g_captureOrder.clear();
 			g_captureResult.clear();
 			g_captureResultSlot = -1;
 			g_captureResultDevice = 0;
@@ -1558,6 +1682,7 @@ namespace SOS::Hotkeys
 		g_captureResultSlot = -1;
 		g_captureResultDevice = 0;
 		g_captureCandidate.clear();
+		g_captureOrder.clear();
 		g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
 		g_captureState.store(static_cast<int>(CaptureState::kIdle), std::memory_order_relaxed);
 		g_captureStartedMs = 0;
