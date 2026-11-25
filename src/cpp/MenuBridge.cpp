@@ -23,6 +23,7 @@ namespace
 	std::uint32_t g_frameworkApi{ 0 };
 	bool g_hasBlockUserInput{ false };
 	std::uint64_t g_inputRegistration{ 0 };
+	std::uint64_t g_eventRegistration{ 0 };
 
 	std::wstring ComputeModuleDir()
 	{
@@ -221,6 +222,36 @@ namespace SOS::MenuBridge
 		}
 		LOG(info, "Menu: input event callback registered (id {}).", g_inputRegistration);
 		return true;
+	}
+
+	bool RegisterEventCallback(EventCallback a_callback)
+	{
+		if (!g_available.load(std::memory_order_acquire) || !g_smf || !a_callback) {
+			return false;
+		}
+		if (g_eventRegistration != 0) {
+			return true;
+		}
+
+		using RegisterEventFn = std::int64_t (*)(EventCallback, float);
+		const auto registerFn = reinterpret_cast<RegisterEventFn>(::GetProcAddress(g_smf, "RegisterEventPriority"));
+		if (!registerFn) {
+			LOG(debug, "Menu: the framework has no RegisterEventPriority export; a hotkey recording cannot be ended from the menu side.");
+			return false;
+		}
+
+		g_eventRegistration = static_cast<std::uint64_t>(registerFn(a_callback, 0.0f));
+		if (g_eventRegistration == 0) {
+			LOG(debug, "Menu: the framework refused the menu lifecycle callback.");
+			return false;
+		}
+		LOG(info, "Menu: menu lifecycle callback registered (id {}).", g_eventRegistration);
+		return true;
+	}
+
+	bool EventCallbackAvailable()
+	{
+		return g_eventRegistration != 0;
 	}
 
 	float FrameworkVersion()

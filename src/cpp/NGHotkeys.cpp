@@ -524,6 +524,8 @@ namespace SOS::Hotkeys
 
 		std::atomic<bool> g_capturing{ false };
 		std::atomic<int>  g_captureSlot{ -1 };
+		// 0 = keyboard, 1 = gamepad; see NGHotkeys::Input.
+		std::atomic<int> g_captureDevice{ 0 };
 		std::mutex        g_captureMutex;
 		std::vector<Trigger> g_captureKeys;
 		std::vector<Trigger> g_captureDown;
@@ -547,6 +549,13 @@ namespace SOS::Hotkeys
 
 		void FeedCapture(const Trigger& a_trigger, bool a_down)
 		{
+			// A recording that was started for one device ignores the other one, so
+			// a palm on the controller cannot put a button into a keyboard chord (and
+			// the keyboard cannot pollute a controller chord).
+			const auto wanted = g_captureDevice.load(std::memory_order_relaxed) == 0 ? Dev::kKeyboard : Dev::kGamepad;
+			if (a_trigger.device != wanted) {
+				return;
+			}
 			std::lock_guard lock(g_captureMutex);
 			if (a_down) {
 				g_captureLastDownMs = NowMs();
@@ -739,8 +748,74 @@ namespace SOS::Hotkeys
 			Fire();
 		}
 
+		// True while the "Change Outfit" lesser power is the one the player has
+		// selected in the magic menu. Pressing the power key is ours to handle only
+		// then: with no power selected, or with any other power equipped, the key
+		// belongs to the game and must be passed through untouched.
+		bool OurPowerSelected()
+		{
+			static RE::TESForm* cached = nullptr;
+			if (!cached) {
+				cached = RE::TESForm::LookupByEditorID<RE::SpellItem>("SkyrimOutfitSystemQuickslotSpell");
+				if (!cached) {
+					if (auto* dataHandler = RE::TESDataHandler::GetSingleton()) {
+						cached = dataHandler->LookupForm<RE::SpellItem>(0x000182F, "SkyrimOutfitSystem.esp");
+					}
+				}
+				if (cached) {
+					SKSE::log::debug("Hotkeys: the Change Outfit power is {:08X}.", cached->GetFormID());
+				}
+			}
+			if (!cached) {
+				return false;
+			}
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player) {
+				return false;
+			}
+			return player->GetActorRuntimeData().selectedPower == cached;
+		}
+
+		// True when the trigger is one of the keys the game has bound to
+		// Shout/Power, keyboard or controller.
+		bool IsPowerKey(const Trigger& a_trigger)
+		{
+			Trigger keyboard{};
+			Trigger gamepad{};
+			if (!GamePowerKeys(keyboard, gamepad)) {
+				return false;
+			}
+			return (keyboard.code != 0 && Same(a_trigger, keyboard)) || (gamepad.code != 0 && Same(a_trigger, gamepad));
+		}
+
+		// One press of the game's own power key, handled on the press itself. The
+		// caller consumes the event, so the game never casts the power and there is
+		// no cast animation left to feel like a cooldown.
+		bool HandlePowerPress(bool a_blocked, bool a_menuOpen)
+		{
+			if (!OurPowerSelected()) {
+				return false;
+			}
+			if (a_blocked || a_menuOpen || g_latchedQuickKey) {
+				return true;
+			}
+			g_latchedQuickKey = true;
+			const auto now = NowMs();
+			const auto last = g_lastQuickslotOpenMs.load(std::memory_order_relaxed);
+			if (last != 0 && now - last < kQuickslotOpenCooldownMs) {
+				return true;
+			}
+			g_lastQuickslotOpenMs.store(now, std::memory_order_relaxed);
+			FireQuickslotKey();
+			return true;
+		}
+
 		void CheckPowerKey(bool a_blocked, bool a_menuOpen)
 		{
+			if (!OurPowerSelected()) {
+				g_latchedQuickKey = false;
+				return;
+			}
 			Trigger keyboard{};
 			Trigger gamepad{};
 			if (!GamePowerKeys(keyboard, gamepad)) {
@@ -911,6 +986,9 @@ namespace SOS::Hotkeys
 
 					Remember(trigger, down);
 					if (!down) {
+						if (IsPowerKey(trigger)) {
+							g_latchedQuickKey = false;
+						}
 						continue;
 					}
 
@@ -940,9 +1018,18 @@ namespace SOS::Hotkeys
 						}
 					}
 
-					// The game's own Shout/Power key: act on the press instead of
-					// after the power's cast animation. The event is not consumed, so
-					// the power still casts as usual.
+					// The game's own Shout/Power key. It is handled here, on the
+					// press, and the event is consumed: letting the game cast the
+					// power as well is what used to add the cast animation on top of
+					// our own timer, which felt like a cooldown that never went away.
+					// With another power equipped (or none) the key is passed through.
+					if (IsPowerKey(trigger)) {
+						if (HandlePowerPress(inputBlocked, menuOpen || consoleOpen)) {
+							swallow = true;
+						}
+						continue;
+					}
+
 					CheckPowerKey(inputBlocked, menuOpen || consoleOpen);
 				}
 				if (capturing) {
@@ -1046,8 +1133,9 @@ namespace SOS::Hotkeys
 		g_textInput.store(a_active, std::memory_order_relaxed);
 	}
 
-	void BeginCapture(Slot a_slot)
+	void BeginCapture(Slot a_slot, Input a_device)
 	{
+		g_captureDevice.store(a_device == Input::kGamepad ? 1 : 0, std::memory_order_relaxed);
 		{
 			std::lock_guard lock(g_captureMutex);
 			g_captureKeys.clear();
@@ -1080,6 +1168,11 @@ namespace SOS::Hotkeys
 	bool CaptureActive()
 	{
 		return g_capturing.load(std::memory_order_relaxed);
+	}
+
+	Input CaptureDevice()
+	{
+		return g_captureDevice.load(std::memory_order_relaxed) == 0 ? Input::kKeyboard : Input::kGamepad;
 	}
 
 	std::string CaptureText()

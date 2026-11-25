@@ -1793,9 +1793,10 @@ namespace SOS::Menu
 
 			IG::SeparatorText(I18n::Tr("Hotkeys"));
 
-			// Hotkeys are recorded, not typed: the button opens a small window, the
-			// input sink captures the next chord (up to four keys, keyboard or
-			// controller) and the result is written to the ini straight away.
+			// Hotkeys are recorded, not typed. Every row has one button per device: a
+			// single shared recorder could not tell a controller button from a
+			// keyboard key, and the pad "A" that recorded a chord also confirmed the
+			// menu item under it.
 
 			// The row whose capture window is open; -1 when none.
 			static int g_hotkeyRow = -1;
@@ -1825,23 +1826,37 @@ namespace SOS::Menu
 				}
 			}
 
-			auto hotkeyRow = [](Hotkeys::Slot a_slot, const char* a_label, const std::string& a_value, const char* a_hint) {
+			auto hotkeyRow = [&applyHotkey](Hotkeys::Slot a_slot, const char* a_label, const std::string& a_value) {
+				// Two rows carry the same label in translation, so the ids come from
+				// the slot rather than from the button text.
+				IG::PushID(static_cast<int>(a_slot));
 				IG::TextUnformatted(a_label);
 				IG::SameLine(280.0f);
 				const auto shown = a_value.empty() ? std::string(I18n::T("Not set", "未设置")) : a_value;
-				const auto id = shown + "##hotkey" + std::to_string(static_cast<int>(a_slot));
-				if (IG::Button(id.c_str())) {
-					Hotkeys::BeginCapture(a_slot);
-					g_hotkeyRow = static_cast<int>(a_slot);
-				}
+				IG::TextUnformatted(shown.c_str());
 				IG::SameLine();
-				IG::TextDisabled(a_hint);
+				if (g_hotkeyRow == static_cast<int>(a_slot)) {
+					IG::TextDisabled(I18n::Tr("recording..."));
+				} else {
+					if (IG::Button(I18n::TrId("Record keyboard"))) {
+						Hotkeys::BeginCapture(a_slot, Hotkeys::Input::kKeyboard);
+						g_hotkeyRow = static_cast<int>(a_slot);
+					}
+					IG::SameLine();
+					if (IG::Button(I18n::TrId("Record controller"))) {
+						Hotkeys::BeginCapture(a_slot, Hotkeys::Input::kGamepad);
+						g_hotkeyRow = static_cast<int>(a_slot);
+					}
+					IG::SameLine();
+					if (IG::SmallButton(I18n::TrId("Clear"))) {
+						applyHotkey(a_slot, std::string{});
+					}
+				}
+				IG::PopID();
 			};
 
-			hotkeyRow(Hotkeys::Slot::kRandomOutfit, I18n::Tr("Random outfit"), settings.randomOutfitHotkey,
-				I18n::Tr("click to record, e.g. ctrl+shift+O"));
-			hotkeyRow(Hotkeys::Slot::kQuickPicker, I18n::Tr("Quick picker"), settings.quickPickerHotkey,
-				I18n::Tr("click to record, e.g. ctrl+shift+L"));
+			hotkeyRow(Hotkeys::Slot::kRandomOutfit, I18n::Tr("Random outfit"), settings.randomOutfitHotkey);
+			hotkeyRow(Hotkeys::Slot::kQuickPicker, I18n::Tr("Quick picker"), settings.quickPickerHotkey);
 			{
 				// The power key is not recorded: it is whatever the player bound to
 				// Shout/Power in the game settings, keyboard or controller.
@@ -1854,13 +1869,22 @@ namespace SOS::Menu
 					IG::Text(I18n::Tr("follows the game key binding: %s"), bound.c_str());
 				}
 			}
+			IG::TextDisabled(I18n::Tr("This only fires while the \"Change Outfit\" power is the one selected in your magic menu."));
 
-			// The capture panel. It is drawn inline, not as a separate window: the
-			// framework paints its own windows on top of ours, so a floating window
-			// ended up underneath the settings page.
+			// The recorder is its own window. It is raised every frame while it is
+			// open, because the framework draws its own windows later in the frame
+			// and would otherwise paint the settings page over it.
 			if (Hotkeys::CaptureActive()) {
-				IG::Separator();
-				IG::TextWrapped(I18n::Tr("Press the keys you want to use: up to four held together, keyboard or controller."));
+				IG::SetNextWindowPos(IG::MainViewportCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+				IG::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Always);
+				IG::SetNextWindowFocus();
+				bool open = true;
+				IG::BeginWindow(I18n::T("Set a hotkey", "设置热键"), &open,
+					ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+				const bool pad = Hotkeys::CaptureDevice() == Hotkeys::Input::kGamepad;
+				IG::TextWrapped(pad ? I18n::Tr("Recording the controller: hold up to four buttons, then let go of all of them.")
+									: I18n::Tr("Recording the keyboard and the mouse: hold up to four keys, then let go of all of them."));
+				IG::Spacing();
 				const auto typed = Hotkeys::CaptureText();
 				if (typed.empty()) {
 					IG::TextDisabled(I18n::Tr("Waiting for input..."));
@@ -1870,19 +1894,29 @@ namespace SOS::Menu
 				if (Hotkeys::CaptureOverflowed()) {
 					IG::TextWrapped(I18n::Tr("Only the first four keys are used."));
 				}
+				IG::Spacing();
 				IG::TextDisabled(I18n::Tr("Release every key when you are done; the chord is stored in the ini right away."));
+				IG::TextDisabled(I18n::Tr("Press Esc to cancel."));
+				IG::Spacing();
 				if (IG::Button(I18n::TrId("Cancel"))) {
 					Hotkeys::CancelCapture();
 					g_hotkeyRow = -1;
 				}
 				IG::SameLine();
 				if (IG::Button(I18n::TrId("Clear"))) {
-					applyHotkey(static_cast<Hotkeys::Slot>(g_hotkeyRow), std::string{});
+					if (g_hotkeyRow >= 0) {
+						applyHotkey(static_cast<Hotkeys::Slot>(g_hotkeyRow), std::string{});
+					}
 					Hotkeys::CancelCapture();
 					g_hotkeyRow = -1;
 				}
-				IG::Separator();
+				IG::EndWindow();
+				if (!open) {
+					Hotkeys::CancelCapture();
+					g_hotkeyRow = -1;
+				}
 			}
+
 
 			IG::SeparatorText(I18n::Tr("Random outfit"));
 			if (IG::Checkbox(I18n::TrId("Favourites only"), &settings.randomFavoritesOnly)) {
@@ -1939,7 +1973,26 @@ namespace SOS::Menu
 			// ImGui is not thread-safe: sample the focused-widget state here on the
 			// render thread and let the input sink read the cached value.
 			Hotkeys::SetTextInputActive(MenuBridge::TextInputActive());
+			// While a hotkey is being recorded the host must not see the keys that
+			// are being recorded: a controller button that records a chord would
+			// otherwise also activate whatever the menu has focused. The recorder
+			// itself never reads ImGui input, it polls the devices.
+			IG::SetMenuInputSuppressed(Hotkeys::CaptureActive() && MenuBridge::EventCallbackAvailable());
 			Hotkeys::Tick();
+		}
+
+		// The framework reports its own menu lifecycle. A recording ends with the
+		// menu: otherwise the host keeps withholding its input and the paused
+		// menu cannot be used any more.
+		void __stdcall OnFrameworkMenuEvent(int a_eventType)
+		{
+			if (a_eventType != MenuBridge::kEventMenuClosed) {
+				return;
+			}
+			if (Hotkeys::CaptureActive()) {
+				Hotkeys::CancelCapture();
+			}
+			IG::SetMenuInputSuppressed(false);
 		}
 
 		bool __stdcall OnFrameworkInput(RE::InputEvent* a_event)
@@ -2426,6 +2479,9 @@ void RenderQuickPickerSectionThunk()
 		} else {
 			LOG(warn, "Menu: the framework did not create a standalone window; the quick picker stays a menu page.");
 		}
+		// Menu lifecycle: a hotkey recording is ended from here when the player
+		// closes the menu while the recorder window is still open.
+		MenuBridge::RegisterEventCallback(OnFrameworkMenuEvent);
 		// The tree titles follow the interface language. The framework splits the
 		// path on '/', so a translated title must not contain one.
 		const auto sectionPath = [](const char* a_item) {

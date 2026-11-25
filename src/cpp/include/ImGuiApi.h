@@ -96,6 +96,16 @@ namespace SOS::ImGuiApi
 			// Window rectangle, used to remember where the quick picker was.
 			void (*GetWindowPos)(ImVec2*);
 			void (*GetWindowSize)(ImVec2*);
+			// Input plumbing, used while a hotkey is being recorded: the host's
+			// ImGui instance has to stop queueing the very keys that are being
+			// recorded, otherwise a controller button that records a chord also
+			// activates whatever the menu has focused.
+			ImGuiIO* (*GetIO)();
+			void (*ImGuiIO_SetAppAcceptingEvents)(ImGuiIO*, bool);
+			void (*ImGuiIO_ClearEventsQueue)(ImGuiIO*);
+			void (*ImGuiIO_ClearInputKeys)(ImGuiIO*);
+			// Raises the next window above the framework's own windows.
+			void (*SetNextWindowFocus)();
 		};
 
 		// Optional cimgui item-flag helpers. They let the quick picker keep the
@@ -115,6 +125,11 @@ namespace SOS::ImGuiApi
 		// True when PushItemFlag/PopItemFlag were found. When they are not,
 		// the quick picker simply leaves ImGui navigation enabled.
 		bool hasItemFlags{ false };
+		// True when igGetIO and the three ImGuiIO entry points were found. Only
+		// the hotkey recorder uses them; everything else works without them.
+		bool hasInputSuppression{ false };
+		// True when a window can be raised above the framework's own windows.
+		bool hasWindowFocus{ false };
 	};
 
 	// The process-wide binding table. Every pointer is null until Bind() ran.
@@ -335,6 +350,48 @@ namespace SOS::IG
 	{
 		const auto& api = ImGuiApi::Get();
 		if (api.extras.SetNextWindowSize) { api.extras.SetNextWindowSize(a_size, a_cond); }
+	}
+
+	// Raises the window opened by the next BeginWindow() above the windows the
+	// framework itself creates later in the same frame. Without it the hotkey
+	// recorder ends up underneath the settings page.
+	inline void SetNextWindowFocus()
+	{
+		const auto& api = ImGuiApi::Get();
+		if (api.hasWindowFocus && api.extras.SetNextWindowFocus) { api.extras.SetNextWindowFocus(); }
+	}
+
+	// True when the host's ImGui can be told to stop accepting input.
+	inline bool InputSuppressionReady()
+	{
+		return ImGuiApi::Get().hasInputSuppression;
+	}
+
+	// Stops (or resumes) input delivery for the host's ImGui instance. Called
+	// once per rendered frame while a hotkey is being recorded and therefore
+	// idempotent: it only touches the host when the state changed, except while
+	// suppressing, where the queue is cleared again on every call. Anything
+	// still queued would otherwise be picked up by the next frame.
+	inline void SetMenuInputSuppressed(bool a_suppress)
+	{
+		const auto& api = ImGuiApi::Get();
+		if (!api.hasInputSuppression) {
+			return;
+		}
+		static bool applied = false;
+		static bool last = false;
+		if (applied && last == a_suppress && !a_suppress) {
+			return;
+		}
+		if (auto* io = api.extras.GetIO()) {
+			if (a_suppress) {
+				api.extras.ImGuiIO_ClearEventsQueue(io);
+				api.extras.ImGuiIO_ClearInputKeys(io);
+			}
+			api.extras.ImGuiIO_SetAppAcceptingEvents(io, !a_suppress);
+			applied = true;
+			last = a_suppress;
+		}
 	}
 
 	inline ImVec2 MainViewportCenter()

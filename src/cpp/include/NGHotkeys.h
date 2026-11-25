@@ -41,7 +41,20 @@ namespace SOS::Hotkeys
 
 	inline constexpr std::size_t kMaxChordKeys = 4;
 
-	void BeginCapture(Slot a_slot);
+	// Which device a recording listens to. The settings page has one button per
+	// device, so a controller button can never be mixed into a keyboard chord and
+	// a keyboard key can never end up in a controller chord.
+	enum class Input
+	{
+		kKeyboard,
+		kGamepad
+	};
+
+	void BeginCapture(Slot a_slot, Input a_device = Input::kKeyboard);
+
+	// The device the running recording listens to. Only meaningful while
+	// CaptureActive() is true.
+	Input CaptureDevice();
 	void CancelCapture();
 	bool CaptureActive();
 

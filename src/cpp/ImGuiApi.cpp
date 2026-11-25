@@ -202,6 +202,28 @@ namespace SOS::ImGuiApi
 					a_label);
 			}
 
+			// Input plumbing for the hotkey recorder, again outside the extras
+			// counters: a framework without these exports records hotkeys from the
+			// raw input queue instead, everything else keeps working.
+			table.extras.GetIO = reinterpret_cast<decltype(table.extras.GetIO)>(
+				::GetProcAddress(a_module, "igGetIO"));
+			table.extras.ImGuiIO_SetAppAcceptingEvents = reinterpret_cast<decltype(table.extras.ImGuiIO_SetAppAcceptingEvents)>(
+				::GetProcAddress(a_module, "ImGuiIO_SetAppAcceptingEvents"));
+			table.extras.ImGuiIO_ClearEventsQueue = reinterpret_cast<decltype(table.extras.ImGuiIO_ClearEventsQueue)>(
+				::GetProcAddress(a_module, "ImGuiIO_ClearEventsQueue"));
+			table.extras.ImGuiIO_ClearInputKeys = reinterpret_cast<decltype(table.extras.ImGuiIO_ClearInputKeys)>(
+				::GetProcAddress(a_module, "ImGuiIO_ClearInputKeys"));
+			table.hasInputSuppression = table.extras.GetIO && table.extras.ImGuiIO_SetAppAcceptingEvents &&
+				table.extras.ImGuiIO_ClearEventsQueue && table.extras.ImGuiIO_ClearInputKeys;
+			if (!table.hasInputSuppression) {
+				SKSE::log::debug("ImGuiApi: the ImGuiIO entry points are missing in {}; a hotkey recording keeps relying on the raw input queue.",
+					a_label);
+			}
+
+			table.extras.SetNextWindowFocus = reinterpret_cast<decltype(table.extras.SetNextWindowFocus)>(
+				::GetProcAddress(a_module, "igSetNextWindowFocus"));
+			table.hasWindowFocus = table.extras.SetNextWindowFocus != nullptr;
+
 			table.hasExtras = extrasTotal == extrasResolved;
 			table.hasWindowPlumbing = table.extras.Begin && table.extras.End &&
 				table.extras.SetNextWindowPos && table.extras.SetNextWindowSize;

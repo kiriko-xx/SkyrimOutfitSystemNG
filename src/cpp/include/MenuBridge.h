@@ -34,6 +34,13 @@ namespace SOS::MenuBridge
 	// SMF 3.x input callback: return true when the event was consumed.
 	typedef bool(__stdcall* InputEventCallback)(RE::InputEvent*);
 
+	// SMF 3.x menu lifecycle callback (Model::EventType): 1 = opened, 2 =
+	// closed, 3 = before a render pass, 4 = after one. Only the close
+	// notification is used: a hotkey recording has to end when the menu goes
+	// away, otherwise the host keeps withholding its own input.
+	typedef void(__stdcall* EventCallback)(int a_eventType);
+	inline constexpr int kEventMenuClosed = 2;
+
 	// Finds (or loads) SKSEMenuFramework.dll and resolves its entry points.
 	// Safe to call repeatedly; returns false when the framework is unusable.
 	bool EnsureLoaded();
@@ -51,6 +58,15 @@ namespace SOS::MenuBridge
 	// itself, but gamepad translation depends on its menu window being the
 	// active one. Returns false when the framework has no input-event export.
 	bool RegisterInputEvent(InputEventCallback a_callback);
+
+	// Registers a menu lifecycle callback. Returns false when the framework has
+	// no such export (2.x) or refused the callback.
+	bool RegisterEventCallback(EventCallback a_callback);
+
+	// True once a menu lifecycle callback is registered. A hotkey recording may only
+	// withhold the host input when this is true: the close notification is the only
+	// reliable way to give it back if the menu goes away mid recording.
+	bool EventCallbackAvailable();
 	float FrameworkVersion();
 
 	// Directory that contains this plugin DLL.
