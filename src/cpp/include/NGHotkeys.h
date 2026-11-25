@@ -15,6 +15,14 @@ namespace SOS::Hotkeys
 	// pad so the settings page can record keys even when the game sends no
 	// input events while its menu is open.
 	void Tick();
+
+	// The "Change Outfit" lesser power is cast with the game's own Shout/Power
+	// key, so the plugin mirrors that binding instead of asking for a second key.
+	std::string GamePowerKeyText();
+
+	// True right after the key handler already did what the power would do, so the
+	// effect script that runs after the cast animation can be ignored.
+	bool PowerActionJustHandled();
 	void SetTextInputActive(bool a_active);
 
 	// ---- hotkey capture (settings page) ---------------------------------

@@ -226,7 +226,7 @@ namespace SOS::I18n
 			// 1.5.65: hotkey recording window
 			{ "Not set", "未设置" },
 			{ "Clear", "清除" },
-			{ "Change Outfit power key", "切换服装能力键" },
+			{ "Change Outfit power key", "「Change Outfit」能力键" },
 			{ "click to record, e.g. ctrl+shift+O", "点击后按下按键录制，例如 ctrl+shift+O" },
 			{ "click to record, e.g. ctrl+shift+L", "点击后按下按键录制，例如 ctrl+shift+L" },
 			{ "the hotkey of the power itself; this one skips its cast animation", "这个能力本身的热键；按下它就不必等施法动作" },
@@ -235,6 +235,10 @@ namespace SOS::I18n
 			{ "Waiting for input...", "等待输入…" },
 			{ "Only the first four keys are used.", "只取前四个按键。" },
 			{ "Release every key when you are done; the chord is stored in the ini right away.", "录完后把所有键都松开；组合键会立刻写入 ini。" },
+			// 1.5.68: the power key now follows the game binding, and the roll is on a 0.5 s timer
+			{ "follows the game key binding: %s", "跟随游戏设置：%s" },
+			{ "no key bound in the game settings", "游戏设置里没有绑定能力键" },
+			{ "Make the \"Change Outfit\" power roll a random outfit", "将“Change Outfit”能力改为随机抽取一套幻化" },
 			{ "That outfit name is too long.", "幻化名称过长。" },
 			{ "[Unnamed]", "[未命名]" },
 			{ "Added ", "已添加 " },

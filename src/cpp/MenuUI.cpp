@@ -1842,45 +1842,46 @@ namespace SOS::Menu
 				I18n::Tr("click to record, e.g. ctrl+shift+O"));
 			hotkeyRow(Hotkeys::Slot::kQuickPicker, I18n::Tr("Quick picker"), settings.quickPickerHotkey,
 				I18n::Tr("click to record, e.g. ctrl+shift+L"));
-			hotkeyRow(Hotkeys::Slot::kQuickPickerKey, I18n::Tr("Change Outfit power key"), settings.quickPickerKey,
-				I18n::Tr("the hotkey of the power itself; this one skips its cast animation"));
-
-			// The capture window. The menu framework exposes no popup API, so this is a
-			// plain auto sized window centred on the screen.
-			if (Hotkeys::CaptureActive()) {
-				IG::SetNextWindowPos(IG::MainViewportCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-				IG::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Always);
-				bool open = true;
-				if (IG::BeginWindow(I18n::Tr("Set a hotkey"), &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize)) {
-					IG::TextWrapped(I18n::Tr("Press the keys you want to use: up to four held together, keyboard or controller."));
-					IG::Spacing();
-					const auto typed = Hotkeys::CaptureText();
-					if (typed.empty()) {
-						IG::TextDisabled(I18n::Tr("Waiting for input..."));
-					} else {
-						IG::TextUnformatted(typed.c_str());
-					}
-					if (Hotkeys::CaptureOverflowed()) {
-						IG::TextWrapped(I18n::Tr("Only the first four keys are used."));
-					}
-					IG::TextDisabled(I18n::Tr("Release every key when you are done; the chord is stored in the ini right away."));
-					IG::Spacing();
-					if (IG::Button(I18n::TrId("Cancel"))) {
-						Hotkeys::CancelCapture();
-						g_hotkeyRow = -1;
-					}
-					IG::SameLine();
-					if (IG::Button(I18n::TrId("Clear"))) {
-						applyHotkey(static_cast<Hotkeys::Slot>(g_hotkeyRow), std::string{});
-						Hotkeys::CancelCapture();
-						g_hotkeyRow = -1;
-					}
+			{
+				// The power key is not recorded: it is whatever the player bound to
+				// Shout/Power in the game settings, keyboard or controller.
+				const auto bound = Hotkeys::GamePowerKeyText();
+				IG::TextUnformatted(I18n::Tr("Change Outfit power key"));
+				IG::SameLine(280.0f);
+				if (bound.empty()) {
+					IG::TextDisabled(I18n::Tr("no key bound in the game settings"));
+				} else {
+					IG::Text(I18n::Tr("follows the game key binding: %s"), bound.c_str());
 				}
-				IG::EndWindow();
-				if (!open) {
+			}
+
+			// The capture panel. It is drawn inline, not as a separate window: the
+			// framework paints its own windows on top of ours, so a floating window
+			// ended up underneath the settings page.
+			if (Hotkeys::CaptureActive()) {
+				IG::Separator();
+				IG::TextWrapped(I18n::Tr("Press the keys you want to use: up to four held together, keyboard or controller."));
+				const auto typed = Hotkeys::CaptureText();
+				if (typed.empty()) {
+					IG::TextDisabled(I18n::Tr("Waiting for input..."));
+				} else {
+					IG::TextUnformatted(typed.c_str());
+				}
+				if (Hotkeys::CaptureOverflowed()) {
+					IG::TextWrapped(I18n::Tr("Only the first four keys are used."));
+				}
+				IG::TextDisabled(I18n::Tr("Release every key when you are done; the chord is stored in the ini right away."));
+				if (IG::Button(I18n::TrId("Cancel"))) {
 					Hotkeys::CancelCapture();
 					g_hotkeyRow = -1;
 				}
+				IG::SameLine();
+				if (IG::Button(I18n::TrId("Clear"))) {
+					applyHotkey(static_cast<Hotkeys::Slot>(g_hotkeyRow), std::string{});
+					Hotkeys::CancelCapture();
+					g_hotkeyRow = -1;
+				}
+				IG::Separator();
 			}
 
 			IG::SeparatorText(I18n::Tr("Random outfit"));
@@ -1891,7 +1892,7 @@ namespace SOS::Menu
 				Settings::Get().Save();
 			}
 			bool quickslotRandom = settings.quickslotRandom;
-			if (IG::Checkbox(I18n::TrId("The \"Change Outfit\" power rolls a random outfit"), &quickslotRandom)) {
+			if (IG::Checkbox(I18n::TrId("Make the \"Change Outfit\" power roll a random outfit"), &quickslotRandom)) {
 				settings.quickslotRandom = quickslotRandom;
 				Settings::Get().Save();
 			}
@@ -1943,6 +1944,25 @@ namespace SOS::Menu
 
 		bool __stdcall OnFrameworkInput(RE::InputEvent* a_event)
 		{
+			if (!a_event) {
+				return false;
+			}
+
+			// While a hotkey is being recorded the keys belong to the recorder only.
+			// Returning true removes the event from the queue, which is what keeps
+			// the menu (and its gamepad navigation) from acting on them.
+			if (Hotkeys::CaptureActive()) {
+				bool swallowed = false;
+				for (auto* event = a_event; event; event = event->next) {
+					if (event->AsButtonEvent()) {
+						swallowed = true;
+					}
+				}
+				if (swallowed) {
+					return true;
+				}
+			}
+
 			if (!g_quickWindow || !g_quickWindow->IsOpen.load(std::memory_order_acquire)) {
 				ClearPadState();
 				return false;

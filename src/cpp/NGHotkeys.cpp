@@ -92,6 +92,14 @@ namespace SOS::Hotkeys
 		// skips that wait and is limited to one open every 0.5 s.
 		constexpr std::int64_t kQuickslotOpenCooldownMs = 500;
 
+		// The random outfit and the power's random roll answer on the key press,
+		// so they need their own 0.5 s gate instead of waiting for the power to
+		// finish casting. g_lastPowerActionMs is what tells the Papyrus side that
+		// this press has already been served.
+		std::atomic<std::uint64_t> g_lastPowerActionMs{ 0 };
+		constexpr std::uint64_t    kRandomCooldownMs = 500;
+		std::atomic<std::uint64_t> g_lastRandomFireMs{ 0 };
+
 		bool CachedTextInputActive()
 		{
 			if (!g_textInput.load(std::memory_order_relaxed)) {
@@ -495,16 +503,20 @@ namespace SOS::Hotkeys
 			}
 			tasks->AddTask([]() {
 				const auto& settings = Settings::Get();
+				// Either way the plugin does it now: waiting for the power's cast
+				// animation was the "cooldown" users complained about. The effect
+				// script that runs afterwards is skipped through
+				// PowerActionJustHandled().
+				g_lastPowerActionMs.store(NowMs(), std::memory_order_relaxed);
 				if (settings.quickslotRandom) {
-					// That mode rolls a random outfit through the power itself; do
-					// nothing here so nothing is rolled twice.
+					Fire();
 					return;
 				}
 				if (Menu::QuickPickerVisible()) {
 					return;
 				}
 				Menu::ShowQuickPicker(true);
-				SKSE::log::debug("Hotkeys: quick picker opened by the quickslot key chord.");
+				SKSE::log::debug("Hotkeys: quick picker opened by the game's own power key.");
 			});
 		}
 
@@ -681,6 +693,78 @@ namespace SOS::Hotkeys
 			}
 		}
 
+		bool IsHeld(const Trigger& a_trigger)
+		{
+			std::lock_guard lock(g_heldMutex);
+			return Contains(g_held, a_trigger);
+		}
+
+		// The key the player has actually bound to Shout/Power in the game settings.
+		// The "Change Outfit" lesser power is cast with it, so mirroring that binding
+		// keeps the plugin in step with keyboard and controller layouts alike.
+		bool GamePowerKeys(Trigger& a_keyboard, Trigger& a_gamepad)
+		{
+			static std::uint32_t cachedKeyboard = 0;
+			static std::uint32_t cachedGamepad = 0;
+			static std::uint64_t cachedAt = 0;
+			const auto           now = NowMs();
+			if (cachedAt == 0 || now - cachedAt > 1000) {
+				cachedAt = now;
+				cachedKeyboard = 0;
+				cachedGamepad = 0;
+				if (auto* map = RE::ControlMap::GetSingleton()) {
+					const auto keyboard = map->GetMappedKey("Shout", RE::INPUT_DEVICE::kKeyboard);
+					const auto gamepad = map->GetMappedKey("Shout", RE::INPUT_DEVICE::kGamepad);
+					if (keyboard != 0 && keyboard != 0xFF) {
+						cachedKeyboard = keyboard;
+					}
+					if (gamepad != 0 && gamepad != 0xFF) {
+						cachedGamepad = gamepad;
+					}
+				}
+			}
+			a_keyboard = Trigger{ Dev::kKeyboard, cachedKeyboard };
+			a_gamepad = Trigger{ Dev::kGamepad, cachedGamepad };
+			return cachedKeyboard != 0 || cachedGamepad != 0;
+		}
+
+		void FireRandomThrottled()
+		{
+			const auto now = NowMs();
+			const auto last = g_lastRandomFireMs.load(std::memory_order_relaxed);
+			if (last != 0 && now - last < kRandomCooldownMs) {
+				return;
+			}
+			g_lastRandomFireMs.store(now, std::memory_order_relaxed);
+			Fire();
+		}
+
+		void CheckPowerKey(bool a_blocked, bool a_menuOpen)
+		{
+			Trigger keyboard{};
+			Trigger gamepad{};
+			if (!GamePowerKeys(keyboard, gamepad)) {
+				g_latchedQuickKey = false;
+				return;
+			}
+			const bool down = (keyboard.code != 0 && IsHeld(keyboard)) || (gamepad.code != 0 && IsHeld(gamepad));
+			if (!down) {
+				g_latchedQuickKey = false;
+				return;
+			}
+			if (g_latchedQuickKey || a_blocked || a_menuOpen) {
+				return;
+			}
+			g_latchedQuickKey = true;
+			const auto now = NowMs();
+			const auto last = g_lastQuickslotOpenMs.load(std::memory_order_relaxed);
+			if (last != 0 && now - last < kQuickslotOpenCooldownMs) {
+				return;
+			}
+			g_lastQuickslotOpenMs.store(now, std::memory_order_relaxed);
+			FireQuickslotKey();
+		}
+
 		void PollTick()
 		{
 			static std::vector<Trigger> last;
@@ -726,12 +810,10 @@ namespace SOS::Hotkeys
 
 			Chord random;
 			Chord quick;
-			Chord quickKey;
 			{
 				std::lock_guard lock(g_chordMutex);
 				random = g_random;
 				quick = g_quick;
-				quickKey = g_quickKey;
 			}
 
 			const bool inputBlocked = CachedTextInputActive();
@@ -744,7 +826,7 @@ namespace SOS::Hotkeys
 					g_latchedRandom = false;
 				} else if (!g_latchedRandom && !inputBlocked && !consoleOpen) {
 					g_latchedRandom = true;
-					Fire();
+					FireRandomThrottled();
 				}
 			}
 			if (quick.valid()) {
@@ -755,19 +837,7 @@ namespace SOS::Hotkeys
 					FireQuickPicker();
 				}
 			}
-			if (quickKey.valid()) {
-				if (!AllDown(quickKey)) {
-					g_latchedQuickKey = false;
-				} else if (!g_latchedQuickKey && !inputBlocked && !consoleOpen && !menuOpen) {
-					g_latchedQuickKey = true;
-					const auto nowMs = NowMs();
-					const auto lastOpen = g_lastQuickslotOpenMs.load(std::memory_order_relaxed);
-					if (!Menu::QuickPickerVisible() && (lastOpen == 0 || nowMs - lastOpen >= kQuickslotOpenCooldownMs)) {
-						g_lastQuickslotOpenMs.store(nowMs, std::memory_order_relaxed);
-						FireQuickslotKey();
-					}
-				}
-			}
+			CheckPowerKey(inputBlocked, menuOpen || consoleOpen);
 		}
 
 		class InputSink : public RE::BSTEventSink<RE::InputEvent*>
@@ -846,12 +916,10 @@ namespace SOS::Hotkeys
 
 					Chord random;
 					Chord quick;
-					Chord quickKey;
 					{
 						std::lock_guard lock(g_chordMutex);
 						random = g_random;
 						quick = g_quick;
-						quickKey = g_quickKey;
 					}
 
 					if (random.valid()) {
@@ -859,7 +927,7 @@ namespace SOS::Hotkeys
 							g_latchedRandom = false;
 						} else if (!g_latchedRandom && !inputBlocked && !consoleOpen) {
 							g_latchedRandom = true;
-							Fire();
+							FireRandomThrottled();
 						}
 					}
 
@@ -872,22 +940,10 @@ namespace SOS::Hotkeys
 						}
 					}
 
-					// The quickslot power chord (default Z): opens the window on the key
-					// press instead of after the power's cast animation. The event is
-					// not consumed, so the quickslot itself still casts the power.
-					if (quickKey.valid()) {
-						if (!AllDown(quickKey)) {
-							g_latchedQuickKey = false;
-						} else if (!g_latchedQuickKey && !inputBlocked && !consoleOpen && !menuOpen) {
-							g_latchedQuickKey = true;
-							const auto now = NowMs();
-							const auto last = g_lastQuickslotOpenMs.load(std::memory_order_relaxed);
-							if (!Menu::QuickPickerVisible() && (last == 0 || now - last >= kQuickslotOpenCooldownMs)) {
-								g_lastQuickslotOpenMs.store(now, std::memory_order_relaxed);
-								FireQuickslotKey();
-							}
-						}
-					}
+					// The game's own Shout/Power key: act on the press instead of
+					// after the power's cast animation. The event is not consumed, so
+					// the power still casts as usual.
+					CheckPowerKey(inputBlocked, menuOpen || consoleOpen);
 				}
 				if (capturing) {
 					CheckCaptureSettle();
@@ -902,6 +958,30 @@ namespace SOS::Hotkeys
 	void Tick()
 	{
 		PollTick();
+	}
+
+	std::string GamePowerKeyText()
+	{
+		Trigger keyboard{};
+		Trigger gamepad{};
+		if (!GamePowerKeys(keyboard, gamepad)) {
+			return {};
+		}
+		Chord chord;
+		if (keyboard.code != 0) {
+			chord.triggers.push_back(keyboard);
+		}
+		if (gamepad.code != 0) {
+			chord.triggers.push_back(gamepad);
+		}
+		return Format(chord);
+	}
+
+	bool PowerActionJustHandled()
+	{
+		const auto now = NowMs();
+		const auto last = g_lastPowerActionMs.load(std::memory_order_relaxed);
+		return last != 0 && now - last < 1500;
 	}
 
 	bool Install()

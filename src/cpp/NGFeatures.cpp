@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include "I18n.h"
+#include "NGHotkeys.h"
 #include "MenuUI.h"
 #include "MorphRefresh.h"
 #include "bindings.h"
@@ -327,6 +328,12 @@ namespace SOS::Features
 	std::string RandomOutfit(RE::BSScript::IVirtualMachine* a_registry, std::uint32_t a_stackId, RE::StaticFunctionTag*, RE::Actor* a_actor, bool a_favoritesOnly)
 	{
 		LogExit exitPrint("RandomOutfit"sv);
+		if (SOS::Hotkeys::PowerActionJustHandled()) {
+			// The key handler already rolled one when the power's key was pressed;
+			// the script that runs after the cast animation must not roll again.
+			SKSE::log::debug("RandomOutfit: skipped, the key press already rolled an outfit.");
+			return {};
+		}
 		if (!a_actor) {
 			if (a_registry) {
 				a_registry->TraceStack("Cannot pick an outfit for a None RE::Actor.", a_stackId, RE::BSScript::IVirtualMachine::Severity::kError);
@@ -436,6 +443,10 @@ namespace SOS::Features
 	// which is what made the power look dead before.
 	bool OpenQuickPicker(RE::BSScript::IVirtualMachine*, std::uint32_t, RE::StaticFunctionTag*)
 	{
+		if (SOS::Hotkeys::PowerActionJustHandled() && Menu::QuickPickerVisible()) {
+			// Opened by the key press itself, before the power finished casting.
+			return true;
+		}
 		if (!Menu::Register()) {
 			RE::SendHUDMessage::ShowHUDMessage(I18n::T("Skyrim Outfit System: install SKSE Menu Framework to use the quick outfit picker.", "天际幻化系统：需要安装 SKSE Menu Framework 才能使用快速选择窗口。"), nullptr, false);
 			SKSE::log::warn("Quick picker: the SKSE Menu Framework is not available.");
