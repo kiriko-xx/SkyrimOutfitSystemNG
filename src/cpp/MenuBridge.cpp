@@ -254,6 +254,26 @@ namespace SOS::MenuBridge
 		return g_eventRegistration != 0;
 	}
 
+	bool AnyBlockingWindowOpened()
+	{
+		if (!g_available.load(std::memory_order_acquire) || !g_smf) {
+			return false;
+		}
+		// Resolved at most once, and only after the framework loaded: caching a
+		// failure before that would hide the export for the rest of the session.
+		using AnyBlockingFn = bool (*)();
+		static AnyBlockingFn fn = nullptr;
+		static bool         resolved = false;
+		if (!resolved) {
+			fn = reinterpret_cast<AnyBlockingFn>(::GetProcAddress(g_smf, "IsAnyBlockingWindowOpened"));
+			resolved = true;
+			if (!fn) {
+				LOG(debug, "Menu: the framework has no IsAnyBlockingWindowOpened export; an open menu is only detected by its events.");
+			}
+		}
+		return fn ? fn() : false;
+	}
+
 	float FrameworkVersion()
 	{
 		return g_frameworkVersion;

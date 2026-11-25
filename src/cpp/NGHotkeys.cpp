@@ -3,8 +3,12 @@
 #include "I18n.h"
 
 #include "AutoSwitch.h"
+#include "MenuBridge.h"
+#include "MenuUI.h"
 #include "MorphRefresh.h"
 #include "SceneOutfits.h"
+#include "compat/ModCompat.h"
+#include "core/Settings.h"
 
 #include <algorithm>
 #include <atomic>
@@ -17,9 +21,6 @@
 #include <vector>
 
 #include "NGFeatures.h"
-#include "MenuUI.h"
-#include "compat/ModCompat.h"
-#include "core/Settings.h"
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
@@ -30,10 +31,12 @@ namespace SOS::Hotkeys
 	namespace
 	{
 		// A hotkey is a chord: every trigger has to be down at the same time.
-		// Keyboard triggers use DirectInput scan codes (what ButtonEvent reports);
-		// the three modifier keys are kept as pseudo codes so that the ini text
-		// stays readable ("ctrl", not "lctrl") and the old ini values keep
-		// working.
+		// Keyboard triggers use DirectInput scan codes (what ButtonEvent reports and
+		// what the keyboard polling below produces); the modifier keys are kept as
+		// pseudo codes so that the ini text stays readable ("ctrl", not "lctrl") and
+		// the old ini values keep working. Controller triggers use the button masks
+		// ButtonEvent reports (0x0001 .. 0x8000, plus 0x0009/0x000A for the
+		// triggers).
 		enum class Dev : std::uint8_t
 		{
 			kKeyboard,
@@ -67,251 +70,147 @@ namespace SOS::Hotkeys
 			bool valid() const { return !triggers.empty(); }
 		};
 
-		// Every hotkey can be bound twice, once to the keyboard and once to the
-		// controller, and both bindings stay active at the same time. The game's
-		// own power key keeps a single chord: it mirrors the game binding.
-		Chord      g_randomKb;
-		Chord      g_randomPad;
-		Chord      g_quickKb;
-		Chord      g_quickPad;
-		Chord      g_quickKey;
-		std::mutex g_chordMutex;
-
-		// Everything currently held down, in press order. Maintained from the
-		// input sink, which runs on the device thread.
-		std::vector<Trigger> g_held;
-		std::mutex          g_heldMutex;
-
-		bool g_latchedRandom{ false };
-		bool g_latchedQuick{ false };
-		bool g_latchedQuickKey{ false };
-
-		bool       g_installed{ false };
-		std::atomic<bool> g_textInput{ false };
-		std::atomic<std::int64_t> g_textInputStamp{ 0 };
-
-		std::atomic<std::int64_t> g_lastQuickslotOpenMs{ 0 };
-
-		// The quickslot power only opens the window once its cast animation has
-		// finished, which feels like a cooldown on the Z key. The mirrored key
-		// skips that wait and is limited to one open every 0.5 s.
-		constexpr std::int64_t kQuickslotOpenCooldownMs = 500;
-
-		// The random outfit and the power's random roll answer on the key press,
-		// so they need their own 0.5 s gate instead of waiting for the power to
-		// finish casting. g_lastPowerActionMs is what tells the Papyrus side that
-		// this press has already been served.
-		std::atomic<std::uint64_t> g_lastPowerActionMs{ 0 };
-		constexpr std::uint64_t    kRandomCooldownMs = 500;
-		std::atomic<std::uint64_t> g_lastRandomFireMs{ 0 };
-
-		bool CachedTextInputActive()
+		// ---- one table per device -------------------------------------------
+		//
+		// Everything about a keyboard key lives in one place: its scan code (what
+		// the game reports), the virtual key (what GetAsyncKeyState wants) and the
+		// text used in the ini. Reading a name back and printing a recorded key both
+		// go through this table, so a recorded key always matches the key that is
+		// later pressed - that was not true when the two directions had their own
+		// hand written tables.
+		struct KeyEntry
 		{
-			if (!g_textInput.load(std::memory_order_relaxed)) {
-				return false;
-			}
-			// The menu refreshes this timestamp from the render thread every frame.
-			// Expiring it avoids leaving hotkeys blocked when the menu closes while
-			// an input box still had focus on the last rendered frame.
-			const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-				std::chrono::steady_clock::now().time_since_epoch()).count();
-			const auto stamp = g_textInputStamp.load(std::memory_order_relaxed);
-			return stamp != 0 && now - stamp < 500;
+			std::uint32_t scan;
+			int           vk;
+			const char*   name;
+		};
+
+		const std::vector<KeyEntry>& KeyTable()
+		{
+			static const std::vector<KeyEntry> table{
+				{ 0x01, VK_ESCAPE, "esc" },
+				{ 0x02, '1', "1" }, { 0x03, '2', "2" }, { 0x04, '3', "3" }, { 0x05, '4', "4" }, { 0x06, '5', "5" },
+				{ 0x07, '6', "6" }, { 0x08, '7', "7" }, { 0x09, '8', "8" }, { 0x0A, '9', "9" }, { 0x0B, '0', "0" },
+				{ 0x0C, VK_OEM_MINUS, "-" },
+				{ 0x0D, VK_OEM_PLUS, "=" },
+				{ 0x0E, VK_BACK, "backspace" },
+				{ 0x0F, VK_TAB, "tab" },
+				{ 0x10, 'Q', "q" }, { 0x11, 'W', "w" }, { 0x12, 'E', "e" }, { 0x13, 'R', "r" }, { 0x14, 'T', "t" },
+				{ 0x15, 'Y', "y" }, { 0x16, 'U', "u" }, { 0x17, 'I', "i" }, { 0x18, 'O', "o" }, { 0x19, 'P', "p" },
+				{ 0x1A, VK_OEM_4, "[" },
+				{ 0x1B, VK_OEM_6, "]" },
+				{ 0x1C, VK_RETURN, "enter" },
+				{ kModCtrl, VK_CONTROL, "ctrl" },
+				{ 0x1E, 'A', "a" }, { 0x1F, 'S', "s" }, { 0x20, 'D', "d" }, { 0x21, 'F', "f" }, { 0x22, 'G', "g" },
+				{ 0x23, 'H', "h" }, { 0x24, 'J', "j" }, { 0x25, 'K', "k" }, { 0x26, 'L', "l" },
+				{ 0x27, VK_OEM_1, ";" },
+				{ 0x28, VK_OEM_7, "'" },
+				{ 0x29, VK_OEM_3, "grave" },
+				{ kModShift, VK_SHIFT, "shift" },
+				{ 0x2B, VK_OEM_5, "\\" },
+				{ 0x2C, 'Z', "z" }, { 0x2D, 'X', "x" }, { 0x2E, 'C', "c" }, { 0x2F, 'V', "v" }, { 0x30, 'B', "b" },
+				{ 0x31, 'N', "n" }, { 0x32, 'M', "m" },
+				{ 0x33, VK_OEM_COMMA, "," },
+				{ 0x34, VK_OEM_PERIOD, "." },
+				{ 0x35, VK_OEM_2, "/" },
+				{ 0x37, VK_MULTIPLY, "num*" },
+				{ kModAlt, VK_MENU, "alt" },
+				{ 0x39, VK_SPACE, "space" },
+				{ 0x3A, VK_CAPITAL, "capslock" },
+				{ 0x3B, VK_F1, "f1" }, { 0x3C, VK_F2, "f2" }, { 0x3D, VK_F3, "f3" }, { 0x3E, VK_F4, "f4" },
+				{ 0x3F, VK_F5, "f5" }, { 0x40, VK_F6, "f6" }, { 0x41, VK_F7, "f7" }, { 0x42, VK_F8, "f8" },
+				{ 0x43, VK_F9, "f9" }, { 0x44, VK_F10, "f10" },
+				{ 0x45, VK_NUMLOCK, "numlock" },
+				{ 0x46, VK_SCROLL, "scrolllock" },
+				{ 0x47, VK_NUMPAD7, "num7" }, { 0x48, VK_NUMPAD8, "num8" }, { 0x49, VK_NUMPAD9, "num9" },
+				{ 0x4A, VK_SUBTRACT, "num-" },
+				{ 0x4B, VK_NUMPAD4, "num4" }, { 0x4C, VK_NUMPAD5, "num5" }, { 0x4D, VK_NUMPAD6, "num6" },
+				{ 0x4E, VK_ADD, "num+" },
+				{ 0x4F, VK_NUMPAD1, "num1" }, { 0x50, VK_NUMPAD2, "num2" }, { 0x51, VK_NUMPAD3, "num3" },
+				{ 0x52, VK_NUMPAD0, "num0" },
+				{ 0x53, VK_DECIMAL, "num." },
+				{ 0x57, VK_F11, "f11" }, { 0x58, VK_F12, "f12" },
+				{ 0xB5, VK_DIVIDE, "num/" },
+				{ 0xC7, VK_HOME, "home" }, { 0xC8, VK_UP, "up" }, { 0xC9, VK_PRIOR, "pgup" },
+				{ 0xCB, VK_LEFT, "left" }, { 0xCD, VK_RIGHT, "right" }, { 0xCF, VK_END, "end" },
+				{ 0xD0, VK_DOWN, "down" }, { 0xD1, VK_NEXT, "pgdn" }, { 0xD2, VK_INSERT, "insert" },
+				{ 0xD3, VK_DELETE, "delete" }
+			};
+			return table;
 		}
 
-		std::int64_t NowMs()
+		struct PadEntry
 		{
-			return std::chrono::duration_cast<std::chrono::milliseconds>(
-				std::chrono::steady_clock::now().time_since_epoch()).count();
+			std::uint32_t code;
+			const char*   name;
+		};
+
+		const std::vector<PadEntry>& PadTable()
+		{
+			using Keys = RE::BSWin32GamepadDevice::Keys;
+			static const std::vector<PadEntry> table{
+				{ Keys::kUp, "up" },
+				{ Keys::kDown, "down" },
+				{ Keys::kLeft, "left" },
+				{ Keys::kRight, "right" },
+				{ Keys::kStart, "start" },
+				{ Keys::kBack, "back" },
+				{ Keys::kLeftThumb, "lstick" },
+				{ Keys::kRightThumb, "rstick" },
+				{ Keys::kLeftShoulder, "lb" },
+				{ Keys::kRightShoulder, "rb" },
+				{ Keys::kA, "a" },
+				{ Keys::kB, "b" },
+				{ Keys::kX, "x" },
+				{ Keys::kY, "y" },
+				{ Keys::kLeftTrigger, "lt" },
+				{ Keys::kRightTrigger, "rt" }
+			};
+			return table;
 		}
 
-		std::string_view Trim(std::string_view a_text)
-		{
-			while (!a_text.empty() && std::isspace(static_cast<unsigned char>(a_text.front()))) {
-				a_text.remove_prefix(1);
-			}
-			while (!a_text.empty() && std::isspace(static_cast<unsigned char>(a_text.back()))) {
-				a_text.remove_suffix(1);
-			}
-			return a_text;
-		}
-
-		std::string_view Lower(std::string_view a_text, std::string& a_storage)
-		{
-			a_storage.assign(a_text);
-			std::transform(a_storage.begin(), a_storage.end(), a_storage.begin(), [](unsigned char c) {
-				return static_cast<char>(std::tolower(c));
-			});
-			return a_storage;
-		}
-
-		// DirectInput scan codes, as reported by ButtonEvent::GetIDCode().
 		std::uint32_t ScanCodeFor(std::string_view a_token)
 		{
-			if (a_token.size() == 1) {
-				const char c = static_cast<char>(std::toupper(static_cast<unsigned char>(a_token.front())));
-				if (c >= 'A' && c <= 'Z') {
-					static constexpr std::uint32_t kLetters[26] = {
-						0x1E, 0x30, 0x2E, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32,
-						0x31, 0x18, 0x19, 0x10, 0x13, 0x1F, 0x14, 0x16, 0x2F, 0x11, 0x2D, 0x15, 0x2C
-					};
-					return kLetters[c - 'A'];
+			for (const auto& entry : KeyTable()) {
+				if (a_token == entry.name) {
+					return entry.scan;
 				}
-				if (c >= '0' && c <= '9') {
-					static constexpr std::uint32_t kDigits[10] = {
-						0x0B, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A
-					};
-					return kDigits[c - '0'];
-				}
-			}
-			if (a_token.size() >= 2 && a_token.front() == 'F') {
-				std::uint32_t index = 0;
-				bool          digits = true;
-				for (std::size_t i = 1; i < a_token.size(); ++i) {
-					if (!std::isdigit(static_cast<unsigned char>(a_token[i]))) {
-						digits = false;
-						break;
-					}
-					index = index * 10 + static_cast<std::uint32_t>(a_token[i] - '0');
-				}
-				if (digits) {
-					if (index >= 1 && index <= 10) {
-						return 0x3A + index;  // F1 = 0x3B
-					}
-					if (index == 11) {
-						return 0x57;
-					}
-					if (index == 12) {
-						return 0x58;
-					}
-				}
-			}
-			if (a_token == "space") {
-				return 0x39;
-			}
-			if (a_token == "tab") {
-				return 0x0F;
-			}
-			if (a_token == "enter" || a_token == "return") {
-				return 0x1C;
-			}
-			if (a_token == "esc" || a_token == "escape") {
-				return 0x01;
-			}
-			if (a_token == "insert") {
-				return 0xD2;
-			}
-			if (a_token == "delete") {
-				return 0xD3;
-			}
-			if (a_token == "home") {
-				return 0xC7;
-			}
-			if (a_token == "end") {
-				return 0xCF;
-			}
-			if (a_token == "pgup") {
-				return 0xC9;
-			}
-			if (a_token == "pgdn") {
-				return 0xD1;
 			}
 			return 0;
 		}
 
 		std::string_view NameForScan(std::uint32_t a_code)
 		{
-			static constexpr std::string_view kLetters[26] = {
-				"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
-				"N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"
-			};
-			static constexpr std::uint32_t kLetterCodes[26] = {
-				0x1E, 0x30, 0x2E, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32,
-				0x31, 0x18, 0x19, 0x10, 0x13, 0x1F, 0x14, 0x16, 0x2F, 0x11, 0x2D, 0x15, 0x2C
-			};
-			for (std::size_t i = 0; i < 26; ++i) {
-				if (kLetterCodes[i] == a_code) {
-					return kLetters[i];
+			for (const auto& entry : KeyTable()) {
+				if (entry.scan == a_code) {
+					return entry.name;
 				}
 			}
-			static constexpr std::uint32_t kDigitCodes[10] = { 0x0B, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A };
-			static constexpr std::string_view kDigitNames[10] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
-			for (std::size_t i = 0; i < 10; ++i) {
-				if (kDigitCodes[i] == a_code) {
-					return kDigitNames[i];
-				}
-			}
-			if (a_code >= 0x3B && a_code <= 0x44) {
-				static constexpr std::string_view kF[10] = { "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10" };
-				return kF[a_code - 0x3B];
-			}
-			switch (a_code) {
-			case 0x57: return "F11";
-			case 0x58: return "F12";
-			case 0x39: return "space";
-			case 0x0F: return "tab";
-			case 0x1C: return "enter";
-			case 0x01: return "esc";
-			case 0xD2: return "insert";
-			case 0xD3: return "delete";
-			case 0xC7: return "home";
-			case 0xCF: return "end";
-			case 0xC9: return "pgup";
-			case 0xD1: return "pgdn";
-			default: return {};
-			}
+			return {};
 		}
 
-		// Controller buttons, as reported by ButtonEvent::GetIDCode() on a
-		// gamepad device (XInput masks plus the two trigger ids).
 		std::uint32_t GamepadCodeFor(std::string_view a_token)
 		{
-			using Keys = RE::BSWin32GamepadDevice::Keys;
-			if (a_token == "up") return Keys::kUp;
-			if (a_token == "down") return Keys::kDown;
-			if (a_token == "left") return Keys::kLeft;
-			if (a_token == "right") return Keys::kRight;
-			if (a_token == "start") return Keys::kStart;
-			if (a_token == "back") return Keys::kBack;
-			if (a_token == "lstick") return Keys::kLeftThumb;
-			if (a_token == "rstick") return Keys::kRightThumb;
-			if (a_token == "lb") return Keys::kLeftShoulder;
-			if (a_token == "rb") return Keys::kRightShoulder;
-			if (a_token == "lt") return Keys::kLeftTrigger;
-			if (a_token == "rt") return Keys::kRightTrigger;
-			if (a_token == "a") return Keys::kA;
-			if (a_token == "b") return Keys::kB;
-			if (a_token == "x") return Keys::kX;
-			if (a_token == "y") return Keys::kY;
+			for (const auto& entry : PadTable()) {
+				if (a_token == entry.name) {
+					return entry.code;
+				}
+			}
 			return 0;
 		}
 
 		std::string_view GamepadNameFor(std::uint32_t a_code)
 		{
-			using Keys = RE::BSWin32GamepadDevice::Keys;
-			switch (a_code) {
-			case Keys::kUp: return "up";
-			case Keys::kDown: return "down";
-			case Keys::kLeft: return "left";
-			case Keys::kRight: return "right";
-			case Keys::kStart: return "start";
-			case Keys::kBack: return "back";
-			case Keys::kLeftThumb: return "lstick";
-			case Keys::kRightThumb: return "rstick";
-			case Keys::kLeftShoulder: return "lb";
-			case Keys::kRightShoulder: return "rb";
-			case Keys::kLeftTrigger: return "lt";
-			case Keys::kRightTrigger: return "rt";
-			case Keys::kA: return "a";
-			case Keys::kB: return "b";
-			case Keys::kX: return "x";
-			case Keys::kY: return "y";
-			default: return {};
+			for (const auto& entry : PadTable()) {
+				if (entry.code == a_code) {
+					return entry.name;
+				}
 			}
+			return {};
 		}
 
 		// The modifier keys have dedicated scan codes; fold the left and the right
-		// one onto the same pseudo trigger so the ini text stays identical.
+		// one onto the same trigger so the ini text stays identical.
 		std::uint32_t ModifierForScan(std::uint32_t a_code)
 		{
 			switch (a_code) {
@@ -337,29 +236,46 @@ namespace SOS::Hotkeys
 					text += '+';
 				}
 				if (trigger.device == Dev::kGamepad) {
+					const auto name = GamepadNameFor(trigger.code);
 					text += "pad:";
-					text += GamepadNameFor(trigger.code);
-				} else if (trigger.code == kModCtrl) {
-					text += "ctrl";
-				} else if (trigger.code == kModShift) {
-					text += "shift";
-				} else if (trigger.code == kModAlt) {
-					text += "alt";
+					text += name.empty() ? "?" : std::string(name);
+					continue;
+				}
+				const auto name = NameForScan(trigger.code);
+				if (name.empty()) {
+					text += "?";
+				} else if (name.size() == 1 && std::isalpha(static_cast<unsigned char>(name.front()))) {
+					text += static_cast<char>(std::toupper(static_cast<unsigned char>(name.front())));
 				} else {
-					const auto name = NameForScan(trigger.code);
-					if (name.empty()) {
-						text += "?";
-					} else {
-						text += name;
-					}
+					text += name;
 				}
 			}
 			return text;
 		}
 
+		std::string_view Trim(std::string_view a_text)
+		{
+			while (!a_text.empty() && std::isspace(static_cast<unsigned char>(a_text.front()))) {
+				a_text.remove_prefix(1);
+			}
+			while (!a_text.empty() && std::isspace(static_cast<unsigned char>(a_text.back()))) {
+				a_text.remove_suffix(1);
+			}
+			return a_text;
+		}
+
+		std::string_view Lower(std::string_view a_text, std::string& a_storage)
+		{
+			a_storage.assign(a_text);
+			std::transform(a_storage.begin(), a_storage.end(), a_storage.begin(), [](unsigned char c) {
+				return static_cast<char>(std::tolower(c));
+			});
+			return a_storage;
+		}
+
 		Chord Parse(const std::string& a_text, const char* a_name)
 		{
-			Chord      result;
+			Chord            result;
 			std::string_view text = Trim(a_text);
 			if (text.empty()) {
 				return result;
@@ -376,15 +292,12 @@ namespace SOS::Hotkeys
 
 			std::string storage;
 			for (const auto token : tokens) {
+				if (token.empty()) {
+					continue;
+				}
 				const auto lower = Lower(token, storage);
 				Trigger    trigger;
-				if (lower == "ctrl" || lower == "control") {
-					trigger.code = kModCtrl;
-				} else if (lower == "shift") {
-					trigger.code = kModShift;
-				} else if (lower == "alt") {
-					trigger.code = kModAlt;
-				} else if (lower.rfind("pad:", 0) == 0) {
+				if (lower.rfind("pad:", 0) == 0) {
 					trigger.device = Dev::kGamepad;
 					trigger.code = GamepadCodeFor(lower.substr(4));
 				} else {
@@ -405,6 +318,125 @@ namespace SOS::Hotkeys
 				result.triggers.resize(kMaxChordKeys);
 			}
 			return result;
+		}
+
+		// ---- state ------------------------------------------------------------
+		//
+		// Every hotkey can be bound twice, once to the keyboard and once to the
+		// controller, and both bindings stay active at the same time.
+		Chord      g_randomKb;
+		Chord      g_randomPad;
+		Chord      g_quickKb;
+		Chord      g_quickPad;
+		Chord      g_quickKey;
+		std::mutex g_chordMutex;
+
+		// Everything currently held down, maintained from the input sink, which runs
+		// on the device thread.
+		std::vector<Trigger> g_held;
+		std::mutex           g_heldMutex;
+
+		bool g_latchedRandom{ false };
+		bool g_latchedQuick{ false };
+		bool g_latchedQuickKey{ false };
+
+		bool              g_installed{ false };
+		std::atomic<bool> g_textInput{ false };
+		std::atomic<std::int64_t> g_textInputStamp{ 0 };
+
+		// The framework tells us when its menu opens and closes. While it is open the
+		// keys belong to the menu: a hotkey that fired there would apply an outfit
+		// from inside the settings page.
+		std::atomic<bool> g_frameworkMenuOpen{ false };
+
+		// A recording owns the input: nothing may fire while it runs, and the host
+		// must not see the keys that are being recorded.
+		std::atomic<bool> g_capturing{ false };
+
+		std::atomic<std::int64_t> g_lastQuickslotOpenMs{ 0 };
+
+		// The quickslot power only opens the window once its cast animation has
+		// finished, which feels like a cooldown on the Z key. The mirrored key skips
+		// that wait and is limited to one open every 0.5 s.
+		constexpr std::int64_t kQuickslotOpenCooldownMs = 500;
+
+		// The random outfit and the power's random roll answer on the key press, so
+		// they need their own 0.5 s gate instead of waiting for the power to finish
+		// casting. g_lastPowerActionMs is what tells the Papyrus side that this press
+		// has already been served.
+		std::atomic<std::uint64_t> g_lastPowerActionMs{ 0 };
+		constexpr std::uint64_t    kRandomCooldownMs = 500;
+		std::atomic<std::uint64_t> g_lastRandomFireMs{ 0 };
+
+		std::int64_t NowMs()
+		{
+			return std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
+		}
+
+		bool CachedTextInputActive()
+		{
+			if (!g_textInput.load(std::memory_order_relaxed)) {
+				return false;
+			}
+			// The menu refreshes this timestamp from the render thread every frame.
+			// Expiring it avoids leaving hotkeys blocked when the menu closes while an
+			// input box still had focus on the last rendered frame.
+			const auto now = NowMs();
+			const auto stamp = g_textInputStamp.load(std::memory_order_relaxed);
+			return stamp != 0 && now - stamp < 500;
+		}
+
+		// ---- the gate ---------------------------------------------------------
+		//
+		// A hotkey may only act while the player is actually playing. The previous
+		// build only looked at the console and at text fields, which is why the keys
+		// kept firing from inside the settings page.
+
+		bool GameWindowFocused()
+		{
+			const auto foreground = ::GetForegroundWindow();
+			if (!foreground) {
+				return false;
+			}
+			DWORD pid = 0;
+			::GetWindowThreadProcessId(foreground, &pid);
+			return pid == ::GetCurrentProcessId();
+		}
+
+		bool OurMenuOpen()
+		{
+			// The quick picker is an in-game window: its own hotkey has to keep working
+			// so the same key can close it again.
+			if (Menu::QuickPickerVisible()) {
+				return false;
+			}
+			if (g_frameworkMenuOpen.load(std::memory_order_relaxed)) {
+				return true;
+			}
+			return MenuBridge::AnyBlockingWindowOpened();
+		}
+
+		bool FiringBlocked()
+		{
+			if (g_capturing.load(std::memory_order_relaxed)) {
+				return true;
+			}
+			if (CachedTextInputActive()) {
+				return true;
+			}
+			if (auto* ui = RE::UI::GetSingleton()) {
+				if (ui->IsMenuOpen(RE::Console::MENU_NAME)) {
+					return true;
+				}
+				if (ui->GameIsPaused()) {
+					return true;
+				}
+			}
+			if (OurMenuOpen()) {
+				return true;
+			}
+			return !GameWindowFocused();
 		}
 
 		bool Down(const Trigger& a_trigger)
@@ -437,7 +469,6 @@ namespace SOS::Hotkeys
 			return true;
 		}
 
-		// True when either of the two bindings of a hotkey is fully pressed.
 		bool AnyChordDown(const Chord& a_first, const Chord& a_second)
 		{
 			return (a_first.valid() && AllDown(a_first)) || (a_second.valid() && AllDown(a_second));
@@ -448,9 +479,9 @@ namespace SOS::Hotkeys
 			return a_first.valid() || a_second.valid();
 		}
 
-		// Keeps only the triggers of one device. Used to fold a binding written by
-		// an older build (which kept both devices in a single ini value) into the
-		// two fields.
+		// Keeps only the triggers of one device, so a binding written by an older
+		// build (which kept both devices in a single ini value) can be folded into
+		// the two fields.
 		Chord OnlyDevice(const Chord& a_chord, Dev a_device)
 		{
 			Chord result;
@@ -534,9 +565,9 @@ namespace SOS::Hotkeys
 		// The shipped esp grants the "Change Outfit" lesser power. Pressing its
 		// quickslot key only reaches the effect script after the cast animation of
 		// the power, so the window shows up with a delay that users read as a
-		// cooldown. This runs on the key press itself; the power then casts as
-		// usual and its OpenQuickPicker() call does nothing because the window is
-		// already open.
+		// cooldown. This runs on the key press itself; the power then casts as usual
+		// and its OpenQuickPicker() call does nothing because the window is already
+		// open.
 		void FireQuickslotKey()
 		{
 			auto* tasks = SKSE::GetTaskInterface();
@@ -546,10 +577,9 @@ namespace SOS::Hotkeys
 			tasks->AddTask([]() {
 				const auto& settings = Settings::Get();
 				// Either way the plugin does it now: waiting for the power's cast
-				// animation was the "cooldown" users complained about. The effect
-				// script that runs afterwards is skipped through
-				// PowerActionJustHandled().
-				g_lastPowerActionMs.store(NowMs(), std::memory_order_relaxed);
+				// animation was the "cooldown" users complained about. The effect script
+				// that runs afterwards is skipped through PowerActionJustHandled().
+				g_lastPowerActionMs.store(static_cast<std::uint64_t>(NowMs()), std::memory_order_relaxed);
 				if (settings.quickslotRandom) {
 					Fire();
 					return;
@@ -562,18 +592,21 @@ namespace SOS::Hotkeys
 			});
 		}
 
-		// ---- capture ----------------------------------------------------
+		// ---- capture ----------------------------------------------------------
 		//
-		// Modelled on FreeClimb's recorder, which behaves the way the settings page
-		// is expected to: the recorder is a modal window, it accepts nothing until
-		// the player released whatever was held when it opened, it says why a
-		// combination was refused, and it gives up after a while.
+		// Modelled on FreeClimb's recorder: the recorder is a modal window, it
+		// accepts nothing until the player released whatever was held when it
+		// opened, it says why a combination was refused, and it gives up after a
+		// while. Unlike FreeClimb the combination is only finished once no new key
+		// was pressed for a moment, so a chord pressed one key after the other is
+		// still recorded as a chord.
 
 		enum class CaptureState : int
 		{
 			kIdle = 0,
 			kWaiting,
 			kArmed,
+			kSettling,
 			kCaptured
 		};
 
@@ -585,7 +618,6 @@ namespace SOS::Hotkeys
 			kNotTogether
 		};
 
-		std::atomic<bool> g_capturing{ false };
 		std::atomic<int>  g_captureSlot{ -1 };
 		// 0 = keyboard, 1 = gamepad; see NGHotkeys::Input.
 		std::atomic<int>  g_captureDevice{ 0 };
@@ -594,13 +626,17 @@ namespace SOS::Hotkeys
 		std::mutex        g_captureMutex;
 		std::vector<Trigger> g_captureCandidate;
 		std::vector<Trigger> g_captureDown;
-		std::string g_captureResult;
-		int         g_captureResultSlot{ -1 };
-		int         g_captureResultDevice{ 0 };
-		std::uint64_t g_captureStartedMs{ 0 };
+		std::string          g_captureResult;
+		int                  g_captureResultSlot{ -1 };
+		int                  g_captureResultDevice{ 0 };
+		std::int64_t         g_captureStartedMs{ 0 };
+		std::int64_t         g_captureQuietMs{ 0 };
 		// A recording that is left open (the player walked away) must not keep the
 		// host from reading input for the rest of the session.
-		constexpr std::uint64_t kCaptureTimeoutMs = 20000;
+		constexpr std::int64_t kCaptureTimeoutMs = 20000;
+		// Keys pressed one after the other belong to the same chord as long as the
+		// next one follows within this window.
+		constexpr std::int64_t kCaptureSettleMs = 400;
 
 		Dev CaptureDeviceDev()
 		{
@@ -617,8 +653,8 @@ namespace SOS::Hotkeys
 			return a_trigger.code == RE::BSWin32GamepadDevice::Keys::kBack;
 		}
 
-		// Refuses the chords the game cannot use, so a refused recording tells the
-		// user instead of silently storing a hotkey that never fires.
+		// Refuses the combinations the game cannot use, so a refused recording tells
+		// the user instead of silently storing a hotkey that never fires.
 		bool ValidCaptureChord(Dev a_device, const std::vector<Trigger>& a_triggers)
 		{
 			if (a_triggers.empty() || a_triggers.size() > kMaxChordKeys) {
@@ -667,6 +703,7 @@ namespace SOS::Hotkeys
 			// Listen again once everything is released, so a refused chord can be
 			// retried without closing the window.
 			g_captureState.store(static_cast<int>(CaptureState::kWaiting), std::memory_order_relaxed);
+			g_captureQuietMs = NowMs();
 		}
 
 		void FinishCaptureLocked()
@@ -680,22 +717,25 @@ namespace SOS::Hotkeys
 			SKSE::log::debug("Hotkeys: recorded '{}' for the {} device.", g_captureResult, g_captureResultDevice == 0 ? "keyboard" : "controller");
 		}
 
-		// Called after every change of g_captureDown. A chord has to be a set of
-		// keys that are all held at the same time, at most four of them, and it is
-		// accepted once they have all been released again.
+		// Called after every change of g_captureDown. Keys that are pressed while the
+		// recorder listens are added to the combination; the combination is finished
+		// once nothing new arrives for kCaptureSettleMs and every key is released
+		// again.
 		void AdvanceCaptureLocked()
 		{
 			const auto state = static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed));
-			if (state != CaptureState::kWaiting && state != CaptureState::kArmed) {
+			if (state != CaptureState::kWaiting && state != CaptureState::kArmed && state != CaptureState::kSettling) {
 				return;
 			}
 			if (g_captureDown.empty()) {
 				if (state == CaptureState::kWaiting) {
 					g_captureState.store(static_cast<int>(CaptureState::kArmed), std::memory_order_relaxed);
+					g_captureQuietMs = NowMs();
 					return;
 				}
-				if (!g_captureCandidate.empty()) {
-					FinishCaptureLocked();
+				if (state == CaptureState::kArmed && !g_captureCandidate.empty()) {
+					g_captureState.store(static_cast<int>(CaptureState::kSettling), std::memory_order_relaxed);
+					g_captureQuietMs = NowMs();
 				}
 				return;
 			}
@@ -706,38 +746,31 @@ namespace SOS::Hotkeys
 			bool added = false;
 			for (const auto& trigger : g_captureDown) {
 				if (!Contains(g_captureCandidate, trigger)) {
+					g_captureCandidate.push_back(trigger);
 					added = true;
-					break;
 				}
 			}
 			if (!added) {
 				return;
 			}
-			for (const auto& trigger : g_captureCandidate) {
-				if (!Contains(g_captureDown, trigger)) {
-					// A key of the chord was released while another one was
-					// pressed: those keys were never held together.
-					FailCaptureLocked(CaptureProblem::kNotTogether);
-					return;
-				}
-			}
-			if (g_captureDown.size() > kMaxChordKeys) {
+			g_captureQuietMs = NowMs();
+			if (g_captureCandidate.size() > kMaxChordKeys) {
 				FailCaptureLocked(CaptureProblem::kTooMany);
 				return;
 			}
-			if (!ValidCaptureChord(CaptureDeviceDev(), g_captureDown)) {
+			if (!ValidCaptureChord(CaptureDeviceDev(), g_captureCandidate)) {
 				FailCaptureLocked(CaptureProblem::kInvalid);
 				return;
 			}
-			g_captureCandidate = g_captureDown;
 			g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
+			g_captureState.store(static_cast<int>(CaptureState::kArmed), std::memory_order_relaxed);
 		}
 
 		void FeedCapture(const Trigger& a_trigger, bool a_down)
 		{
-			// A recording that was started for one device ignores the other one, so
-			// a palm on the controller cannot put a button into a keyboard chord (and
-			// the keyboard cannot pollute a controller chord).
+			// A recording that was started for one device ignores the other one, so a
+			// palm on the controller cannot put a button into a keyboard chord (and the
+			// keyboard cannot pollute a controller chord).
 			if (a_trigger.device != CaptureDeviceDev()) {
 				return;
 			}
@@ -755,51 +788,41 @@ namespace SOS::Hotkeys
 			AdvanceCaptureLocked();
 		}
 
-		// Both paths (the input sink and the per-frame device poll) feed the same
-		// state machine, so a recording behaves the same with the game paused.
+		// Runs from the render thread every frame while the recorder is open.
+		void CheckCaptureSettle()
+		{
+			if (!g_capturing.load(std::memory_order_relaxed)) {
+				return;
+			}
+			std::lock_guard lock(g_captureMutex);
+			const auto state = static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed));
+			if (state != CaptureState::kSettling || !g_captureDown.empty()) {
+				return;
+			}
+			if (NowMs() - g_captureQuietMs < kCaptureSettleMs) {
+				return;
+			}
+			FinishCaptureLocked();
+		}
+
 		void CheckCaptureTimeout()
 		{
 			if (g_captureStartedMs == 0) {
 				return;
 			}
-			if (NowMs() - static_cast<std::int64_t>(g_captureStartedMs) < static_cast<std::int64_t>(kCaptureTimeoutMs)) {
+			if (NowMs() - g_captureStartedMs < kCaptureTimeoutMs) {
 				return;
 			}
 			SKSE::log::debug("Hotkeys: the hotkey recording timed out; nothing was stored.");
 			CancelCapture();
 		}
 
-		// ---- polling -----------------------------------------------------------
-
-		// While one of the framework menus is open the game stops handing button
-		// events to plugins, so both recording and the "open the picker right away"
-		// key would silently do nothing. Polling the devices from the render thread
-		// covers that case and is a no-op otherwise (the latches keep it idempotent).
-		struct ScanVk
-		{
-			std::uint32_t scan;
-			int           vk;
-		};
-
-		const std::vector<ScanVk>& ScanVkTable()
-		{
-			static const std::vector<ScanVk> table{
-				{ 0x01, VK_ESCAPE }, { 0x0E, VK_BACK }, { 0x0F, VK_TAB }, { 0x1C, VK_RETURN }, { 0x39, VK_SPACE },
-				{ 0x02, '1' }, { 0x03, '2' }, { 0x04, '3' }, { 0x05, '4' }, { 0x06, '5' },
-				{ 0x07, '6' }, { 0x08, '7' }, { 0x09, '8' }, { 0x0A, '9' }, { 0x0B, '0' },
-				{ 0x10, 'Q' }, { 0x11, 'W' }, { 0x12, 'E' }, { 0x13, 'R' }, { 0x14, 'T' }, { 0x15, 'Y' },
-				{ 0x16, 'U' }, { 0x17, 'I' }, { 0x18, 'O' }, { 0x19, 'P' },
-				{ 0x1E, 'A' }, { 0x1F, 'S' }, { 0x20, 'D' }, { 0x21, 'F' }, { 0x22, 'G' }, { 0x23, 'H' },
-				{ 0x24, 'J' }, { 0x25, 'K' }, { 0x26, 'L' },
-				{ 0x2C, 'Z' }, { 0x2D, 'X' }, { 0x2E, 'C' }, { 0x2F, 'V' }, { 0x30, 'B' }, { 0x31, 'N' }, { 0x32, 'M' },
-				{ 0x3B, VK_F1 }, { 0x3C, VK_F2 }, { 0x3D, VK_F3 }, { 0x3E, VK_F4 }, { 0x3F, VK_F5 }, { 0x40, VK_F6 },
-				{ 0x41, VK_F7 }, { 0x42, VK_F8 }, { 0x43, VK_F9 }, { 0x44, VK_F10 }, { 0x57, VK_F11 }, { 0x58, VK_F12 },
-				{ 0x52, VK_INSERT }, { 0x53, VK_DELETE }, { 0x47, VK_HOME }, { 0x4F, VK_END },
-				{ 0x49, VK_PRIOR }, { 0x51, VK_NEXT }, { 0x48, VK_UP }, { 0x50, VK_DOWN },
-				{ 0x4B, VK_LEFT }, { 0x4D, VK_RIGHT }
-			};
-			return table;
-		}
+		// ---- polling ----------------------------------------------------------
+		//
+		// While the framework menu is open the game stops handing button events to
+		// plugins, so the recorder would see nothing. The poll feeds the recorder
+		// only: it never fires a hotkey, because the keys that reach it were typed
+		// into the menu.
 
 		struct PadState
 		{
@@ -836,19 +859,10 @@ namespace SOS::Hotkeys
 
 		void PollDevices(std::vector<Trigger>& a_now)
 		{
-			for (const auto& entry : ScanVkTable()) {
+			for (const auto& entry : KeyTable()) {
 				if ((::GetAsyncKeyState(entry.vk) & 0x8000) != 0) {
 					a_now.push_back(Trigger{ Dev::kKeyboard, entry.scan });
 				}
-			}
-			if ((::GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0) {
-				a_now.push_back(Trigger{ Dev::kKeyboard, kModCtrl });
-			}
-			if ((::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) {
-				a_now.push_back(Trigger{ Dev::kKeyboard, kModShift });
-			}
-			if ((::GetAsyncKeyState(VK_MENU) & 0x8000) != 0) {
-				a_now.push_back(Trigger{ Dev::kKeyboard, kModAlt });
 			}
 
 			static PadState lastPad{};
@@ -858,26 +872,27 @@ namespace SOS::Hotkeys
 				lastPad = pad;
 				lastPadValid = true;
 			} else if (lastPadValid) {
-				// Keep the last known state for one frame: a dropped XInput read must
-				// not look like "every button released" in the middle of a chord.
+				// Keep the last known state: a dropped XInput read must not look like
+				// "every button released" in the middle of a chord.
 				pad = lastPad;
 			}
-			if (lastPadValid) {
-				static constexpr std::uint32_t kPadButtons[] = {
-					0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
-					0x0100, 0x0200, 0x1000, 0x2000, 0x4000, 0x8000
-				};
-				for (const auto button : kPadButtons) {
-					if ((pad.buttons & button) != 0) {
-						a_now.push_back(Trigger{ Dev::kGamepad, button });
-					}
+			if (!lastPadValid) {
+				return;
+			}
+			static constexpr std::uint32_t kPadButtons[] = {
+				0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
+				0x0100, 0x0200, 0x1000, 0x2000, 0x4000, 0x8000
+			};
+			for (const auto button : kPadButtons) {
+				if ((pad.buttons & button) != 0) {
+					a_now.push_back(Trigger{ Dev::kGamepad, button });
 				}
-				if (pad.leftTrigger > 30) {
-					a_now.push_back(Trigger{ Dev::kGamepad, 0x0009 });
-				}
-				if (pad.rightTrigger > 30) {
-					a_now.push_back(Trigger{ Dev::kGamepad, 0x000A });
-				}
+			}
+			if (pad.leftTrigger > 30) {
+				a_now.push_back(Trigger{ Dev::kGamepad, RE::BSWin32GamepadDevice::Keys::kLeftTrigger });
+			}
+			if (pad.rightTrigger > 30) {
+				a_now.push_back(Trigger{ Dev::kGamepad, RE::BSWin32GamepadDevice::Keys::kRightTrigger });
 			}
 		}
 
@@ -890,24 +905,31 @@ namespace SOS::Hotkeys
 		// The key the player has actually bound to Shout/Power in the game settings.
 		// The "Change Outfit" lesser power is cast with it, so mirroring that binding
 		// keeps the plugin in step with keyboard and controller layouts alike.
+		//
+		// ControlMap reports controller bindings in SKSE's input-keycode space
+		// (266 + button index); everything else in this file works with the button
+		// masks ButtonEvent reports, so the value is converted once here.
 		bool GamePowerKeys(Trigger& a_keyboard, Trigger& a_gamepad)
 		{
 			static std::uint32_t cachedKeyboard = 0;
 			static std::uint32_t cachedGamepad = 0;
 			static std::uint64_t cachedAt = 0;
 			const auto           now = NowMs();
-			if (cachedAt == 0 || now - cachedAt > 1000) {
-				cachedAt = now;
+			if (cachedAt == 0 || now - static_cast<std::int64_t>(cachedAt) > 1000) {
+				cachedAt = static_cast<std::uint64_t>(now);
 				cachedKeyboard = 0;
 				cachedGamepad = 0;
 				if (auto* map = RE::ControlMap::GetSingleton()) {
 					const auto keyboard = map->GetMappedKey("Shout", RE::INPUT_DEVICE::kKeyboard);
 					const auto gamepad = map->GetMappedKey("Shout", RE::INPUT_DEVICE::kGamepad);
-					if (keyboard != 0 && keyboard != 0xFF) {
+					if (keyboard != 0 && keyboard != 0xFF && keyboard < 0x100) {
 						cachedKeyboard = keyboard;
 					}
 					if (gamepad != 0 && gamepad != 0xFF) {
-						cachedGamepad = gamepad;
+						const auto mask = SKSE::InputMap::GamepadKeycodeToMask(gamepad);
+						if (mask != 0 && mask != 0xFF) {
+							cachedGamepad = mask;
+						}
 					}
 				}
 			}
@@ -920,10 +942,10 @@ namespace SOS::Hotkeys
 		{
 			const auto now = NowMs();
 			const auto last = g_lastRandomFireMs.load(std::memory_order_relaxed);
-			if (last != 0 && now - last < kRandomCooldownMs) {
+			if (last != 0 && now - static_cast<std::int64_t>(last) < static_cast<std::int64_t>(kRandomCooldownMs)) {
 				return;
 			}
-			g_lastRandomFireMs.store(now, std::memory_order_relaxed);
+			g_lastRandomFireMs.store(static_cast<std::uint64_t>(now), std::memory_order_relaxed);
 			Fire();
 		}
 
@@ -955,8 +977,8 @@ namespace SOS::Hotkeys
 			return player->GetActorRuntimeData().selectedPower == cached;
 		}
 
-		// True when the trigger is one of the keys the game has bound to
-		// Shout/Power, keyboard or controller.
+		// True when the trigger is one of the keys the game has bound to Shout/Power,
+		// keyboard or controller.
 		bool IsPowerKey(const Trigger& a_trigger)
 		{
 			Trigger keyboard{};
@@ -970,12 +992,17 @@ namespace SOS::Hotkeys
 		// One press of the game's own power key, handled on the press itself. The
 		// caller consumes the event, so the game never casts the power and there is
 		// no cast animation left to feel like a cooldown.
-		bool HandlePowerPress(bool a_blocked, bool a_menuOpen)
+		bool HandlePowerPress(bool a_blocked)
 		{
 			if (!OurPowerSelected()) {
 				return false;
 			}
-			if (a_blocked || a_menuOpen || g_latchedQuickKey) {
+			// While a menu owns the input the key is not ours: swallowing it there
+			// would break the menu.
+			if (a_blocked) {
+				return false;
+			}
+			if (g_latchedQuickKey) {
 				return true;
 			}
 			g_latchedQuickKey = true;
@@ -989,7 +1016,10 @@ namespace SOS::Hotkeys
 			return true;
 		}
 
-		void CheckPowerKey(bool a_blocked, bool a_menuOpen)
+		// Polled variant for the case where the front run of the power key never
+		// produced an event (for example when the power was swapped while the key was
+		// held).
+		void CheckPowerKey(bool a_blocked)
 		{
 			if (!OurPowerSelected()) {
 				g_latchedQuickKey = false;
@@ -1006,7 +1036,7 @@ namespace SOS::Hotkeys
 				g_latchedQuickKey = false;
 				return;
 			}
-			if (g_latchedQuickKey || a_blocked || a_menuOpen) {
+			if (g_latchedQuickKey || a_blocked) {
 				return;
 			}
 			g_latchedQuickKey = true;
@@ -1019,52 +1049,10 @@ namespace SOS::Hotkeys
 			FireQuickslotKey();
 		}
 
-		void PollTick()
+		// Fires a hotkey once per press. The latch is cleared as soon as the chord is
+		// not fully held any more, so keeping the keys down does not repeat it.
+		void CheckChords(bool a_blocked)
 		{
-			static std::vector<Trigger> last;
-			std::vector<Trigger>        now;
-			PollDevices(now);
-
-			const bool                 capturing = g_capturing.load(std::memory_order_relaxed);
-			const std::vector<Trigger> previous = last;
-			for (const auto& trigger : now) {
-				if (Contains(last, trigger)) {
-					continue;
-				}
-				if (capturing) {
-					FeedCapture(trigger, true);
-				} else {
-					Remember(trigger, true);
-				}
-			}
-			for (const auto& trigger : last) {
-				if (Contains(now, trigger)) {
-					continue;
-				}
-				if (capturing) {
-					FeedCapture(trigger, false);
-				} else {
-					Remember(trigger, false);
-				}
-			}
-			last = now;
-
-			if (capturing) {
-				// Only the moment the cancel key goes down ends the recording, so
-				// holding it does not kill the next attempt.
-				for (const auto& trigger : now) {
-					if (!Contains(previous, trigger) && trigger.device == CaptureDeviceDev() && IsCaptureCancel(trigger)) {
-						CancelCapture();
-						return;
-					}
-				}
-				CheckCaptureTimeout();
-			}
-
-			if (capturing || now.empty()) {
-				return;
-			}
-
 			Chord randomKb;
 			Chord randomPad;
 			Chord quickKb;
@@ -1077,28 +1065,66 @@ namespace SOS::Hotkeys
 				quickPad = g_quickPad;
 			}
 
-			const bool inputBlocked = CachedTextInputActive();
-			auto*      ui = RE::UI::GetSingleton();
-			const bool consoleOpen = ui && ui->IsMenuOpen(RE::Console::MENU_NAME);
-			const bool menuOpen = ui && ui->GameIsPaused();
-
 			if (AnyChordBound(randomKb, randomPad)) {
 				if (!AnyChordDown(randomKb, randomPad)) {
 					g_latchedRandom = false;
-				} else if (!g_latchedRandom && !inputBlocked && !consoleOpen) {
+				} else if (!g_latchedRandom && !a_blocked) {
 					g_latchedRandom = true;
+					SKSE::log::debug("Hotkeys: the random outfit hotkey fired.");
 					FireRandomThrottled();
 				}
 			}
+
 			if (AnyChordBound(quickKb, quickPad)) {
 				if (!AnyChordDown(quickKb, quickPad)) {
 					g_latchedQuick = false;
-				} else if (!g_latchedQuick && !inputBlocked && !consoleOpen) {
+				} else if (!g_latchedQuick && !a_blocked) {
 					g_latchedQuick = true;
+					SKSE::log::debug("Hotkeys: the quick picker hotkey fired.");
 					FireQuickPicker();
 				}
 			}
-			CheckPowerKey(inputBlocked, menuOpen || consoleOpen);
+		}
+
+		void PollTick()
+		{
+			static std::vector<Trigger> last;
+
+			const bool                capturing = g_capturing.load(std::memory_order_relaxed);
+			std::vector<Trigger>      now;
+			PollDevices(now);
+
+			if (!capturing) {
+				// Nothing to do: firing is driven by the input sink, and while the page
+				// is open the keys belong to the menu.
+				last.clear();
+				return;
+			}
+
+			const std::vector<Trigger> previous = last;
+			for (const auto& trigger : now) {
+				if (!Contains(previous, trigger)) {
+					FeedCapture(trigger, true);
+				}
+			}
+			for (const auto& trigger : previous) {
+				if (!Contains(now, trigger)) {
+					FeedCapture(trigger, false);
+				}
+			}
+			last = now;
+
+			// Only the moment the cancel key goes down ends the recording, so holding
+			// it does not kill the next attempt.
+			for (const auto& trigger : now) {
+				if (!Contains(previous, trigger) && trigger.device == CaptureDeviceDev() && IsCaptureCancel(trigger)) {
+					CancelCapture();
+					last.clear();
+					return;
+				}
+			}
+			CheckCaptureSettle();
+			CheckCaptureTimeout();
 		}
 
 		class InputSink : public RE::BSTEventSink<RE::InputEvent*>
@@ -1106,11 +1132,11 @@ namespace SOS::Hotkeys
 		public:
 			RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) override
 			{
-				// Input events are the cheapest heartbeat we get: use them to
-				// re-assert the compatibility state that other mods overwrite.
+				// Input events are the cheapest heartbeat we get: use them to re-assert
+				// the compatibility state that other mods overwrite.
 				Compat::Tick();
-				// Weather changes have no event of their own; poll the state a
-				// couple of times per second while the player is playing.
+				// Weather changes have no event of their own; poll the state a couple of
+				// times per second while the player is playing.
 				AutoSwitch::Tick();
 				MorphRefresh::Tick();
 
@@ -1120,14 +1146,7 @@ namespace SOS::Hotkeys
 
 				const bool capturing = g_capturing.load(std::memory_order_relaxed);
 				bool       swallow = false;
-
-				const bool inputBlocked = CachedTextInputActive();
-				auto*      ui = RE::UI::GetSingleton();
-				const bool consoleOpen = ui && ui->IsMenuOpen(RE::Console::MENU_NAME);
-				// The mirrored quickslot key must not fire from a paused menu
-				// (inventory, map, container) where the power itself cannot be
-				// cast.
-				const bool menuOpen = ui && ui->GameIsPaused();
+				const bool blocked = FiringBlocked();
 
 				for (auto* event = *a_event; event; event = event->next) {
 					auto* button = event->AsButtonEvent();
@@ -1156,12 +1175,11 @@ namespace SOS::Hotkeys
 					}
 
 					if (capturing) {
-						// The recorder is modal. While it is open every button event is
-						// taken out of the queue, so the framework menu cannot navigate
-						// or activate the entry that opened the recorder with the very
-						// keys being recorded (a pad "A" used to both record and
-						// confirm, which is also why chords never came out longer than
-						// one button).
+						// The recorder is modal. While it is open every button event is taken
+						// out of the queue, so the framework menu cannot navigate or activate
+						// the entry that opened the recorder with the very keys being
+						// recorded (a pad "A" used to both record and confirm, which is also
+						// why chords never came out longer than one button).
 						if (down && trigger.device == CaptureDeviceDev() && IsCaptureCancel(trigger)) {
 							CancelCapture();
 							break;
@@ -1172,6 +1190,20 @@ namespace SOS::Hotkeys
 					}
 
 					Remember(trigger, down);
+
+					if (down && IsPowerKey(trigger)) {
+						// The game's own Shout/Power key. It is handled here, on the press,
+						// and the event is consumed: letting the game cast the power as well
+						// is what used to add the cast animation on top of our own timer,
+						// which felt like a cooldown that never went away. With another power
+						// equipped (or none) the key is passed through.
+						if (HandlePowerPress(blocked)) {
+							swallow = true;
+						}
+					}
+
+					CheckChords(blocked);
+
 					if (!down) {
 						if (IsPowerKey(trigger)) {
 							g_latchedQuickKey = false;
@@ -1179,49 +1211,7 @@ namespace SOS::Hotkeys
 						continue;
 					}
 
-					Chord randomKb;
-					Chord randomPad;
-					Chord quickKb;
-					Chord quickPad;
-					{
-						std::lock_guard lock(g_chordMutex);
-						randomKb = g_randomKb;
-						randomPad = g_randomPad;
-						quickKb = g_quickKb;
-						quickPad = g_quickPad;
-					}
-
-					if (AnyChordBound(randomKb, randomPad)) {
-						if (!AnyChordDown(randomKb, randomPad)) {
-							g_latchedRandom = false;
-						} else if (!g_latchedRandom && !inputBlocked && !consoleOpen) {
-							g_latchedRandom = true;
-							FireRandomThrottled();
-						}
-					}
-
-					if (AnyChordBound(quickKb, quickPad)) {
-						if (!AnyChordDown(quickKb, quickPad)) {
-							g_latchedQuick = false;
-						} else if (!g_latchedQuick && !inputBlocked && !consoleOpen) {
-							g_latchedQuick = true;
-							FireQuickPicker();
-						}
-					}
-
-					// The game's own Shout/Power key. It is handled here, on the
-					// press, and the event is consumed: letting the game cast the
-					// power as well is what used to add the cast animation on top of
-					// our own timer, which felt like a cooldown that never went away.
-					// With another power equipped (or none) the key is passed through.
-					if (IsPowerKey(trigger)) {
-						if (HandlePowerPress(inputBlocked, menuOpen || consoleOpen)) {
-							swallow = true;
-						}
-						continue;
-					}
-
-					CheckPowerKey(inputBlocked, menuOpen || consoleOpen);
+					CheckPowerKey(blocked);
 				}
 				return swallow ? RE::BSEventNotifyControl::kStop : RE::BSEventNotifyControl::kContinue;
 			}
@@ -1233,6 +1223,18 @@ namespace SOS::Hotkeys
 	void Tick()
 	{
 		PollTick();
+	}
+
+	void NotifyMenuState(bool a_open)
+	{
+		g_frameworkMenuOpen.store(a_open, std::memory_order_relaxed);
+		// Nothing that was held while the menu owned the input may survive into the
+		// gameplay: the key-up events were eaten by the menu.
+		ForgetAll();
+		g_latchedRandom = false;
+		g_latchedQuick = false;
+		g_latchedQuickKey = false;
+		SKSE::log::debug("Hotkeys: the framework menu is {}; the hotkeys are {}.", a_open ? "open" : "closed", a_open ? "paused" : "live");
 	}
 
 	std::string GamePowerKeyText()
@@ -1256,7 +1258,7 @@ namespace SOS::Hotkeys
 	{
 		const auto now = NowMs();
 		const auto last = g_lastPowerActionMs.load(std::memory_order_relaxed);
-		return last != 0 && now - last < 1500;
+		return last != 0 && now - static_cast<std::int64_t>(last) < 1500;
 	}
 
 	bool Install()
@@ -1329,8 +1331,7 @@ namespace SOS::Hotkeys
 
 	void SetTextInputActive(bool a_active)
 	{
-		const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count();
+		const auto now = NowMs();
 		g_textInputStamp.store(a_active ? now : 0, std::memory_order_relaxed);
 		g_textInput.store(a_active, std::memory_order_relaxed);
 	}
@@ -1358,7 +1359,8 @@ namespace SOS::Hotkeys
 			g_captureResultDevice = 0;
 			g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
 			g_captureState.store(static_cast<int>(CaptureState::kWaiting), std::memory_order_relaxed);
-			g_captureStartedMs = static_cast<std::uint64_t>(NowMs());
+			g_captureStartedMs = NowMs();
+			g_captureQuietMs = g_captureStartedMs;
 		}
 		g_captureSlot.store(static_cast<int>(a_slot), std::memory_order_relaxed);
 		g_capturing.store(true, std::memory_order_relaxed);
@@ -1374,13 +1376,17 @@ namespace SOS::Hotkeys
 		g_captureSlot.store(-1, std::memory_order_relaxed);
 		g_captureState.store(static_cast<int>(CaptureState::kIdle), std::memory_order_relaxed);
 		g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
-		std::lock_guard lock(g_captureMutex);
-		g_captureCandidate.clear();
-		g_captureDown.clear();
-		g_captureResult.clear();
-		g_captureResultSlot = -1;
-		g_captureResultDevice = 0;
-		g_captureStartedMs = 0;
+		{
+			std::lock_guard lock(g_captureMutex);
+			g_captureCandidate.clear();
+			g_captureDown.clear();
+			g_captureResult.clear();
+			g_captureResultSlot = -1;
+			g_captureResultDevice = 0;
+			g_captureStartedMs = 0;
+			g_captureQuietMs = 0;
+		}
+		ForgetAll();
 	}
 
 	bool CaptureActive()
@@ -1395,7 +1401,8 @@ namespace SOS::Hotkeys
 
 	bool CaptureArmed()
 	{
-		return static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed)) == CaptureState::kArmed;
+		const auto state = static_cast<CaptureState>(g_captureState.load(std::memory_order_relaxed));
+		return state == CaptureState::kArmed || state == CaptureState::kSettling;
 	}
 
 	int CaptureProblem()
@@ -1431,8 +1438,10 @@ namespace SOS::Hotkeys
 		g_captureProblem.store(static_cast<int>(CaptureProblem::kNone), std::memory_order_relaxed);
 		g_captureState.store(static_cast<int>(CaptureState::kIdle), std::memory_order_relaxed);
 		g_captureStartedMs = 0;
+		g_captureQuietMs = 0;
 		g_capturing.store(false, std::memory_order_relaxed);
 		g_captureSlot.store(-1, std::memory_order_relaxed);
+		ForgetAll();
 		return true;
 	}
 }

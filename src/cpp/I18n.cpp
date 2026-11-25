@@ -235,11 +235,11 @@ namespace SOS::I18n
 			// 1.5.69: the recorder is a window again, one button per device
 			{ "Record keyboard", "录制键鼠" },
 			{ "Record controller", "录制手柄" },
-			{ "Recording the keyboard and the mouse: hold up to four keys, then let go of all of them.", "正在录制键鼠：最多按四个键，然后全部松开。" },
+			{ "Recording the keyboard: hold up to four keys, then let go of all of them.", "正在录制键盘：最多按四个键，然后全部松开。" },
 			{ "Recording the controller: hold up to four buttons, then let go of all of them.", "正在录制手柄：最多按四个按钮，然后全部松开。" },
 			{ "This only fires while the \"Change Outfit\" power is the one selected in your magic menu.", "仅当魔法菜单里选中的能力是「Change Outfit」时才生效。" },
 			// 1.5.70: the recorder locks the page and keeps one binding per device
-			{ "Click a value to record it: the left one takes the keyboard and the mouse, the right one the controller. Both keep working.", "点击数值即可录制：左边录键盘和鼠标，右边录手柄，两套同时生效。" },
+			{ "Click a value to record it: the left one takes the keyboard, the right one the controller. Both keep working.", "点击数值即可录制：左边录键盘，右边录手柄，两套同时生效。" },
 			{ "Listening...", "正在监听…" },
 			{ "Let go of the keys you are holding first.", "请先松开当前按住的键。" },
 			{ "Too many keys at once; only four can be used.", "同时按下的键太多了，最多四个。" },

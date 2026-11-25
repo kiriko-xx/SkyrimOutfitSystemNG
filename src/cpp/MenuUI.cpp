@@ -1864,7 +1864,7 @@ namespace SOS::Menu
 
 			hotkeyRow(Hotkeys::Slot::kRandomOutfit, I18n::Tr("Random outfit"), settings.randomOutfitHotkey, settings.randomOutfitGamepadHotkey);
 			hotkeyRow(Hotkeys::Slot::kQuickPicker, I18n::Tr("Quick picker"), settings.quickPickerHotkey, settings.quickPickerGamepadHotkey);
-			IG::TextDisabled(I18n::Tr("Click a value to record it: the left one takes the keyboard and the mouse, the right one the controller. Both keep working."));
+			IG::TextDisabled(I18n::Tr("Click a value to record it: the left one takes the keyboard, the right one the controller. Both keep working."));
 			{
 				// The power key is not recorded: it is whatever the player bound to
 				// Shout/Power in the game settings, keyboard or controller.
@@ -1964,7 +1964,7 @@ namespace SOS::Menu
 					ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoNav);
 			const bool pad = Hotkeys::CaptureDevice() == Hotkeys::Input::kGamepad;
 			IG::TextWrapped(pad ? I18n::Tr("Recording the controller: hold up to four buttons, then let go of all of them.")
-								: I18n::Tr("Recording the keyboard and the mouse: hold up to four keys, then let go of all of them."));
+								: I18n::Tr("Recording the keyboard: hold up to four keys, then let go of all of them."));
 			IG::Spacing();
 			const auto typed = Hotkeys::CaptureText();
 			if (typed.empty()) {
@@ -2036,13 +2036,22 @@ namespace SOS::Menu
 		// menu cannot be used any more.
 		void __stdcall OnFrameworkMenuEvent(int a_eventType)
 		{
-			if (a_eventType != MenuBridge::kEventMenuClosed) {
+			if (a_eventType != MenuBridge::kEventMenuOpened && a_eventType != MenuBridge::kEventMenuClosed) {
 				return;
 			}
-			if (Hotkeys::CaptureActive()) {
+			const bool open = a_eventType == MenuBridge::kEventMenuOpened;
+			// The menu owns the keyboard, the mouse and the pad while it is up, so the
+			// hotkeys are muted until it closes again. Without this the device polling
+			// path kept firing the bindings from inside the settings page.
+			Hotkeys::NotifyMenuState(open);
+			if (!open && Hotkeys::CaptureActive()) {
 				Hotkeys::CancelCapture();
 			}
-			IG::SetMenuInputSuppressed(false);
+			if (open) {
+				IG::SetMenuInputSuppressed(false);
+			} else {
+				IG::SetMenuInputSuppressed(Hotkeys::CaptureActive());
+			}
 		}
 
 		bool __stdcall OnFrameworkInput(RE::InputEvent* a_event)

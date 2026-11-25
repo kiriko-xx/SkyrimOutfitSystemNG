@@ -16,6 +16,10 @@ namespace SOS::Hotkeys
 	// pad so the settings page can record keys even when the game sends no
 	// input events while its menu is open.
 	void Tick();
+	// Called when the framework opens or closes its menu. While the menu is open the
+	// hotkeys stay quiet: the keys belong to the menu, and a key-up that the menu ate
+	// must not leave a chord latched for the next frame.
+	void NotifyMenuState(bool a_open);
 
 	// The "Change Outfit" lesser power is cast with the game's own Shout/Power
 	// key, so the plugin mirrors that binding instead of asking for a second key.
