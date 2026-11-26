@@ -1,5 +1,6 @@
 #include "I18n.h"
 
+#include "ImGuiApi.h"
 #include "core/Settings.h"
 
 #include <SimpleIni.h>
@@ -8,6 +9,7 @@
 #include <SKSE/SKSE.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <filesystem>
@@ -848,6 +850,15 @@ namespace SOS::I18n
 			return true;
 		}
 
+		// What the menu font can draw: -1 not known yet, 0 no CJK glyphs, 1 ready.
+		// The font belongs to the menu framework, which reads [Fonts] itself, so the
+		// only honest answer comes from the font that is actually loaded. 1.5.81 looked
+		// for a file named exactly like the ini value and switched Chinese off when it
+		// was not there - players who wrote "wqy-microhei (CN)" without the extension
+		// (the framework appends it) lost Chinese even though the font was loaded.
+		std::atomic<int> g_cjkFont{ -1 };
+		std::atomic_bool g_cjkFontWarned{ false };
+
 		bool HasCjkFont()
 		{
 			bool        enableChinese = true;
@@ -856,18 +867,12 @@ namespace SOS::I18n
 			if (hasIni && !enableChinese) {
 				return false;
 			}
-			if (primaryFont.empty()) {
-				return false;
+			// Until the menu has been drawn the font cannot be asked, and a question
+			// that has not been asked yet is not a "no".
+			if (g_cjkFont.load(std::memory_order_relaxed) < 0) {
+				return true;
 			}
-			const auto font = PluginsDir() / "Fonts" / primaryFont;
-			std::error_code ec;
-			const bool exists = std::filesystem::exists(font, ec) && !ec;
-			if (!exists && hasIni) {
-				SKSE::log::warn("Language: the menu framework is configured for '{}' but {} was not found; "
-								"the Chinese interface stays unavailable.",
-					primaryFont, font.string());
-			}
-			return exists;
+			return g_cjkFont.load(std::memory_order_relaxed) != 0;
 		}
 
 		// A translated line is handed to printf as the format string, so its
@@ -941,9 +946,9 @@ namespace SOS::I18n
 			}
 			if (code == "chinese" && !state.available) {
 				if (requested == "chinese") {
-					SKSE::log::warn("Language: Chinese was requested but the menu framework has no CJK font loaded; "
-									"falling back to English. Install a font such as CN.ttf in "
-									"Data/SKSE/Plugins/Fonts and set [Fonts] EnableChinese = true in SKSEMenuFramework.ini.");
+					SKSE::log::warn("Language: Chinese was requested but the font the menu framework draws with has no CJK glyphs; "
+									"falling back to English. Point [Fonts] PrimaryFont in SKSEMenuFramework.ini at a font that "
+									"contains Chinese (and keep EnableChinese = true).");
 				}
 				code = has("english") ? "english" : code;
 			}
@@ -989,6 +994,25 @@ namespace SOS::I18n
 			state.status = code + (state.mode == "auto" ? " (auto)" : " (forced)");
 			SKSE::log::debug("Language: interface language '{}' (mode '{}'), {} translated lines.", code, state.mode, state.overrides);
 		}
+	}
+
+	void RefreshFontProbe()
+	{
+		const int answer = IG::ChineseGlyphSupport();
+		if (answer < 0) {
+			return;// no font to ask yet; keep whatever the language resolution said
+		}
+		const int before = g_cjkFont.exchange(answer, std::memory_order_relaxed);
+		if (before == answer) {
+			return;
+		}
+		if (answer == 0 && !g_cjkFontWarned.exchange(true, std::memory_order_relaxed)) {
+			SKSE::log::warn("Language: the font the menu framework draws with has no CJK glyphs, so Chinese cannot be shown; "
+							"point [Fonts] PrimaryFont in SKSEMenuFramework.ini at a font that contains Chinese.");
+		}
+		SKSE::log::debug("Language: the menu font {} CJK glyphs; the language is applied again.",
+			answer == 1 ? "has" : "lacks");
+		Apply();
 	}
 
 	void Init()

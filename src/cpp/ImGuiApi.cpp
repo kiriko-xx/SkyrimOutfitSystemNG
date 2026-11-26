@@ -234,6 +234,19 @@ namespace SOS::ImGuiApi
 					a_label);
 			}
 
+			// Font query for the language switch. The framework loads whatever font the
+			// player configured and draws the menu with it; asking that font whether it
+			// has a CJK glyph is the only honest answer to "can Chinese be shown".
+			table.extras.GetFont = reinterpret_cast<decltype(table.extras.GetFont)>(
+				::GetProcAddress(a_module, "igGetFont"));
+			table.extras.FindGlyphNoFallback = reinterpret_cast<decltype(table.extras.FindGlyphNoFallback)>(
+				::GetProcAddress(a_module, "ImFont_FindGlyphNoFallback"));
+			table.hasFontProbe = table.extras.GetFont != nullptr && table.extras.FindGlyphNoFallback != nullptr;
+			if (!table.hasFontProbe) {
+				SKSE::log::debug("ImGuiApi: igGetFont/ImFont_FindGlyphNoFallback are missing in {}; the language choice is used as configured.",
+					a_label);
+			}
+
 
 			table.hasExtras = extrasTotal == extrasResolved;
 			table.hasWindowPlumbing = table.extras.Begin && table.extras.End &&

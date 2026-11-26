@@ -13,15 +13,18 @@
 //      applied inside the IG:: wrappers, so the panel code keeps writing plain
 //      English literals;
 //   2. the glyphs - the menu framework draws the text, so Chinese only shows
-//      up if the framework itself built its font atlas with CJK ranges.  On
-//      SKSE Menu Framework 3.x that is the case when SKSEMenuFramework.ini has
-//      [Fonts] EnableChinese = true and the font it names (CN.ttf by default)
-//      actually exists in Data/SKSE/Plugins/Fonts.  ChineseAvailable() checks
-//      exactly that and the whole UI silently stays English otherwise instead
-//      of drawing a screen full of tofu boxes.
+//      up if the font the framework loaded has CJK glyphs.  That font is the
+//      framework's business: it reads [Fonts] in SKSEMenuFramework.ini (and
+//      appends the extension itself), loads the file and hands it to ImGui.
+//      So instead of guessing at file names the way 1.5.81 did - which
+//      switched Chinese off for a font that was loaded and working, because
+//      the ini value carried no extension - ChineseAvailable() asks the loaded
+//      font for a CJK glyph through the framework's own igGetFont /
+//      ImFont_FindGlyphNoFallback.  Until the menu has been drawn once the
+//      answer is "not known yet" and nothing is switched off.
 //
-// Nothing here hooks or patches the framework: it only reads its ini and looks
-// at the font file, both of which are public, documented user data.
+// Nothing here hooks or patches the framework: it only reads its ini and asks
+// the framework which glyphs its font can draw, both of which are public.
 
 namespace SOS::I18n
 {
@@ -50,8 +53,15 @@ namespace SOS::I18n
 	// True when the effective language is Chinese and the glyphs are there.
 	bool Chinese();
 
-	// True when the menu framework can actually draw Chinese.
+	// True when the menu framework can actually draw Chinese. Reads the font the
+	// framework loaded, so it is only meaningful once the menu is open; before that
+	// it answers "yes" rather than taking the language away.
 	bool ChineseAvailable();
+
+	// Re-asks the menu font whether it can draw Chinese and re-applies the language
+	// when the answer changed. Call it while the menu is open (kEventMenuOpened, or
+	// the first frame of the quick picker): igGetFont reads the host's ImGui context.
+	void RefreshFontProbe();
 
 	// Short status line for the log: "english (auto)", "chinese (forced)", ...
 	const char* Status();

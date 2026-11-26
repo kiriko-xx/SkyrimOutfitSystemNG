@@ -827,6 +827,14 @@ namespace SOS::Menu
 
 		void RenderQuickPicker()
 		{
+			// The picker is a window of its own and can be the first ImGui drawing of a
+			// session, so the language is checked here as well - once, because the font
+			// of the host does not change while the game runs.
+			static bool fontProbed = false;
+			if (!fontProbed) {
+				fontProbed = true;
+				I18n::RefreshFontProbe();
+			}
 			// The framework calls a registered window render callback without a
 			// Begin/End pair, so the standalone quick picker has to open its own
 			// window. A page inside the F1 menu already runs in one. Detecting
@@ -2064,6 +2072,9 @@ namespace SOS::Menu
 			}
 			if (open) {
 				IG::SetMenuInputSuppressed(false);
+				// The framework has a font loaded by now, so the language can be asked
+				// whether the interface it is set to can actually be drawn.
+				I18n::RefreshFontProbe();
 			} else {
 				IG::SetMenuInputSuppressed(Hotkeys::CaptureActive());
 			}

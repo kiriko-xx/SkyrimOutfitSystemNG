@@ -111,6 +111,11 @@ namespace SOS::ImGuiApi
 			// look (and be) out of reach.
 			void (*BeginDisabled)(bool);
 			void (*EndDisabled)();
+			// Font query, used to tell whether the language the player picked can
+			// actually be drawn: this plugin ships no font and does not second-guess
+			// the one the framework loaded, it asks that very font for a glyph.
+			ImFont* (*GetFont)();
+			const ImFontGlyph* (*FindGlyphNoFallback)(ImFont*, ImWchar);
 
 		};
 
@@ -138,6 +143,9 @@ namespace SOS::ImGuiApi
 		bool hasWindowFocus{ false };
 		// True when the page under a modal window can be greyed out and locked.
 		bool hasDisabled{ false };
+		// True when the font of the host can be inspected. Without it the language
+		// choice is left alone instead of being switched off for an unknown font.
+		bool hasFontProbe{ false };
 
 	};
 
@@ -183,6 +191,29 @@ namespace SOS::IG
 		va_start(args, a_fmt);
 		if (const auto fn = ImGuiApi::Get().TextWrappedV) { fn(I18n::Tr(a_fmt), args); }
 		va_end(args);
+	}
+
+	// Whether the font the host is drawing the menu with can show Chinese:
+	// 1 = yes, 0 = no, -1 = not known yet (no font query in this host, or no font
+	// is current). Only called while the menu is open, because igGetFont reads the
+	// ImGui context of the host.
+	inline int ChineseGlyphSupport()
+	{
+		const auto& api = ImGuiApi::Get();
+		if (!api.hasFontProbe) {
+			return -1;
+		}
+		const auto font = api.extras.GetFont ? api.extras.GetFont() : nullptr;
+		if (!font) {
+			return -1;
+		}
+		if (api.extras.FindGlyphNoFallback(font, static_cast<ImWchar>(0x4E2D))) {
+			return 1;
+		}
+		if (api.extras.FindGlyphNoFallback(font, static_cast<ImWchar>(0x6587))) {
+			return 1;
+		}
+		return 0;
 	}
 
 	inline void SetTooltip(const char* a_fmt, ...)
