@@ -12,6 +12,7 @@
 #include "NGFeatures.h"
 #include "compat/ModCompat.h"
 #include "hooking/Hooks.hpp"
+#include "hooking/HookSupport.h"
 #include "core/GoldenItems.h"
 
 #include <atomic>
@@ -430,6 +431,10 @@ namespace {
             // The options page of the old MCM toggled the quickslot power through
             // a Papyrus quest; do it natively so it also works without the quest.
             SOS::Features::ApplyQuickslotSpell();
+            // Every branch this plugin wrote is read back now that the rest of the load
+            // order has had its turn: a site another plugin hooked after us reads as its own
+            // jump now, and that is the case that used to fail silently.
+            Hooking::VerifyInstalledSites();
             break;
         case SKSE::MessagingInterface::kNewGame:
         case SKSE::MessagingInterface::kPreLoadGame: {
@@ -462,6 +467,9 @@ namespace {
             SOS::Settings::Get().WarmUp();
             SOS::GameState::SetLoading(false);
             LOG(debug, "Post-load: hooks resumed; the outfit refresh waits for the player's 3D.");
+            // A second sweep: plugins that hook during their own data-loaded pass may have
+            // written after the first one.
+            Hooking::VerifyInstalledSites();
             SOS::Compat::Reload();
 			// The save is loaded and skee/RaceMenu have had their own data-loaded
 			// pass by now; retry the interface exchange right here instead of

@@ -98,10 +98,13 @@ namespace SOS
 		// picker the moment it is pressed. The "Change Outfit" lesser power that
 		// the shipped esp grants only reaches the window after its cast animation,
 		// which is what feels like a cooldown on the quickslot key; this key skips
-		// that wait and is limited to one open every 0.5 s. The power keeps
-		// working (its own open call does nothing while the window is already
-		// open), and the key is ignored while QuickSlotRandom is on so the
-		// random roll never happens twice. Empty disables the shortcut.
+		// that wait and is limited to one open every 0.5 s. It answers only while
+		// the "Change Outfit" power is the selected one: the default names the key
+		// the game binds to Shout, so answering it otherwise would take that key
+		// away from every other power. The power keeps working (its own open call
+		// does nothing while the window is already open), and the key is ignored
+		// while QuickSlotRandom is on so the random roll never happens twice.
+		// Empty disables the shortcut.
 		std::string quickPickerKey{ "Z" };
 		bool randomFavoritesOnly{ true };
 		bool randomExcludeCurrent{ true };

@@ -118,9 +118,9 @@ Assert-Absent $hotkeys 'lastTryMs' 'nothing is retried on a timer any more'
 Assert-Contains $hotkeys 'bool IsGamePowerKey(const Trigger& a_trigger)' 'the game Shout/Power binding is recognised on both devices'
 Assert-Contains $hotkeys 'bool IsQuickslotKey(const Trigger& a_trigger)' 'the ini key opens the window as well'
 Assert-Contains $hotkeys 'bool IsPowerKey(const Trigger& a_trigger)' 'the Shout/Power key is recognised'
-Assert-Contains $hotkeys 'const bool ours = OurPowerSelected();' 'the press is ours only while our power is the selected one'
-Assert-Contains $hotkeys 'if (!ours && !IsQuickslotKey(a_trigger)) {' 'nothing happens while another power is equipped and the ini key is not it'
-Assert-Contains $hotkeys 'return ours;' 'with another power equipped the ini key still opens the window, the event stays with the game'
+Assert-Contains $hotkeys 'if (!IsPowerKey(a_trigger)) {' 'only a key this plugin knows is its business'
+Assert-Contains $hotkeys 'if (!OurPowerSelected()) {' 'the press is ours only while our power is the selected one'
+Assert-Absent $hotkeys 'return ours;' 'with another power equipped the key stays with the game, never the ini key alone'
 Assert-Contains $hotkeys 'swallow = true;' 'that press is consumed, so the game does not cast the power'
 Assert-Contains $hotkeys 'if (HandlePowerPress(trigger, blocked)) {' 'the press is handled on the press itself'
 Assert-Contains $hotkeys 'bool PowerKeyHeld()' 'the polled path knows both devices and the ini key'
@@ -356,6 +356,20 @@ if (([regex]::Matches($hotkeys, 'g_captureOrder\.clear\(\)')).Count -ne 4) {
 }
 Assert-Contains $takeResult 'g_captureOrder.clear();' 'the order does not survive into the next recording'
 
+
+# ---- the power key answers only while the Change Outfit power is the selected one ----
+# The ini key names the key the game binds to Shout, so the window used to open while any
+# other power was equipped; the controller half never did, because no pad key is in the ini.
+$powerPress = Get-Block $hotkeys 'bool HandlePowerPress(const Trigger& a_trigger, bool a_blocked)' 'void CheckPowerKey(bool a_blocked)'
+Assert-Contains $powerPress 'if (!IsPowerKey(a_trigger)) {' 'a press of any other key is not this plugin business'
+Assert-Contains $powerPress 'if (!OurPowerSelected()) {' 'the press belongs to the game while another power is selected'
+Assert-Absent $powerPress 'return ours;' 'the handled flag no longer depends on which power is selected'
+Assert-Absent $powerPress '!IsQuickslotKey(a_trigger)' 'the ini key is not exempt from the selected-power test'
+$powerPoll = Get-Block $hotkeys 'void CheckPowerKey(bool a_blocked)' 'void CheckChords(bool a_blocked)'
+Assert-Contains $powerPoll 'if (!OurPowerSelected()) {' 'the polled power key keeps the same rule'
+Assert-Absent $powerPoll '!QuickslotKeyHeld()' 'the polled ini key is not exempt either'
+Assert-Contains $hotkeys "only belongs to this plugin while the Change Outfit power is" 'the rule is spelled out where it is implemented'
+Assert-Contains (Read-RepoFile 'src/core/Settings.h') 'It answers only while' 'the ini description says the key needs the Change Outfit power'
 if ($failures -gt 0) {
     Write-Output "HOTKEY_CAPTURE_FAILED: $failures problem(s)"
     exit 1

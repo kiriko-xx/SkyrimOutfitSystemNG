@@ -120,6 +120,32 @@ $drainBlock = Get-Block $patches 'void DrainAttachPending()' 'void SetSiteHookIn
 Assert-Contains $drainBlock '::OutfitSystem::refreshArmorFor(actor);' 'the deferred pass rebuilds the equipment while the hook is installed'
 Assert-Contains $drainBlock 'Custom(actor, nullptr);' 'the external fill stays as the fallback without an in-pass hook'
 
+# ---- a written branch is read back, and every site is re-checked after the load ----
+# Writing five bytes says nothing about what the site holds a moment later: the next plugin
+# that hooks the same function overwrites whoever came first, which used to show up only as
+# an outfit that silently did not apply.
+Assert-Contains $supportH 'bool VerifyBranch(' 'the written branch can be read back'
+Assert-Contains $supportH 'void RegisterSite(' 'every written branch is remembered'
+Assert-Contains $supportH 'std::size_t VerifyInstalledSites();' 'all written branches can be re-checked'
+Assert-Contains $supportH 'void LogForeignJumps(' 'a patched call site can be reported'
+Assert-Contains $support 'if (!VerifyBranch(a_hook, a_site, a_target)) {' 'writing a branch is not done before it reads back'
+Assert-Contains $support 'RegisterSite(a_hook, a_site, a_target);' 'a branch that reads back is remembered'
+Assert-Contains $support 'another plugin wrote over the hook site, so this hook is not in effect this session.' 'an overwritten site is reported instead of being trusted'
+Assert-Contains $support 'the hook site {} now runs the detour at {}; that is the plugin which took the site over.' 'the plugin that took a site over is named'
+Assert-Contains $support 'no longer in effect, so the hooks they carry do nothing this session' 'a lost site is a critical line, not a debug one'
+Assert-Contains $support 'the function at {} holds a {} {} byte(s) into it that lands on {}' 'a call a foreign detour replaced is reported'
+if (([regex]::Matches($support, 'LogForeignJumps\(a_hook, entry, end\);')).Count -lt 3) {
+    Write-Output 'FAIL every search for a call site reports a foreign jump instead of only giving up'
+    $failures++
+}
+$hooks = Read-RepoFile 'src/cpp/hooking/Hooks.cpp'
+Assert-Absent $hooks 'g_branchTrampoline->write_branch<5>' 'no branch is written through the CommonLib slot'
+$main = Read-RepoFile 'src/cpp/main.cpp'
+Assert-Contains $main '#include "hooking/HookSupport.h"' 'the load order can ask whether the branches are still in place'
+if (([regex]::Matches($main, 'Hooking::VerifyInstalledSites\(\);')).Count -lt 2) {
+    Write-Output 'FAIL the sites are re-checked once after the load and once after a save is loaded'
+    $failures++
+}
 $version = Read-RepoFile 'src/cpp/include/version.h'
 if ($version -match 'SKYRIMOUTFITSYSTEMNG_VERSION_PATCH\s+(\d+)') {
     $patch = [int]$Matches[1]

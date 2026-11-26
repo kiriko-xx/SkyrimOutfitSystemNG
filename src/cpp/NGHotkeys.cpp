@@ -1255,13 +1255,19 @@ namespace SOS::Hotkeys
 		// no cast animation left to feel like a cooldown.
 		//
 		// The return value says whether the event was handled, i.e. whether the
-		// caller has to take it out of the queue. The ini key opens the window even
-		// when another power is the selected one, but then the press is left to the
-		// game so an unrelated shout keeps working.
+		// caller has to take it out of the queue.
+		//
+		// Either key only belongs to this plugin while the Change Outfit power is
+		// the one the player has selected. The ini key names the very key the game
+		// binds to Shout by default, so answering it while another power is equipped
+		// would open the window instead of using that power - the key is passed to
+		// the game untouched in that case, and none of the other powers is affected.
 		bool HandlePowerPress(const Trigger& a_trigger, bool a_blocked)
 		{
-			const bool ours = OurPowerSelected();
-			if (!ours && !IsQuickslotKey(a_trigger)) {
+			if (!IsPowerKey(a_trigger)) {
+				return false;
+			}
+			if (!OurPowerSelected()) {
 				return false;
 			}
 			// While a menu owns the input the key is not ours: swallowing it there
@@ -1270,29 +1276,30 @@ namespace SOS::Hotkeys
 				return false;
 			}
 			if (g_latchedQuickKey) {
-				return ours;
+				return true;
 			}
 			g_latchedQuickKey = true;
 			const auto now = NowMs();
 			const auto last = g_lastQuickslotOpenMs.load(std::memory_order_relaxed);
 			if (last != 0 && now - last < kQuickslotOpenCooldownMs) {
-				return ours;
+				return true;
 			}
 			g_lastQuickslotOpenMs.store(now, std::memory_order_relaxed);
 			FireQuickslotKey();
-			return ours;
+			return true;
 		}
 
 		// Polled variant for the case where the front run of the power key never
 		// produced an event (for example when the power was swapped while the key was
-		// held).
+		// held). The same rule as above applies: only while the Change Outfit power is
+		// the selected one.
 		void CheckPowerKey(bool a_blocked)
 		{
 			if (!PowerKeyHeld()) {
 				g_latchedQuickKey = false;
 				return;
 			}
-			if (!OurPowerSelected() && !QuickslotKeyHeld()) {
+			if (!OurPowerSelected()) {
 				g_latchedQuickKey = false;
 				return;
 			}
@@ -1554,7 +1561,7 @@ namespace SOS::Hotkeys
 			SKSE::log::debug("Hotkeys: quick picker hotkey is disabled.");
 		}
 		if (quickKey.valid()) {
-			SKSE::log::debug("Hotkeys: quickslot key '{}' opens the quick picker right away (the power needs its cast animation).", settings.quickPickerKey);
+			SKSE::log::debug("Hotkeys: quickslot key '{}' opens the quick picker right away while the Change Outfit power is selected (the power needs its cast animation).", settings.quickPickerKey);
 		} else {
 			SKSE::log::debug("Hotkeys: the quickslot quick picker key is disabled.");
 		}

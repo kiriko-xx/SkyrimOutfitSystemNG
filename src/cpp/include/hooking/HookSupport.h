@@ -198,6 +198,40 @@ namespace Hooking
 	// to leave the hook disabled then.
 	bool WriteBranchTo(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target);
 
+	// Reads the branch at a_site back and compares where it leads with a_target.
+	//
+	// WriteBranchTo can copy the bytes and still be undone by the next writer: several
+	// plugins hook the same engine functions, and the one that writes last owns the site.
+	// Reading the five bytes back is the only way to separate "installed" from "installed and
+	// still there". A branch another plugin overwrites afterwards fails silently, which is
+	// what a report of "the illusion does nothing" looks like.
+	//
+	// Returns true when the branch leads to a_target. On a mismatch it logs what the bytes
+	// are now and returns false; it never repairs the site, because the plugin that wrote
+	// there last did so on purpose.
+	bool VerifyBranch(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target);
+
+	// Every branch this plugin wrote, so all of them can be read back once the whole load
+	// order has had its turn.
+	void RegisterSite(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target);
+
+	// Reads every registered branch back and reports the ones another plugin has taken over.
+	// Meant to run late (kDataLoaded and kPostLoadGame): a plugin that hooks the same
+	// function during its own data-loaded pass would otherwise write after the check.
+	//
+	// Returns the number of branches that are no longer this plugin's.
+	std::size_t VerifyInstalledSites();
+
+	// Logs the five-byte jumps inside [a_begin, a_end) that leave the executable.
+	//
+	// Called when a hook cannot find the call it was written to patch: a call another plugin
+	// replaced with a jump to its own detour is not a call any more, and the log has to say
+	// that instead of leaving "this game build does not call that function" as the only
+	// explanation. Byte scanning without an instruction decoder can hit an 0xE9 that sits
+	// inside another instruction, so only jumps landing outside .text - i.e. in a plugin -
+	// are reported.
+	void LogForeignJumps(const char* a_hook, std::uintptr_t a_begin, std::uintptr_t a_end);
+
 	// How far before a call the visitor it is handed is loaded. Both passes of the AE
 	// skinning routine load theirs inside this window.
 	inline constexpr std::ptrdiff_t kAnchorLookback = 0x60;

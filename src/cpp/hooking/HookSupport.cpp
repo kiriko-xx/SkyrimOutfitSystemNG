@@ -4,6 +4,7 @@
 #include <format>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -244,6 +245,7 @@ namespace Hooking
 			LOG(err, "{}: the function at rva 0x{:X} does not call 0x{:X} within 0x{:X} bytes; the hook stays disabled so the game keeps running. Report this line together with your game version.",
 				a_hook, entry - base, target, kBodyScanLimit);
 			LogModuleIdentity(a_hook);
+			LogForeignJumps(a_hook, entry, end);
 			const auto all = CallsReaching(text.address(), textEnd, target);
 			LOG(err, "{}: .text holds {} call(s) to 0x{:X}.", a_hook, all.size(), target);
 			for (std::size_t i = 0; i < all.size() && i < 5; ++i) {
@@ -300,6 +302,7 @@ namespace Hooking
 			LOG(err, "{}: the function at rva 0x{:X} does not call 0x{:X} within 0x{:X} bytes; the hook stays disabled so the game keeps running. Report this line together with your game version.",
 				a_hook, entry - base, target, kBodyScanLimit);
 			LogModuleIdentity(a_hook);
+			LogForeignJumps(a_hook, entry, end);
 			const auto all = CallsReaching(text.address(), textEnd, target);
 			LOG(err, "{}: .text holds {} call(s) to 0x{:X}.", a_hook, all.size(), target);
 			for (std::size_t i = 0; i < all.size() && i < 5; ++i) {
@@ -343,6 +346,7 @@ namespace Hooking
 		LOG(err, "{}: {} calls to 0x{:X} inside the function at rva 0x{:X} and none matches '{}'; the hook stays disabled so the game keeps running. Report this line together with your game version.",
 			a_hook, sites.size(), target, entry - base, a_shape.name);
 		LogModuleIdentity(a_hook);
+			LogForeignJumps(a_hook, entry, end);
 		return 0;
 	}
 
@@ -663,7 +667,130 @@ namespace Hooking
 		DWORD ignored = 0;
 		::VirtualProtect(pageStart, pageSpan, previous, &ignored);
 		::FlushInstructionCache(::GetCurrentProcess(), reinterpret_cast<const void*>(a_site), kLength);
+		// Writing five bytes and flushing the cache says nothing about what the site holds a
+		// moment later: every plugin that hooks the same function writes over whoever came
+		// first. Reading the branch back is what turns "we wrote it" into "it is in effect".
+		if (!VerifyBranch(a_hook, a_site, a_target)) {
+			return false;
+		}
+		RegisterSite(a_hook, a_site, a_target);
+		LOG(debug, "{}: the branch at {} was read back and leads to the injected code.", a_hook, ModuleOwner(a_site));
 		return true;
+	}
+
+	bool VerifyBranch(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target)
+	{
+		constexpr std::size_t kLength = 5;
+		if (!Readable(a_site, kLength)) {
+			LOG(critical, "{}: the {} bytes at the hook site {} cannot be read back; this hook is not in effect this session.", a_hook, kLength, ModuleOwner(a_site));
+			return false;
+		}
+		const auto* bytes = reinterpret_cast<const std::uint8_t*>(a_site);
+		std::uintptr_t landing = 0;
+		if (bytes[0] == 0xE9) {
+			const auto rel = *reinterpret_cast<const std::int32_t*>(a_site + 1);
+			landing = a_site + kLength + static_cast<std::uintptr_t>(static_cast<std::ptrdiff_t>(rel));
+		}
+		if (landing == a_target) {
+			return true;
+		}
+		LOG(critical, "{}: the branch this plugin wrote at {} now reads {:02X} {:02X} {:02X} {:02X} {:02X} and leads to {}, not to the injected code at {}; another plugin wrote over the hook site, so this hook is not in effect this session. Report this line together with your game version and your plugin list.",
+			a_hook, ModuleOwner(a_site), bytes[0], bytes[1], bytes[2], bytes[3], bytes[4],
+			landing != 0 ? ModuleOwner(landing) : std::string{ "no code at all" }, ModuleOwner(a_target));
+		return false;
+	}
+
+	namespace
+	{
+		struct WrittenSite
+		{
+			std::string  name;
+			std::uintptr_t site;
+			std::uintptr_t target;
+		};
+
+		std::mutex            g_siteMutex;
+		std::vector<WrittenSite> g_sites;
+	}
+
+	void RegisterSite(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target)
+	{
+		std::lock_guard lock(g_siteMutex);
+		const auto      known = std::any_of(g_sites.begin(), g_sites.end(), [a_site](const WrittenSite& a_entry) { return a_entry.site == a_site; });
+		if (known) {
+			return;
+		}
+		g_sites.push_back(WrittenSite{ a_hook != nullptr ? a_hook : "unnamed hook", a_site, a_target });
+	}
+
+	std::size_t VerifyInstalledSites()
+	{
+		std::vector<WrittenSite> sites;
+		{
+			std::lock_guard lock(g_siteMutex);
+			sites = g_sites;
+		}
+		std::size_t lost = 0;
+		for (const auto& site : sites) {
+			if (VerifyBranch(site.name.c_str(), site.site, site.target)) {
+				LOG(debug, "{}: the branch at {} was read back and still leads to the code this plugin injected.", site.name, ModuleOwner(site.site));
+				continue;
+			}
+			++lost;
+			// Naming the owner of the detour the site runs now is the part of the report that
+			// can be acted on: disabling one of the two plugins or swapping their load order.
+			const auto now = FollowEntryJumps(site.name.c_str(), site.site);
+			if (now != 0 && now != site.site) {
+				LOG(critical, "{}: the hook site {} now runs the detour at {}; that is the plugin which took the site over.", site.name, ModuleOwner(site.site), ModuleOwner(now));
+			}
+		}
+		if (lost != 0) {
+			LOG(critical, "Hook sites: {} of the {} branches this plugin wrote are no longer in effect, so the hooks they carry do nothing this session; the lines above name each site and the plugin that took it over.", lost, sites.size());
+		} else if (!sites.empty()) {
+			LOG(debug, "Hook sites: all {} branches this plugin wrote are still in place.", sites.size());
+		}
+		return lost;
+	}
+
+	void LogForeignJumps(const char* a_hook, std::uintptr_t a_begin, std::uintptr_t a_end)
+	{
+		const auto text = TextSegment();
+		const auto textBegin = text.address();
+		const auto textEnd = text.address() + text.size();
+		std::size_t reported = 0;
+		for (auto cursor = a_begin; cursor + 7 <= a_end && reported < 5; ++cursor) {
+			if (!Readable(cursor, 7)) {
+				break;
+			}
+			const auto* bytes = reinterpret_cast<const std::uint8_t*>(cursor);
+			std::uintptr_t target = 0;
+			const char*  shape = nullptr;
+			if (bytes[0] == 0xE9) {
+				shape = "jmp rel32";
+				const auto rel = *reinterpret_cast<const std::int32_t*>(cursor + 1);
+				target = cursor + 5 + static_cast<std::uintptr_t>(static_cast<std::ptrdiff_t>(rel));
+			} else if (bytes[0] == 0xFF && bytes[1] == 0x25) {
+				shape = "jmp [rip+disp32]";
+				const auto slot = cursor + 6 + static_cast<std::uintptr_t>(static_cast<std::ptrdiff_t>(*reinterpret_cast<const std::int32_t*>(cursor + 2)));
+				if (Readable(slot, sizeof(std::uintptr_t))) {
+					target = *reinterpret_cast<const std::uintptr_t*>(slot);
+				}
+			} else if (bytes[0] == 0x48 && bytes[1] == 0xFF && bytes[2] == 0x25) {
+				shape = "jmp [rip+disp32]";
+				const auto slot = cursor + 7 + static_cast<std::uintptr_t>(static_cast<std::ptrdiff_t>(*reinterpret_cast<const std::int32_t*>(cursor + 3)));
+				if (Readable(slot, sizeof(std::uintptr_t))) {
+					target = *reinterpret_cast<const std::uintptr_t*>(slot);
+				}
+			}
+			// A jump that stays inside .text is ordinary branch code; one that leaves the
+			// executable was written by a plugin hooking something in this function.
+			if (target == 0 || (target >= textBegin && target < textEnd)) {
+				continue;
+			}
+			++reported;
+			LOG(err, "{}: the function at {} holds a {} {} byte(s) into it that lands on {}; another plugin put it there, so a call this hook was written to patch is no longer a plain call. Report this line together with your game version and your plugin list.",
+				a_hook, ModuleOwner(a_begin), shape, static_cast<std::ptrdiff_t>(cursor) - static_cast<std::ptrdiff_t>(a_begin), ModuleOwner(target));
+		}
 	}
 
 	std::uintptr_t FollowEntryJumps(const char* a_hook, std::uintptr_t a_entry, std::uintptr_t* a_firstJump)
