@@ -181,6 +181,23 @@ namespace Hooking
 	// has to leave the hook disabled then.
 	std::uintptr_t AllocateFarStub(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target);
 
+	// Writes the five-byte branch at a_site that lands on a_target - the one thing
+	// CommonLib writes for the hooks of this plugin.
+	//
+	// CommonLib write_branch keeps its own "jmp qword ptr [rip+0]" slot inside the
+	// trampoline next to the game executable and ends the process when a_site is farther
+	// from that slot than a rel32 reaches (Trampoline.cpp:215, "displacement is out of
+	// range"). The distance from a_site to the injected code is a different question, so
+	// 1.5.79 passed its own check, handed the inflated worn visitor site of AE 1.6.1170
+	// (InventoryLagFix.dll + 0x2B70, about 14 GB from the executable) to write_branch, and
+	// the game refused to start. Here both ends are known and alive - the site holds the
+	// bytes about to be replaced, the target was just allocated in reach - so the branch is
+	// written into the site directly and no third address enters the calculation.
+	//
+	// Returns false - after logging why - when the branch cannot be placed; the caller has
+	// to leave the hook disabled then.
+	bool WriteBranchTo(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target);
+
 	// How far before a call the visitor it is handed is loaded. Both passes of the AE
 	// skinning routine load theirs inside this window.
 	inline constexpr std::ptrdiff_t kAnchorLookback = 0x60;

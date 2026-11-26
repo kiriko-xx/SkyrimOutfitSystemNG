@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <format>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <unordered_set>
@@ -624,6 +625,45 @@ namespace Hooking
 
 		LOG(info, "{}: the hook site {} is out of reach of the trampoline stub, so a jump stub this plugin allocated at 0x{:X} carries the branch there instead; both hooks stay in place.", a_hook, ModuleOwner(a_site), stubAddress);
 		return stubAddress;
+	}
+
+
+	bool WriteBranchTo(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target)
+	{
+		constexpr std::size_t kLength = 5;// E9 rel32
+
+		if (!BranchInRange(a_site, a_target)) {
+			LOG(critical, "{}: the branch at {} cannot reach the injected code; this hook stays disabled so the game keeps running.", a_hook, ModuleOwner(a_site));
+			return false;
+		}
+		if (!Readable(a_site, kLength)) {
+			LOG(critical, "{}: the {} bytes at {} that the branch has to replace cannot be read; this hook stays disabled so the game keeps running.", a_hook, kLength, ModuleOwner(a_site));
+			return false;
+		}
+
+		SYSTEM_INFO info{};
+		::GetSystemInfo(&info);
+		const auto pageSize = static_cast<std::uintptr_t>(info.dwPageSize != 0 ? info.dwPageSize : 0x1000);
+		const auto pageStart = reinterpret_cast<void*>(a_site & ~(pageSize - 1));
+		const auto pageSpan = static_cast<std::size_t>((a_site + kLength) - reinterpret_cast<std::uintptr_t>(pageStart));
+
+		DWORD previous = 0;
+		if (!::VirtualProtect(pageStart, pageSpan, PAGE_EXECUTE_READWRITE, &previous)) {
+			LOG(critical, "{}: the page holding the hook site {} cannot be made writable (error {}); this hook stays disabled so the game keeps running.", a_hook, ModuleOwner(a_site), ::GetLastError());
+			return false;
+		}
+
+		std::uint8_t bytes[kLength]{};
+		bytes[0] = 0xE9;// jmp rel32
+		const auto displacement = static_cast<std::ptrdiff_t>(a_target) - static_cast<std::ptrdiff_t>(a_site + kLength);
+		const auto relative = static_cast<std::int32_t>(displacement);
+		std::memcpy(bytes + 1, &relative, sizeof(relative));
+		std::memcpy(reinterpret_cast<void*>(a_site), bytes, kLength);
+
+		DWORD ignored = 0;
+		::VirtualProtect(pageStart, pageSpan, previous, &ignored);
+		::FlushInstructionCache(::GetCurrentProcess(), reinterpret_cast<const void*>(a_site), kLength);
+		return true;
 	}
 
 	std::uintptr_t FollowEntryJumps(const char* a_hook, std::uintptr_t a_entry, std::uintptr_t* a_firstJump)

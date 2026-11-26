@@ -65,7 +65,17 @@ namespace Hooking {
             }
 
             LOG(debug, "Patching {} at addr = {:x}. base = {:x}", a_name, a_site, REL::Module::get().base());
-            g_branchTrampoline->write_branch<5>(a_site, branchTarget);
+            // The branch is written here and not through write_branch: that one routes it
+            // through a slot inside its own trampoline next to the executable and ends the
+            // process when the site sits farther from that slot than a rel32 reaches
+            // (Trampoline.cpp:215, "displacement is out of range"). The distance from the site
+            // to the injected code is a different question - on AE 1.6.1170 the worn visitor
+            // site is about 14 GB away from the executable, so 1.5.79 passed the check above
+            // and the game still refused to start. Both ends are known here, so the branch is
+            // written into the site directly.
+            if (!WriteBranchTo(a_name, a_site, branchTarget)) {
+                return false;
+            }
             LOG(debug, "{}: patched.", a_name);
             return true;
         }
@@ -630,10 +640,34 @@ namespace Hooking {
                     LOG(critical, "RTTIPrinter: the trampoline is full; this hook stays disabled.");
                     return;
                 }
-                g_branchTrampoline->write_branch<5>(InventoryChanges_ExecuteVisitorOnWorn_Hook, code);
+                if (!WriteBranchTo("RTTIPrinter", InventoryChanges_ExecuteVisitorOnWorn_Hook, reinterpret_cast<std::uintptr_t>(code))) {
+                    return;
+                }
             }
         }// namespace RTTIPrinter
     }// namespace Detail
+
+    // A hook that cannot be installed leaves the illusion off for the whole session, and the
+    // player only notices it after the save has loaded and the outfit does not show up. A box
+    // at startup says so right away instead of letting the session look healthy; the details
+    // stay in the log. Resolved at run time so the plugin gains no import dependency.
+    static void ShowIllusionUnavailable() {
+        using MessageBoxWFn = int(__stdcall*)(void*, const wchar_t*, const wchar_t*, unsigned);
+        const auto user32 = ::LoadLibraryW(L"user32.dll");
+        if (!user32) {
+            return;
+        }
+        const auto box = reinterpret_cast<MessageBoxWFn>(::GetProcAddress(user32, "MessageBoxW"));
+        if (!box) {
+            return;
+        }
+        // MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST
+        box(nullptr,
+            L"幻化本次会话不可用：幻化需要的两个钩子没有全部装上，真实装备会照常显示。\n"
+            L"The outfit illusion is off for this session: the two skinning hooks are not both in place, so the real equipped armour stays visible.\n\n"
+            L"具体原因见 SKSE\\Plugins\\OutfitSystemNG.log。",
+            L"OutfitSystemNG", 0x00000030u | 0x00010000u | 0x00040000u);
+    }
 
     void ApplyPlayerSkinningHooks() {
         LOG(debug, "Installing skinning hooks for runtime {}.", REL::Module::get().version().string());
@@ -660,6 +694,7 @@ namespace Hooking {
             LOG(critical, "Illusion display is off for this session: the player skinning hooks are not both installed (vanilla pass {}, display pass {}). The real equipped armour stays visible. Nothing else is disabled.",
                 Detail::g_dontVanillaSkinPlayerInstalled ? "hooked" : "missing",
                 Detail::g_customSkinPlayerInstalled ? "hooked" : "missing");
+            ShowIllusionUnavailable();
         }
     }
 }// namespace Hooking

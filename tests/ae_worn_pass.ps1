@@ -7,7 +7,10 @@ $ErrorActionPreference = 'Stop'
 # the hook is installed - that is what produced the see-through body on 1.6.1170 - and a
 # site that another plugin moved out of the executable is reached through a stub next to
 # the site, because the trampoline sits next to the game and a dll can be mapped anywhere
-# (SE 1.5.97, the worn visitor chained onto InventoryLagFix.dll + 0x2B70, 1.5.78).
+# (SE 1.5.97, InventoryLagFix.dll + 0x2B70, 1.5.78). The five-byte branch is written by
+# this plugin itself: CommonLib write_branch routes it through a slot next to the
+# executable and ends the process when the site is out of that slot's reach, which killed
+# the game at startup on AE 1.6.1170 (1.5.79, "displacement is out of range").
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $failures = 0
 
@@ -57,10 +60,15 @@ Assert-Contains $support 'bytes[1] = 0x25;' 'the stub jumps through a pointer, s
 Assert-Contains $support 'MEM_RESERVE | MEM_COMMIT' 'the stub page is reserved next to the site'
 Assert-Contains $support '::VirtualProtect(stub, kCommit, PAGE_EXECUTE_READ, &previous);' 'the stub is handed over read-execute once written'
 Assert-Contains $support '::FlushInstructionCache(::GetCurrentProcess(), stub, kFarStubSize);' 'the stub is flushed before the branch to it is written'
+Assert-Contains $support 'bool WriteBranchTo(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target)' 'the five-byte branch is written by this plugin itself'
+Assert-Contains $support 'bytes[0] = 0xE9;// jmp rel32' 'the branch written into a site is a five-byte relative jump'
+Assert-Contains $support '::VirtualProtect(pageStart, pageSpan, PAGE_EXECUTE_READWRITE, &previous)' 'the page of the site is made writable for the length of the write only'
+Assert-Contains $support '::FlushInstructionCache(::GetCurrentProcess(), reinterpret_cast<const void*>(a_site), kLength);' 'the patched site is flushed after the branch is written'
 Assert-Contains $supportH 'std::uintptr_t FollowEntryJumps(' 'the entry jump chain helper is declared'
 Assert-Contains $supportH 'bool BranchInRange(' 'the branch reach helper is declared'
 Assert-Contains $supportH 'std::uintptr_t AllocateFarStub(' 'the far stub helper is declared'
 Assert-Contains $supportH 'inline constexpr std::size_t kFarStubSize = 14;' 'the size of the far stub is one constant'
+Assert-Contains $supportH 'bool WriteBranchTo(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target);' 'the branch writer is declared next to the stub helper'
 Assert-Contains $supportH 'std::string ModuleOwner(' 'the module owner helper is declared'
 
 $hooks = Read-RepoFile 'src/cpp/hooking/Hooks.cpp'
@@ -81,7 +89,11 @@ Assert-Contains $customBlock 'FollowEntryJumps("CustomSkinPlayer", declared)' 'a
 Assert-Absent $customBlock 'const auto entry = InventoryChanges_ExecuteVisitorOnWorn.address();' 'the entry is no longer hooked without looking at what sits there'
 Assert-Contains $hooks 'auto branchTarget = reinterpret_cast<std::uintptr_t>(code);' 'the branch target is what the site is patched with'
 Assert-Contains $hooks 'branchTarget = AllocateFarStub(a_name, a_site, branchTarget);' 'a site out of reach of the trampoline is bridged with a far stub instead of disabling the hook'
-Assert-Contains $hooks 'g_branchTrampoline->write_branch<5>(a_site, branchTarget);' 'the five-byte branch is written to the bridged target'
+Assert-Contains $hooks 'if (!WriteBranchTo(a_name, a_site, branchTarget)) {' 'the five-byte branch is written by this plugin, not routed through the trampoline slot of CommonLib'
+Assert-Absent $hooks 'g_branchTrampoline->write_branch<5>' 'no hook goes through write_branch, whose slot next to the executable ends the process for a far site (1.5.79, AE 1.6.1170: displacement is out of range)'
+Assert-Contains $hooks 'WriteBranchTo("RTTIPrinter", InventoryChanges_ExecuteVisitorOnWorn_Hook' 'the debug RTTI hook writes its branch the same way'
+Assert-Contains $hooks 'ShowIllusionUnavailable();' 'a session without the hooks says so in a box at startup instead of looking healthy'
+Assert-Contains $hooks '::LoadLibraryW(L"user32.dll")' 'the box is resolved at run time, so the plugin gains no import dependency'
 Assert-Absent $hooks 'is out of reach of the trampoline stub; this hook stays disabled so the game keeps running.' 'the hook is no longer given up when the site is far away'
 Assert-Absent $customBlock 'FindWornPassCall(' 'the call site inside the game routine is no longer scanned'
 Assert-Absent $customBlock 'the display set will be attached from the deferred pass' 'a missing display half is no longer advertised as a working deferred pass'
