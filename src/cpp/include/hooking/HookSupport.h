@@ -154,9 +154,32 @@ namespace Hooking
 	// True when a five-byte relative branch at a_site can reach a_target. CommonLib's
 	// trampoline terminates the process when the displacement does not fit, which is fine
 	// for its own writers - they know both ends - but not for a hook that may land on code
-	// another plugin owns: there the hook has to stay disabled instead of taking the game
-	// down with it.
+	// another plugin owns: there the branch has to be bridged, or the hook has to stay
+	// disabled instead of taking the game down with it.
 	bool BranchInRange(std::uintptr_t a_site, std::uintptr_t a_target);
+
+	// Size of the stub AllocateFarStub writes: "jmp qword ptr [rip+0]" plus the address it
+	// jumps to.
+	inline constexpr std::size_t kFarStubSize = 14;
+
+	// Reserves executable memory within reach of a_site and writes an absolute jump to
+	// a_target into it, so the five-byte branch at a_site reaches code that lies farther
+	// away than a rel32 can express.
+	//
+	// A hook site is not always inside the game executable: following the branch another
+	// plugin wrote at a function entry lands in that plugin's dll, and Windows maps a dll
+	// wherever the address space allows. The trampoline this plugin allocates sits next to
+	// the executable, so for such a site the distance is routinely more than the two
+	// gigabytes a rel32 covers. 1.5.78 only measured that distance and left the hook
+	// disabled, which switched the illusion off for the whole session (SE 1.5.97, the worn
+	// visitor chained onto InventoryLagFix.dll + 0x2B70). The stub removes the assumption
+	// instead of guarding it: the branch at the site stays short, and the stub does the long
+	// jump without touching a register or the stack, so the code it serves keeps its own
+	// calling convention.
+	//
+	// Returns 0 - after logging why - when no page within reach can be reserved; the caller
+	// has to leave the hook disabled then.
+	std::uintptr_t AllocateFarStub(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target);
 
 	// How far before a call the visitor it is handed is loaded. Both passes of the AE
 	// skinning routine load theirs inside this window.

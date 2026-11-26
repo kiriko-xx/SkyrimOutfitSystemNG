@@ -48,15 +48,24 @@ namespace Hooking {
                 return false;
             }
             // A hook may end up on code a plugin owns rather than on the game function
-            // itself, and that code can sit anywhere; CommonLib ends the process when the
-            // five-byte branch does not reach, so the distance is checked here instead.
-            if (!BranchInRange(a_site, reinterpret_cast<std::uintptr_t>(code))) {
-                LOG(critical, "{}: the hook site {} is out of reach of the trampoline stub; this hook stays disabled so the game keeps running.", a_name, ModuleOwner(a_site));
-                return false;
+            // itself, and that code can sit anywhere: the trampoline sits next to the game
+            // executable, while a dll is mapped wherever Windows finds room. CommonLib ends
+            // the process when the five-byte branch does not reach, so 1.5.78 refused the
+            // hook in that case - and on SE 1.5.97, where another plugin had hooked the worn
+            // visitor first, the display half was missing and the illusion stayed off for the
+            // whole session. The distance is bridged with a stub next to the site instead, so
+            // the hook works no matter where the code it patches is mapped.
+            auto branchTarget = reinterpret_cast<std::uintptr_t>(code);
+            if (!BranchInRange(a_site, branchTarget)) {
+                branchTarget = AllocateFarStub(a_name, a_site, branchTarget);
+                if (branchTarget == 0 || !BranchInRange(a_site, branchTarget)) {
+                    LOG(critical, "{}: the hook site {} is out of reach of the trampoline stub and no jump stub could be placed next to it; this hook stays disabled so the game keeps running.", a_name, ModuleOwner(a_site));
+                    return false;
+                }
             }
 
             LOG(debug, "Patching {} at addr = {:x}. base = {:x}", a_name, a_site, REL::Module::get().base());
-            g_branchTrampoline->write_branch<5>(a_site, code);
+            g_branchTrampoline->write_branch<5>(a_site, branchTarget);
             LOG(debug, "{}: patched.", a_name);
             return true;
         }
@@ -249,7 +258,7 @@ namespace Hooking {
                 if (IdExists(WornVisitorVTable)) {
                     SetWornVisitorVTable(WornVisitorVTable.address());
                 } else {
-                    LOG(warn, "CustomSkinPlayer: this build's address library has no entry for the visitor of the skinning pass; the display set will only be attached from the deferred pass.");
+                    LOG(critical, "CustomSkinPlayer: this build's address library has no entry for the visitor of the skinning pass, so the display half cannot tell the filling pass from the checking one; the illusion stays off for this session and the real armour shows.");
                 }
 
                 const auto declared = InventoryChanges_ExecuteVisitorOnWorn.address();
@@ -333,7 +342,11 @@ namespace Hooking {
                 if (g_customSkinPlayerInstalled) {
                     LOG(info, "CustomSkinPlayer: the worn visitor is hooked at {} (declared at {}), so the display set is attached inside the pass that fills the biped.", ModuleOwner(entry), ModuleOwner(declared));
                 } else {
-                    LOG(warn, "CustomSkinPlayer: the display set will be attached from the deferred pass after each skinning update, because the worn visitor of this game build could not be hooked.");
+                    // No deferred pass can stand in for this hook: with the display half
+                    // missing the pair is incomplete, the illusion is switched off below and
+                    // the player sees the real armour. Say so instead of pointing at a pass
+                    // that would produce unfinished parts (1.5.22).
+                    LOG(critical, "CustomSkinPlayer: the worn visitor of this game build could not be hooked, so the display set cannot be attached inside the pass that fills the biped; the illusion stays off for this session and the real armour shows. The reason is in the lines above.");
                 }
             }
         }// namespace CustomSkinPlayer

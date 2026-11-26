@@ -3,8 +3,11 @@ $ErrorActionPreference = 'Stop'
 # hooking the worn visitor at its own entry (no call site inside the game routine, which
 # other plugins patch as well), the trampoline copies a prologue that is safe to relocate,
 # the stub depends on no register the engine happens to hold, only the filling pass (by
-# visitor vtable) may write the biped, and the deferred pass never fills a biped itself
-# while the hook is installed - that is what produced the see-through body on 1.6.1170.
+# visitor vtable) may write the biped, the deferred pass never fills a biped itself while
+# the hook is installed - that is what produced the see-through body on 1.6.1170 - and a
+# site that another plugin moved out of the executable is reached through a stub next to
+# the site, because the trampoline sits next to the game and a dll can be mapped anywhere
+# (SE 1.5.97, the worn visitor chained onto InventoryLagFix.dll + 0x2B70, 1.5.78).
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $failures = 0
 
@@ -48,8 +51,16 @@ Assert-Contains $support 'std::uintptr_t FollowEntryJumps(const char* a_hook, st
 Assert-Contains $support 'bytes[0] == 0xE9' 'a five-byte jump at an entry is recognised'
 Assert-Contains $support 'bytes[0] == 0xFF && bytes[1] == 0x25' 'an absolute jump at an entry is recognised'
 Assert-Contains $support 'bool BranchInRange(' 'the reach of the five-byte branch is checked'
+Assert-Contains $support 'std::uintptr_t AllocateFarStub(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target)' 'code out of reach of the trampoline is reached through a stub next to the site'
+Assert-Contains $support 'bytes[0] = 0xFF;' 'the stub is an absolute jump that needs no relative displacement'
+Assert-Contains $support 'bytes[1] = 0x25;' 'the stub jumps through a pointer, so it touches no register and no stack slot'
+Assert-Contains $support 'MEM_RESERVE | MEM_COMMIT' 'the stub page is reserved next to the site'
+Assert-Contains $support '::VirtualProtect(stub, kCommit, PAGE_EXECUTE_READ, &previous);' 'the stub is handed over read-execute once written'
+Assert-Contains $support '::FlushInstructionCache(::GetCurrentProcess(), stub, kFarStubSize);' 'the stub is flushed before the branch to it is written'
 Assert-Contains $supportH 'std::uintptr_t FollowEntryJumps(' 'the entry jump chain helper is declared'
 Assert-Contains $supportH 'bool BranchInRange(' 'the branch reach helper is declared'
+Assert-Contains $supportH 'std::uintptr_t AllocateFarStub(' 'the far stub helper is declared'
+Assert-Contains $supportH 'inline constexpr std::size_t kFarStubSize = 14;' 'the size of the far stub is one constant'
 Assert-Contains $supportH 'std::string ModuleOwner(' 'the module owner helper is declared'
 
 $hooks = Read-RepoFile 'src/cpp/hooking/Hooks.cpp'
@@ -68,8 +79,12 @@ Assert-Contains $customBlock 'Install("custom skin player", entry, gen)' 'the ho
 Assert-Contains $customBlock 'SetWornVisitorVTable(WornVisitorVTable.address());' 'the resolved vtable is handed to the attach code'
 Assert-Contains $customBlock 'FollowEntryJumps("CustomSkinPlayer", declared)' 'a hook already placed at the entry by another plugin is chained instead of giving up'
 Assert-Absent $customBlock 'const auto entry = InventoryChanges_ExecuteVisitorOnWorn.address();' 'the entry is no longer hooked without looking at what sits there'
-Assert-Contains $hooks 'if (!BranchInRange(a_site, reinterpret_cast<std::uintptr_t>(code)))' 'a hook site out of reach of the trampoline is refused instead of ending the process'
+Assert-Contains $hooks 'auto branchTarget = reinterpret_cast<std::uintptr_t>(code);' 'the branch target is what the site is patched with'
+Assert-Contains $hooks 'branchTarget = AllocateFarStub(a_name, a_site, branchTarget);' 'a site out of reach of the trampoline is bridged with a far stub instead of disabling the hook'
+Assert-Contains $hooks 'g_branchTrampoline->write_branch<5>(a_site, branchTarget);' 'the five-byte branch is written to the bridged target'
+Assert-Absent $hooks 'is out of reach of the trampoline stub; this hook stays disabled so the game keeps running.' 'the hook is no longer given up when the site is far away'
 Assert-Absent $customBlock 'FindWornPassCall(' 'the call site inside the game routine is no longer scanned'
+Assert-Absent $customBlock 'the display set will be attached from the deferred pass' 'a missing display half is no longer advertised as a working deferred pass'
 Assert-Absent $customBlock 'mov(rdx, rdi);' 'the stub no longer trusts rdi (AE holds a different object there)'
 Assert-Absent $customBlock 'mov(rdx, r15);' 'the stub no longer trusts r15'
 Assert-Contains $customBlock 'jmp(ptr[rip]);' 'the trampoline jumps back into the game function'
@@ -77,7 +92,10 @@ Assert-Contains $customBlock 'jmp(ptr[rip]);' 'the trampoline jumps back into th
 $patches = Read-RepoFile 'src/cpp/hooking/Patches.cpp'
 $attachBlock = Get-Block $patches 'void CustomFromWornPass(' '// Called from the main thread, outside any skinning pass.' 'CustomFromWornPass'
 Assert-Contains $attachBlock 'PassBiped(a_visitor)' 'the pass is identified by the visitor it was handed'
-Assert-Contains $attachBlock 'if (!anim) return;' 'another pass is left alone instead of filling a foreign biped'
+Assert-Contains $attachBlock 'LogForeignVisitor(a_visitor);' 'a pass this build does not know is named instead of being left alone silently'
+Assert-Contains $attachBlock 'the worn pass hook has been reached' 'the first hit is reported, so a log tells the hook apart from a hook that never fires'
+Assert-Contains $patches 'std::atomic_bool g_wornPassHitLogged{ false };' 'the first hit is announced once'
+Assert-Contains $patches 'the hooked worn pass was handed a visitor with vtable' 'an unexpected visitor vtable is logged'
 Assert-Absent $attachBlock 'actor->GetBiped(false).get()' 'no fallback to the third person biped from inside the hook'
 Assert-Contains $attachBlock 'static thread_local bool inPass = false;' 're-entry from the pass itself is blocked'
 Assert-Contains $attachBlock 'RecordSiteHookHit(actor->GetFormID());' 'a pass that reaches the actor is recorded'

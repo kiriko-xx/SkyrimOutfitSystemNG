@@ -578,6 +578,54 @@ namespace Hooking
 		return displacement >= (std::numeric_limits<std::int32_t>::min)() && displacement <= (std::numeric_limits<std::int32_t>::max)();
 	}
 
+	std::uintptr_t AllocateFarStub(const char* a_hook, std::uintptr_t a_site, std::uintptr_t a_target)
+	{
+		constexpr std::uintptr_t kReach = 0x7FFF0000;// stays inside what a rel32 can express
+		constexpr std::size_t kCommit = 0x1000;
+		constexpr int kMaxSteps = 0x8000;// 2 GB in 64 KB steps; giving up beats spinning forever
+
+		SYSTEM_INFO info{};
+		::GetSystemInfo(&info);
+		const auto step = static_cast<std::uintptr_t>(info.dwAllocationGranularity != 0 ? info.dwAllocationGranularity : 0x10000);
+		const auto base = a_site & ~(step - 1);
+
+		void* stub = nullptr;
+		for (int i = 0; i < kMaxSteps && stub == nullptr; ++i) {
+			const auto away = step * static_cast<std::uintptr_t>(i);
+			if (away > kReach) break;
+			// Walk away from the site in both directions and take the first page that can be
+			// reserved, so the stub stays as close to the branch it serves as the address
+			// space allows.
+			std::uintptr_t tries[2]{};
+			int count = 0;
+			if (away != 0 && base >= away && base - away >= step) tries[count++] = base - away;
+			if (base + away > base) tries[count++] = base + away;
+			for (int t = 0; t < count && stub == nullptr; ++t) {
+				stub = ::VirtualAlloc(reinterpret_cast<LPVOID>(tries[t]), kCommit, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+			}
+		}
+		if (stub == nullptr) {
+			LOG(critical, "{}: no page within reach of the hook site {} could be reserved for a jump stub; this hook stays disabled so the game keeps running.", a_hook, ModuleOwner(a_site));
+			return 0;
+		}
+
+		auto* bytes = static_cast<std::uint8_t*>(stub);
+		// FF 25 00 00 00 00 = jmp qword ptr [rip+0], followed by the address it jumps to. The
+		// instruction reads its own next eight bytes, so the stub touches neither a register
+		// nor the stack and keeps whatever the code behind it expects to find there.
+		bytes[0] = 0xFF;
+		bytes[1] = 0x25;
+		*reinterpret_cast<std::int32_t*>(bytes + 2) = 0;
+		*reinterpret_cast<std::uintptr_t*>(bytes + 6) = a_target;
+		const auto stubAddress = reinterpret_cast<std::uintptr_t>(stub);
+		DWORD previous = 0;
+		::VirtualProtect(stub, kCommit, PAGE_EXECUTE_READ, &previous);
+		::FlushInstructionCache(::GetCurrentProcess(), stub, kFarStubSize);
+
+		LOG(info, "{}: the hook site {} is out of reach of the trampoline stub, so a jump stub this plugin allocated at 0x{:X} carries the branch there instead; both hooks stay in place.", a_hook, ModuleOwner(a_site), stubAddress);
+		return stubAddress;
+	}
+
 	std::uintptr_t FollowEntryJumps(const char* a_hook, std::uintptr_t a_entry, std::uintptr_t* a_firstJump)
 	{
 		constexpr int kMaxHops = 8;

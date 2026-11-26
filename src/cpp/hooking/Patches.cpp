@@ -349,6 +349,32 @@ namespace Hooking {
             return *reinterpret_cast<RE::BipedAnim**>(reinterpret_cast<std::uintptr_t>(a_visitor) + 0x18);
         }
 
+        // "The hook is installed" and "the hook is reached" are two different facts, and a
+        // player log that only shows the first one cannot tell a pass that never runs for
+        // this actor from a hook that never fires. Announced once.
+        std::atomic_bool g_wornPassHitLogged{ false };
+
+        // Same blind spot one level deeper: a visitor whose vtable this build does not
+        // record means the hook sits on a pass other than the one that fills the biped, and
+        // then nothing is displayed without a word. Each unexpected vtable is logged once,
+        // so the log names it without growing with every skinning update.
+        std::mutex g_foreignVisitorMutex;
+        std::unordered_set<std::uintptr_t> g_foreignVisitorVTable{};
+
+        void LogForeignVisitor(RE::InventoryChanges::IItemChangeVisitor* a_visitor) {
+            if (!a_visitor) return;
+            const auto expected = g_wornVisitorVTable.load(std::memory_order_relaxed);
+            if (expected == 0) return;
+            const auto actual = *reinterpret_cast<const std::uintptr_t*>(a_visitor);
+            if (actual == expected) return;
+            {
+                std::lock_guard lock(g_foreignVisitorMutex);
+                if (g_foreignVisitorVTable.size() > 64) return;
+                if (!g_foreignVisitorVTable.insert(actual).second) return;
+            }
+            LOG(warn, "CustomSkinPlayer: the hooked worn pass was handed a visitor with vtable 0x{:X}, but this build records 0x{:X} for the pass that fills the biped; that pass is left alone. Report this line together with the game version.", actual, expected);
+        }
+
         // The store revision changes whenever an outfit is created, edited or
         // reassigned - including the "wear this outfit again" path the player
         // triggers from the quick picker or a hotkey. Such a re-apply has to
@@ -633,8 +659,14 @@ namespace Hooking {
             } reset{ inPass };
 
             if (!a_inventory || !a_visitor) return;
+            if (!g_wornPassHitLogged.exchange(true, std::memory_order_relaxed)) {
+                LOG(info, "CustomSkinPlayer: the worn pass hook has been reached, so the display set is attached from inside the pass that fills the biped.");
+            }
             auto* anim = PassBiped(a_visitor);
-            if (!anim) return;
+            if (!anim) {
+                LogForeignVisitor(a_visitor);
+                return;// another pass: its biped is none of this plugin's business
+            }
             auto* owner = a_inventory->owner;
             if (!ShouldOverrideSkinning(owner)) return;
             auto* actor = skyrim_cast<RE::Actor*>(owner);
