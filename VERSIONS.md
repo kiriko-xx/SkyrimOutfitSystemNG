@@ -6,7 +6,8 @@
 
 | 版本 | 日期 | 包大小（字节） | SHA-256 | 状态 / 备注 |
 | --- | --- | --- | --- | --- |
-| 1.5.56 | 2026-11-22 | 1,413,907 | `82203e35ebbb35c14ca9f23e09618ed58c189fd2323bc21dedfc82486f24194c` | **当前版本，已并入 `main`，tag `v1.5.56`**：Z 键即时打开快速选择（`[RandomOutfit] QuickPickerKey = Z`，0.5 s 限流，绕过 lesser power 的施法动画）、未开 `ExtraLogging` 时日志只剩摘要行（预览行附待判断原因直方图）、i18n 341 条全量落到 `interface/translations`（129 处裸 ImGui 文案改走 `I18n::Tr/TrId`）、翻译文件 `$英文<TAB>译文` 逐字取用、新增 `tests/i18n_translation_files.ps1` 守卫；DLL 2,207,232 B / `42dcf428…` / 1.5.56.0；31 条目解包逐文件哈希与 dist 全等；本版一次性收尾 1.5.47–1.5.55（ESP 生成算法定稿：标签组整装、单槽不截断、待判断并入、同名副本不崩、撞槽不毁族、一槽一件） |
+| 1.5.81 | 2026-11-26 | 1,454,541 | `35C5F0DE58E69FAB4A56927BDFFC4DA75D5795D73DAAB3C6513B0B59DC47D601` | **当前版本，已并入 `main`，tag `v1.5.81`**：1.5.65 之后的第一个正式发布，一次收尾 1.5.66–1.5.81 测试包线 —— 热键录制窗口照 Eelta/FreeClimb 的集合语义重做（全部松开才确认、录制期间键盘与手柄输入由插件独占、LT/RT 能录、手柄组合按按下顺序显示、热键状态直接问设备），能力键与快速选择键只在「Change Outfit」被选中时归本插件（键盘/手柄同一判定），快速选择 Esc/Tab 都能关、底部提示按设备分行并自动折行，框架默认 logger 关闭（不再多出一行 `SkyrimOutfitSystemNG.log`），钩子与别的插件共存（跟跳转链 → 远跳桩 → 自写 5 字节分支 → 写完读回 + 加载后复查两次 + 点名接管者 → 幻化不可用弹提示框）。SE 1.5.97 / AE 1.6.1170 实机通过；DLL 2,301,440 B / `4D443994…` / 1.5.81.0。1.5.46 与 1.5.66–1.5.80 只出过测试包，不单独发成品包 |
+| 1.5.56 | 2026-11-22 | 1,413,907 | `82203e35ebbb35c14ca9f23e09618ed58c189fd2323bc21dedfc82486f24194c` | **（历史，被 1.5.81 取代）已并入 `main`，tag `v1.5.56`**：Z 键即时打开快速选择（`[RandomOutfit] QuickPickerKey = Z`，0.5 s 限流，绕过 lesser power 的施法动画）、未开 `ExtraLogging` 时日志只剩摘要行（预览行附待判断原因直方图）、i18n 341 条全量落到 `interface/translations`（129 处裸 ImGui 文案改走 `I18n::Tr/TrId`）、翻译文件 `$英文<TAB>译文` 逐字取用、新增 `tests/i18n_translation_files.ps1` 守卫；DLL 2,207,232 B / `42dcf428…` / 1.5.56.0；31 条目解包逐文件哈希与 dist 全等；本版一次性收尾 1.5.47–1.5.55（ESP 生成算法定稿：标签组整装、单槽不截断、待判断并入、同名副本不崩、撞槽不毁族、一槽一件） |
 | 1.5.17 | 2026-11-16 | 981,613 | `3e58e8442371020a863463d4cdde43f4cb72d168141ad9172212a86def9dd869` | 早期回退目标（1.5.56 之前的成熟基线）；SLIF NG 兼容版；幻化显示正常 |
 | 1.5.18 | 2026-11-16 | 986,943 | `2394cb3780aac9791b90c55ff7ebeddcf61fda3e9045fe8bdd2ba4e33ae4f008` | 几何签名探针；实机未解决 morph 跟随 |
 | 1.5.19 | 2026-11-17 | 1,022,531 | `31e81dcd32f36bc3a1c03b739939d46ebbdc3995ebd2b2c59d0b7260c1af4ab9` | provider-first；skee 握手永不放弃 |
@@ -65,13 +66,17 @@
 | 1.5.40 | git tag `v1.5.40`（同一分支 `feature/slot-policy-esp-outfits-golden`；`main` 仍是 1.5.34） |
 | 1.5.39 | git tag `v1.5.39`（打在分支 `feature/slot-policy-esp-outfits-golden` 上；`main` 仍是 1.5.34，实机通过后快进合并） |
 | 1.5.47 – 1.5.56 | 开发线在 `test/esp-outfit-*` 分支链上（1.5.47 `1a9ff46` → 1.5.50 `6467e43` → 1.5.51 `bf89961` → 1.5.52 `3cda8ec` → 1.5.53 `5f0c47b` → 1.5.54 `8976f40` → 1.5.55/1.5.56 的提交在 `test/slot-unique-bulk-delete-1.5.55`）；**已并入 `main`，tag `v1.5.56`** |
-| 当前 dist | 1.5.56 交付（分支 `test/slot-unique-bulk-delete-1.5.55`，31 文件 / 3,264,062 B；`SKSE/Plugins/OutfitSystemNG.dll` 2,207,232 B / 1.5.56.0 / `42dcf428…`；`interface/translations/SkyrimOutfitSystemNG_{english,chinese}.txt` 各 341 行；zip 1,413,907 B / `2fdfa421…`） |
+| 1.5.65 | git tag `v1.5.65`（提交 `cde2cab`；含热键录制弹窗、项目/DLL/ini 改名、ESP 加 ESL flag 并瘦到一条能力） |
+| 1.5.66 – 1.5.81 | 开发线全在分支 `fix/hotkey-input-core-1.5.71` 上逐版提交、逐版只出 `-test` 包，1.5.81（tag `v1.5.81`）实机通过后并入 `main` |
+| 当前 dist | 1.5.81 交付（`SKSE/Plugins/OutfitSystemNG.dll` 2,301,440 B / 1.5.81.0 / `4D443994…`；`interface/translations/SkyrimOutfitSystemNG_{english,chinese}.txt` 各 362 行；zip 大小/哈希见上表） |
+| 1.5.56 的 dist（历史） | 1.5.56 交付（分支 `test/slot-unique-bulk-delete-1.5.55`，31 文件 / 3,264,062 B；`SKSE/Plugins/OutfitSystemNG.dll` 2,207,232 B / 1.5.56.0 / `42dcf428…`；`interface/translations/SkyrimOutfitSystemNG_{english,chinese}.txt` 各 341 行；zip 1,413,907 B / `2fdfa421…`） |
 
 1.5.22 的交付目录存档在 `build/dist_1_5_22/`（build/ 不入库）。
 
 ## 版本管理规则
 
-- **分支布局（2026-11-22 快照）**：`main` = 最新发布线，已从 `1.5.34`（`fad3e64`）快进到 **`1.5.56`（tag `v1.5.56`）**；`1.5.35`–`1.5.38` 的实时形变候选废弃为 tag `abandoned/menu-morph-live-1.5.38`；`1.5.39`–`1.5.45` 在 `feature/slot-policy-esp-outfits-golden` 上；`1.5.46` 因乱组被否，代码留 tag `v1.5.46` / `abandoned/esp-outfits-trie-1.5.46`；`1.5.47`–`1.5.56` 在 `test/*` 分支链上按 m08008 测试包协议逐版实机验证，1.5.56 一次性合并收尾。
+- **分支布局（2026-11-26 快照）**：`main` = 1.5.81（tag `v1.5.81`），由 `fix/hotkey-input-core-1.5.71`（1.5.66–1.5.81 的逐版提交，父链从 1.5.65 的 `cde2cab` 起）快进合并；1.5.46 仍封存为 tag `v1.5.46` / `abandoned/esp-outfits-trie-1.5.46`；`archive/main-experiments-20261117` 保留 1.5.34 之前的实验线。
+- **分支布局（2026-11-22 快照，历史）**：`main` = 最新发布线，已从 `1.5.34`（`fad3e64`）快进到 **`1.5.56`（tag `v1.5.56`）**；`1.5.35`–`1.5.38` 的实时形变候选废弃为 tag `abandoned/menu-morph-live-1.5.38`；`1.5.39`–`1.5.45` 在 `feature/slot-policy-esp-outfits-golden` 上；`1.5.46` 因乱组被否，代码留 tag `v1.5.46` / `abandoned/esp-outfits-trie-1.5.46`；`1.5.47`–`1.5.56` 在 `test/*` 分支链上按 m08008 测试包协议逐版实机验证，1.5.56 一次性合并收尾。
 - 仓库根的 `.gitignore` 忽略 `dist/`、`build/`、`*.dll`、`*.pex`、`*.log`：git 只跟踪源码与文档，交付目录每次由构建生成。
 - 每次定稿一个交付版本：先把 `dist/` 收尾，再 `git tag vX.Y.Z`（tag 打在当时那份源码上），随后打包 zip 并更新本文件。
 - 回退 = 直接装对应版本的 zip；**不要**在没有源码快照的版本之间做“源码回退”，只能以二进制为准。
@@ -79,7 +84,7 @@
 
 ## 回退与合并（用户 m06712 要求：随时可回退、可合并有用版本）
 
-**回退（推荐、唯一安全途径）**：装对应版本的成品包即可 —— 仓库根有 1.5.17–1.5.56 的 `SkyrimOutfitSystemNG-<版本>.zip`，每个包旁有 `.zip.sha256`（内容为 `hash + 两空格 + 文件名`）。想完全干净地回退：删掉 `Data/SKSE/Plugins/` 下的 `OutfitSystemNG.dll` **和** `SkyrimOutfitSystemNG.dll`，再解压目标包覆盖。
+**回退（推荐、唯一安全途径）**：装对应版本的成品包即可 —— 成品包与测试包**不入库**（`SkyrimOutfitSystemNG-*.zip` 已写进 `.gitignore`，只留在本地构建机的仓库根，每个包旁有 `.zip.sha256`，内容为 `hash + 两空格 + 文件名`）；`VERSIONS.md` 的上表记录了每个已发布成品包的大小与哈希，可用于核对手上的包是不是原版。想完全干净地回退：删掉 `Data/SKSE/Plugins/` 下的 `OutfitSystemNG.dll` **和** `SkyrimOutfitSystemNG.dll`，再解压目标包覆盖。
 
 **源码级回退**：`git tag` 逐版对应（见上表）。`git checkout v1.5.29` 可回到那一版源码，`git diff v1.5.29 v1.5.30 -- src/` 可看单版差异。注意 1.5.17–1.5.21 **没有源码快照**，只能以二进制回退。
 
@@ -102,3 +107,12 @@ git commit -m "merge: bring 1.5.29 stale-clone narrow clear forward"
 - 项目/源码目录、DLL 与 ini 统一改名为 SkyrimOutfitSystemNG（日志 OutfitSystemNG.log 与 DLL 同名）；旧 ini 首次保存自动改名。
 - dist/SkyrimOutfitSystem.esp 加 ESL flag 并精简为一条 Change Outfit 能力（MGEF/SPEL/QUST）；删掉 MCM/自动切换/战斗检测脚本与记录。
 - 成品包 SkyrimOutfitSystemNG-1.5.65.zip。
+
+## v1.5.81（2026-11-26）
+- 热键录制窗口照 Eelta/FreeClimb 的集合语义重做：组合键全部松开才确认；录制期间键盘与手柄输入由插件独占（设备 Poll 里从 `BSInputEventQueue` 摘事件），Esc 不再关 SMF 主菜单、手柄 B/LB 不再漏给宿主，LT/RT 能录；手柄组合按按下顺序显示。
+- 热键状态改为直接问设备（`GetAsyncKeyState` / `XInputGetState`），修掉「只按 Alt 就触发 Alt+O」的残留 bug；`PadState` 与 `XINPUT_GAMEPAD` 对齐并加 `static_assert(sizeof == 16)`。
+- 能力键与快速选择键只在「Change Outfit」被选中时归本插件，键盘与手柄同一判定（修键盘半边无条件开窗的回归）。
+- 快速选择窗口 Esc / Tab 都能关闭；底部键位提示按键盘 / 手柄分行，窗口窄时自动折行。
+- 关闭框架默认 logger：不再多出只有一行版本号的 `SkyrimOutfitSystemNG.log`。
+- 钩子与别的插件共存：别的插件抢先钩住幻化显示函数时顺着跳转链跟上去钩（真实案例 InventoryLagFix.dll）、够不着就在站点旁分配远跳桩、5 字节分支自写不再经 `Trampoline::write_branch`（修 AE 启动即崩的 `displacement is out of range`）、写完读回并在 data loaded / post load game 各复查一次、被覆盖时点名接管的插件、幻化确实装不上时弹提示框。
+- 成品包 SkyrimOutfitSystemNG-1.5.81.zip（1,454,541 B / `35C5F0DE58E69FAB4A56927BDFFC4DA75D5795D73DAAB3C6513B0B59DC47D601`）。

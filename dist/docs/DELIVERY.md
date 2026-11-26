@@ -1,6 +1,20 @@
+## 1.5.81 最新交付准备（2026-11-26）
+
+**验证状态（1.5.81）**：用户 m09460「测试通过」。SE 1.5.97 与 AE 1.6.1170 两套运行时均已实机确认；1.5.80 起 AE 的启动即崩（`displacement is out of range`）已修。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 2,301,440 字节；`4D443994587528CF48FC19524E6A85F9E507EDDED8F87385D8E21081BF553121`；`1.5.81.0`（build/Release 与 dist 逐字节一致） |
+| 静态守卫 | 32 个 `tests/*.ps1`：31 PASS，仅 `skse_listener_replay.ps1` 因构建机没有游戏日志跳过 |
+| 干净重建 | `build/build_1_5_81_clean.bat`（MSBuild `/t:Rebuild`）：`CFG_EXIT=0` / `CLEAN_EXIT=0`，无新增警告 |
+| 翻译文件 | 词典 362 条 UI 文本 ↔ `interface/translations/SkyrimOutfitSystemNG_english.txt` / `_chinese.txt` 各 362 条，逐条 value 比对 0 差异（语言名 12 条由 `LabelForCode()` 提供、不进 txt） |
+
+- **本版改动面**：`src/cpp/NGHotkeys.cpp`（录制状态机 + 设备独占 + 能力键判定）、`src/cpp/MenuUI.cpp`（快速选择 Esc/Tab、提示分行折行）、`src/cpp/main.cpp`（框架默认日志关闭、两处钩子复查）、`src/cpp/hooking/HookSupport.{h,cpp}` + `Hooks.cpp`（跟跳转链、远跳桩、自写分支、读回与复查、外来跳转上报）、`src/cpp/hooking/Patches.cpp`（首次命中与被错发的 visitor 各记一次）。引擎语义（贴件、槽位清理、`.tri` 推导、场景套装、策略）一行未改。
+- **兼容性审计**：`build/audit-hotkey-input-1.5.76.md` 逐项核对了输入层用到的地址库 ID 与虚表槽位在 SE 1.5.97 / AE 1.6.1170 上的偏移，结论是不需要为兼容性另开分支；1.5.78 起新增的跳转链与远跳桩全部走运行时自校验（`Readable` / `Executable` / `BranchInRange`），失败只禁用单条钩子并写日志。
+- **回退**：装 1.5.65 的成品包即可（`VERSIONS.md` 有大小与哈希）。
 # 交付说明（DELIVERY）
 
-## 1.5.45 最新交付准备（2026-11-21）
+## 1.5.45 交付准备（历史，被 1.5.81 取代）
 
 **验证状态（1.5.45）**：**尚未实机验证**。用户 m10869 提两件事：①「金件」页的「按 FormID 添加单件」改成「按 ESP 添加单件」—— 先选该单件所属 ESP，再弹出该 ESP 里所有符合条件的装备，点一件就加入；左侧金件组被选中时，右侧的「添加单件」同样改成这个操作。②「幻化」页的「从 ESP 生成套装」要能兼容同一个 ESP 里有多套服装：按服装名字判断，同一套服装前面几个字段通常相同。本版只动这两处（`src/core/EspOutfits.cpp` 重写分组逻辑、`src/cpp/MenuUI.cpp` 金件页两处添加入口改成装备列表、`src/cpp/I18n.cpp` 补译文），引擎侧（注入壳 / 贴件语义 / 槽位清理 / `.tri` 推导 / 场景套装 / 钩子安装）一行未改。
 

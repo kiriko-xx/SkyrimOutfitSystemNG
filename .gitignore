@@ -355,3 +355,7 @@ dist/
 mod_files/SKSE/Plugins/SkyrimOutfitSystemSE_Web
 mod_files/SKSE/Plugins/SkyrimOutfitSystemSE_Web.zip
 %SystemDrive%/
+
+# 交付包不进源码树：包只留在本地构建机（GitHub 上只放源码与 dist 文档模板）
+SkyrimOutfitSystemNG-*.zip
+SkyrimOutfitSystemNG-*.zip.sha256

@@ -1,3 +1,23 @@
+## [1.5.81] - 2026-11-26
+
+### 修：热键录制独占输入、能力键按当前选中判定、钩子与别的插件共存（m07787 / m08192 / m09015 / m09153 / m09267）
+
+**用户原话**：「你直接把FreeClimb设置热键窗口的代码复制过来复用！不要再带你的猜测！」「手柄的LT,RT录不进去，按住时不会显示，这个bug属于两个手柄设置窗口都有。」「启动加载时直接弹窗报错，点确定后游戏退出……要从根本上解决错误。」
+
+- **热键录制（重做）**：移植 Eelta/FreeClimb（提交 `8a48ffe`）的 `BindingCapture` 集合语义 —— 记录的是「同时按住的键集合」，全部松开才确认；松开一个又按一个是「不是同时按下」，不再把先按下的修饰键当结果。判定改成两组：`waiting`（等开窗那一下的激活键松开）→ `armed`（采样）。
+- **录制期间独占输入**：改成在产生输入的设备 Poll 槽（`BSWin32KeyboardDevice` / `BSPCGamepadDeviceHandler` 的 `Process`）里，从 `BSInputEventQueue` 链表上把事件摘掉，事件在任何 sink / SKSE Menu Framework / ImGui 之前就消失，所以 Esc 只取消录制、手柄 B 不返回上一层、LB 不关菜单。
+- **手柄读数按 XInput 真实布局**：`PadState` 与 `XINPUT_GAMEPAD` 对齐（`WORD wButtons` + 两个 `BYTE` 扳机），并加 `static_assert(sizeof(PadState) == 16)`；以前多写了 2 字节，把两个扳机挤到摇杆字节里，导致 LT/RT 恒为 0、按住不显示。扳机按行程阈值判定。
+- **手柄组合键按按下顺序显示**：新增录制期间的按下次序表，组合键的显示顺序跟着手指走，不再按位掩码从低到高排（以前会显示成「十字键+LB」）。
+- **热键状态问设备、不问输入 sink**：「是否按住」改为直接问键盘状态 / XInput，不再依赖 sink 记住的按键集合（那份集合在弹窗吃掉 key-up 后会残留，导致只按 Alt 就凑齐整条 chord 误触发）。
+- **能力键的条件判定（键盘回归修复）**：只有当「Change Outfit」这个能力当前被选中时，能力键与快速选择键才归本插件，否则原样交给游戏；键盘与手柄走同一个判定。
+- **快速选择窗口**：Esc 与 Tab 都能关闭；底部键位提示按键盘 / 手柄分成两行，`CalcTextSize` 超过可用宽度时自动折行。
+- **不再多生成一份日志**：`main.cpp` 的 `SKSE::Init` 传 `InitInfo{ .log = false }`，框架默认 logger 不再生成只有一行版本号的 `SkyrimOutfitSystemNG.log`。
+- **钩子与别的插件共存（1.5.78–1.5.81）**：别的插件抢先钩住幻化显示函数时（真实案例 InventoryLagFix.dll 钩 `InventoryChanges::ExecuteVisitorOnWorn`），`FollowEntryJumps()` 顺着 `E9` / `EB` / `FF 25` 跳转链跟到真落点再钩；落点离跳板超 2 GB 时 `AllocateFarStub()` 在站点旁分配远跳桩（14 字节 `FF 25 [rip+0]`）接过去；5 字节分支改由 `WriteBranchTo()` 自己写、不再经 `Trampoline::write_branch`（AE 上它给站点与自己的槽位算位移，跨 DLL 站点直接 `report_and_fail` 退出游戏）；写完 `VerifyBranch()` 读回，`VerifyInstalledSites()` 在 data loaded 与 post load game 各复查一次，被覆盖时 `FollowEntryJumps()` 点名接管的插件；幻化装不上时弹「本次会话幻化不可用」提示框。
+- **守卫测试**：`tests/hotkey_capture.ps1`、`tests/ae_worn_pass.ps1`、`tests/quick_picker_exit.ps1` 等 32 个脚本覆盖上述每条约束（含 `Assert-Absent` 断言旧的失败写法确实已消失）。
+
+## [1.5.66 – 1.5.80] - 2026-11-25 / 2026-11-26（测试包线，未单独发布）
+
+只出过 `-test` 包，逐版实机验证后并入 1.5.81。要点：1.5.66–1.5.72 热键录制窗口成形（录制弹窗、手柄能力键掩码双形态、录制窗吞掉全部输入）；1.5.73 照 FreeClimb 改成设备 vtable 钩 + 队列摘事件；1.5.74 曾退回 ImGui 抑制（实测 Esc 仍关菜单，已否决）；1.5.75 恢复队列过滤并修掉「取结果时把录制器重置」的 bug；1.5.76 修组合键语义、PadState 布局、显示顺序；1.5.77 关掉框架默认日志、快速选择 Esc/Tab 退出、提示分行折行；1.5.78 跟跳转链；1.5.79 远跳桩；1.5.80 自写 5 字节分支 + 幻化不可用提示框。
 # 更新日志（CHANGELOG）
 
 ## [1.5.56] - 2026-11-22
