@@ -1,16 +1,18 @@
 $ErrorActionPreference = 'Stop'
-# Static guard for the AE 1.6.1170 attach path (1.5.61): the skinning pass is reached by
-# hooking the worn visitor at its own entry (no call site inside the game routine, which
-# other plugins patch as well), the trampoline copies a prologue that is safe to relocate,
-# the stub depends on no register the engine happens to hold, only the filling pass (by
-# visitor vtable) may write the biped, the deferred pass never fills a biped itself while
-# the hook is installed - that is what produced the see-through body on 1.6.1170 - and a
-# site that another plugin moved out of the executable is reached through a stub next to
-# the site, because the trampoline sits next to the game and a dll can be mapped anywhere
-# (SE 1.5.97, InventoryLagFix.dll + 0x2B70, 1.5.78). The five-byte branch is written by
-# this plugin itself: CommonLib write_branch routes it through a slot next to the
-# executable and ends the process when the site is out of that slot's reach, which killed
-# the game at startup on AE 1.6.1170 (1.5.79, "displacement is out of range").
+# Static guard for the skinning hook (1.5.85). The illusion rests on one hook, on the
+# entry of TESObjectARMO::ApplyArmorAddon: the game's own arguments (armour, weight model)
+# are handed to the decision, the actor is read out of the biped the engine is filling, the
+# display set is attached at the first piece of a pass, and a piece is never hidden when it
+# is the actor's skin. The entry is checked against the prologue this hook was written for
+# before anything is written, a prologue that is safe to relocate is copied, the stub reads
+# no register the engine happens to hold, the five-byte branch is written by this plugin
+# itself (CommonLib write_branch routes it through a slot next to the executable and ends
+# the process when the site is out of that slot's reach: 1.5.79, "displacement is out of
+# range"), and a site another plugin moved out of the executable is reached through a stub
+# next to the site (SE 1.5.97, InventoryLagFix.dll + 0x2B70, 1.5.78). The worn visitor is no
+# longer hooked at all: on a machine where another plugin had rewritten the function that
+# call was reached through, the code behind that branch did not keep the game function's
+# arguments, which is how 1.5.81 to 1.5.83 crashed or displayed nothing.
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $failures = 0
 
@@ -34,7 +36,8 @@ function Assert-Absent([string]$text, [string]$needle, [string]$label) {
 
 function Get-Block([string]$text, [string]$startMarker, [string]$endMarker, [string]$label) {
     $start = $text.IndexOf($startMarker)
-    $end = $text.IndexOf($endMarker)
+    if ($start -lt 0) { throw "cannot locate $label" }
+    $end = $text.IndexOf($endMarker, $start)
     if ($start -lt 0 -or $end -le $start) { throw "cannot locate $label" }
     return $text.Substring($start, $end - $start)
 }
@@ -72,49 +75,61 @@ Assert-Contains $supportH 'bool WriteBranchTo(const char* a_hook, std::uintptr_t
 Assert-Contains $supportH 'std::string ModuleOwner(' 'the module owner helper is declared'
 
 $hooks = Read-RepoFile 'src/cpp/hooking/Hooks.cpp'
-$customBlock = Get-Block $hooks 'namespace CustomSkinPlayer {' 'namespace FixEquipConflictCheck' 'the CustomSkinPlayer hook block'
-Assert-Contains $hooks 'REL::RelocationID InventoryChanges_ExecuteVisitorOnWorn(15856, 16096);' 'the worn visitor is addressed through the address library'
-Assert-Contains $hooks 'REL::RelocationID WornVisitorVTable(241890, 195851);' 'the worn visitor vtable is declared for both runtimes'
-Assert-Contains $customBlock 'CopyableEntryLength(entry, kStolen)' 'the entry prologue is checked before it is copied'
-Assert-Contains $customBlock 'db(reinterpret_cast<const std::uint8_t*>(a_entry), a_copied);' 'the trampoline carries a copy of the game prologue'
-Assert-Contains $customBlock 'call(ptr[rip + f_trampoline]);' 'the stub calls the copied prologue instead of the game function'
-Assert-Contains $customBlock 'push(rcx);' 'the stub keeps the arguments across the vanilla pass'
-Assert-Contains $customBlock 'push(rdx);' 'the stub keeps the visitor across the vanilla pass'
-Assert-Contains $customBlock 'mov(rcx, ptr[rsp + 8]);' 'the stub reads the inventory changes from the stack'
-Assert-Contains $customBlock 'mov(rdx, ptr[rsp]);' 'the stub reads the visitor from the stack'
-Assert-Contains $customBlock 'ret();' 'the entry stub returns to the caller of the game function'
-Assert-Contains $customBlock 'Install("custom skin player", entry, gen)' 'the hook is written to the entry of the worn visitor'
-Assert-Contains $customBlock 'SetWornVisitorVTable(WornVisitorVTable.address());' 'the resolved vtable is handed to the attach code'
-Assert-Contains $customBlock 'FollowEntryJumps("CustomSkinPlayer", declared)' 'a hook already placed at the entry by another plugin is chained instead of giving up'
-Assert-Absent $customBlock 'const auto entry = InventoryChanges_ExecuteVisitorOnWorn.address();' 'the entry is no longer hooked without looking at what sits there'
+$armourBlock = Get-Block $hooks 'namespace DontVanillaSkinPlayer {' 'namespace ShimWornFlags' 'the armour pass hook block'
+Assert-Contains $hooks 'REL::RelocationID TESObjectARMO_ApplyArmorAddon(17392, 17792);' 'the armour pass is addressed through the address library, at its entry'
+Assert-Contains $armourBlock 'inline constexpr std::uint8_t kArmourPassPrologue[]' 'the prologue of the armour pass is pinned in the code'
+Assert-Contains $armourBlock 'EntryMatches("DontVanillaSkinPlayer", entry, kArmourPassPrologue, sizeof(kArmourPassPrologue))' 'the entry is checked against that prologue before anything is written'
+Assert-Contains $armourBlock 'CopyableEntryLength(entry, kStolen)' 'the prologue is checked before it is copied'
+Assert-Contains $armourBlock 'mov(rdx, r8);' 'the weight model the game passes is handed to the decision'
+Assert-Contains $armourBlock 'call(ptr[rip + f_Decide]);' 'the decision is a call into this plugin'
+Assert-Contains $armourBlock 'xor_(eax, eax);' 'a hidden piece returns without putting anything on the biped'
+Assert-Contains $armourBlock 'db(reinterpret_cast<const std::uint8_t*>(a_stolen), a_stolenLength);' 'the trampoline carries a copy of the game prologue'
+Assert-Contains $armourBlock 'jmp(ptr[rip]);' 'the trampoline jumps back into the game function'
+Assert-Contains $armourBlock 'Install("armour pass", entry, gen)' 'the hook is written to the entry of the armour pass'
+Assert-Contains $armourBlock 'g_customSkinPlayerInstalled = g_dontVanillaSkinPlayerInstalled;' 'both halves are the same hook, so they can no longer be half installed'
+Assert-Absent $hooks 'REL::RelocationID InventoryChanges_ExecuteVisitorOnWorn(15856, 16096);' 'the worn visitor is no longer hooked'
+Assert-Absent $hooks 'WornVisitorVTable(241890, 195851)' 'the worn visitor vtable is no longer needed'
+Assert-Absent $hooks 'namespace CustomSkinPlayer {' 'there is no second skinning hook to install'
+Assert-Absent $armourBlock 'FindVerifiedCall(' 'no call site inside the game routine is fingerprinted any more'
+Assert-Absent $armourBlock 'mov(rdx, r13)' 'no register the caller happens to keep the actor in is trusted'
+Assert-Absent $armourBlock 'mov(rdx, r15)' 'no register the caller happens to keep the actor in is trusted'
 Assert-Contains $hooks 'auto branchTarget = reinterpret_cast<std::uintptr_t>(code);' 'the branch target is what the site is patched with'
 Assert-Contains $hooks 'branchTarget = AllocateFarStub(a_name, a_site, branchTarget);' 'a site out of reach of the trampoline is bridged with a far stub instead of disabling the hook'
 Assert-Contains $hooks 'if (!WriteBranchTo(a_name, a_site, branchTarget)) {' 'the five-byte branch is written by this plugin, not routed through the trampoline slot of CommonLib'
 Assert-Absent $hooks 'g_branchTrampoline->write_branch<5>' 'no hook goes through write_branch, whose slot next to the executable ends the process for a far site (1.5.79, AE 1.6.1170: displacement is out of range)'
 Assert-Contains $hooks 'WriteBranchTo("RTTIPrinter", InventoryChanges_ExecuteVisitorOnWorn_Hook' 'the debug RTTI hook writes its branch the same way'
-Assert-Contains $hooks 'ShowIllusionUnavailable();' 'a session without the hooks says so in a box at startup instead of looking healthy'
+Assert-Contains $hooks 'ShowIllusionUnavailable();' 'a session without the hook says so in a box at startup instead of looking healthy'
 Assert-Contains $hooks '::LoadLibraryW(L"user32.dll")' 'the box is resolved at run time, so the plugin gains no import dependency'
 Assert-Absent $hooks 'is out of reach of the trampoline stub; this hook stays disabled so the game keeps running.' 'the hook is no longer given up when the site is far away'
-Assert-Absent $customBlock 'FindWornPassCall(' 'the call site inside the game routine is no longer scanned'
-Assert-Absent $customBlock 'the display set will be attached from the deferred pass' 'a missing display half is no longer advertised as a working deferred pass'
-Assert-Absent $customBlock 'mov(rdx, rdi);' 'the stub no longer trusts rdi (AE holds a different object there)'
-Assert-Absent $customBlock 'mov(rdx, r15);' 'the stub no longer trusts r15'
-Assert-Contains $customBlock 'jmp(ptr[rip]);' 'the trampoline jumps back into the game function'
 
 $patches = Read-RepoFile 'src/cpp/hooking/Patches.cpp'
-$attachBlock = Get-Block $patches 'void CustomFromWornPass(' '// Called from the main thread, outside any skinning pass.' 'CustomFromWornPass'
-Assert-Contains $attachBlock 'PassBiped(a_visitor)' 'the pass is identified by the visitor it was handed'
-Assert-Contains $attachBlock 'LogForeignVisitor(a_visitor);' 'a pass this build does not know is named instead of being left alone silently'
-Assert-Contains $attachBlock 'the worn pass hook has been reached' 'the first hit is reported, so a log tells the hook apart from a hook that never fires'
-Assert-Contains $patches 'std::atomic_bool g_wornPassHitLogged{ false };' 'the first hit is announced once'
-Assert-Contains $patches 'the hooked worn pass was handed a visitor with vtable' 'an unexpected visitor vtable is logged'
-Assert-Absent $attachBlock 'actor->GetBiped(false).get()' 'no fallback to the third person biped from inside the hook'
-Assert-Contains $attachBlock 'static thread_local bool inPass = false;' 're-entry from the pass itself is blocked'
-Assert-Contains $attachBlock 'RecordSiteHookHit(actor->GetFormID());' 'a pass that reaches the actor is recorded'
-Assert-Contains $patches 'reinterpret_cast<std::uintptr_t>(a_visitor) + 0x18' 'the biped is taken from the visitor layout'
+$decideBlock = Get-Block $patches 'bool ShouldHideForModel(RE::TESObjectARMO* a_armor' '}// namespace DontVanillaSkinPlayer' 'the armour pass decision'
+Assert-Contains $decideBlock 'if (g_attachDepth > 0) return false;' 'the pieces being attached are never hidden'
+Assert-Contains $decideBlock 'ResolveModelOwner(a_model)' 'the actor is resolved from the weight model'
+Assert-Contains $decideBlock 'if (a_armor == actor->GetSkin()) return false;' 'the skin is never hidden - hiding it is what left an empty preset with a head only (1.5.82)'
+Assert-Contains $decideBlock 'AttachFromHook(actor, a_model);' 'the display set is attached from inside the pass'
+Assert-Contains $decideBlock 'return ShouldOverride(a_armor, actor);' 'hidden pieces are still decided by the display set'
+Assert-Contains $decideBlock 'catch (...)' 'an exception inside the hook cannot take the game down'
+Assert-Contains $decideBlock 'LogThrown("ShouldHideForModel");' 'and it is reported instead of passing silently'
+Assert-Contains $patches 'RE::Actor* ResolveModelOwner(RE::ActorWeightModel* a_model)' 'the weight model is resolved to its owner'
+Assert-Contains $patches 'auto* biped = reinterpret_cast<RE::BipedAnim* const*>(a_model)[0];' 'the biped is the first member of the weight model'
+Assert-Contains $patches 'auto* owner = biped->actorRef.get().get();' 'the actor is read from the handle the engine itself keeps in the biped'
+Assert-Contains $patches 'owner->formType != RE::FormType::ActorCharacter' 'the handle is checked before it is cast'
+Assert-Contains $patches 'actor->GetBiped(false).get() != biped && actor->GetBiped(true).get() != biped' 'a biped that belongs to nobody is left alone'
+Assert-Contains $patches 'bool FirstCallOfPass(const void* a_model)' 'a pass is recognised by the gap between its calls'
+Assert-Contains $patches 'kPassGap = std::chrono::milliseconds(8)' 'that gap is one constant'
+Assert-Contains $patches '++g_attachDepth;' 'the attach is re-entered by its own ApplyArmorAddon calls'
+Assert-Contains $patches 'RecordSiteHookHit(a_actor->GetFormID())' 'an actor that comes through the pass is recorded'
+Assert-Contains $patches 'void LogThrown(const char* a_where)' 'a caught exception is counted and reported'
 Assert-Contains $patches 'std::uint32_t StagedSlots(' 'the applied slots are read back'
 Assert-Contains $patches 'const auto staged = StagedSlots(anim, armor);' 'a piece is judged by what landed in the biped'
 Assert-Absent $patches 'if (!RE::TESObjectARMOAugments::ApplyArmorAddon' 'ApplyArmorAddon no longer gates on its return value'
+Assert-Absent $patches 'PassBiped(' 'the biped is no longer taken from a visitor'
+Assert-Absent $patches 'LogForeignVisitor(' 'an unexpected visitor is no longer the shape of the failure'
+Assert-Absent $patches 'CustomFromWornPass(' 'the worn pass is no longer hooked'
+Assert-Absent $patches 'SetWornVisitorVTable(' 'the worn visitor vtable is gone'
+Assert-Absent $patches 'reinterpret_cast<std::uintptr_t>(a_visitor) + 0x18' 'nothing reads a biped out of a visitor any more'
+Assert-Absent $patches 'ShouldOverride: Failed to cast target to Actor.' 'a cast failure no longer hides the piece it could not attribute'
 Assert-Contains $patches 'SiteHookHitRecently(id)' 'the deferred attach keeps running when the hook never fires'
 $drainBlock = Get-Block $patches 'void DrainAttachPending()' 'void SetSiteHookInstalled' 'DrainAttachPending'
 Assert-Contains $drainBlock '::OutfitSystem::refreshArmorFor(actor);' 'the deferred pass rebuilds the equipment while the hook is installed'
@@ -149,8 +164,8 @@ if (([regex]::Matches($main, 'Hooking::VerifyInstalledSites\(\);')).Count -lt 2)
 $version = Read-RepoFile 'src/cpp/include/version.h'
 if ($version -match 'SKYRIMOUTFITSYSTEMNG_VERSION_PATCH\s+(\d+)') {
     $patch = [int]$Matches[1]
-    if ($patch -lt 61) {
-        Write-Output "FAIL the worn visitor entry hook arrived in 1.5.61 (found 1.5.$patch)"
+    if ($patch -lt 85) {
+        Write-Output "FAIL the single armour-pass hook arrived in 1.5.85 (found 1.5.$patch)"
         $failures++
     }
 } else {

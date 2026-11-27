@@ -136,9 +136,11 @@ namespace Hooking {
             auto svc = outfit_service_get_singleton_ptr();
             auto actor = skyrim_cast<RE::Actor*>(target);
             if (!actor) {
-                // Actor failed to cast...
-                LOG(warn, "ShouldOverride: Failed to cast target to Actor.");
-                return true;
+                // Not hiding anything for a target that cannot be shown to be an actor:
+                // hiding without being able to attach the display set is how a player ends
+                // up in their underwear.
+                LOG(warn, "ShouldOverride: the target is not an actor, so nothing is hidden for it.");
+                return false;
             }
             auto outfit = svc->inner().current_outfit_ptr(actor->GetFormID());
             if (!outfit) return false;
@@ -147,15 +149,17 @@ namespace Hooking {
             if (inventory) {
                 RE::InventoryChangesAugments::ExecuteAugmentVisitorOnWorn(inventory, &visitor);
             } else {
-                LOG(warn, "ShouldOverride: Unable to get target inventory.");
-                return true;
+                LOG(warn, "ShouldOverride: the worn items of the target cannot be read, so nothing is hidden for it.");
+                return false;
             }
             // Block the item (return true) if the item isn't in the display set.
                         auto displaySet = outfit->compute_display_set_c(rust::Slice{visitor.equipped.data(), visitor.equipped.size()});
             for (const auto displayItem: displaySet) {
                 if (displayItem.ptr == armor) return false;
             }
-            // This piece is being hidden, so the illusion has to take its place.
+            // This piece is being hidden; the display set is attached from inside the same
+            // pass, and the deferred pass stays as the fallback for actors whose skinning
+            // routine never reaches ApplyArmorAddon again.
             CustomSkinPlayer::MarkAttachPending(actor);
             return true;
         }
@@ -281,10 +285,104 @@ namespace Hooking {
             LOG(warn, "Custom: ApplyArmorAddon refused {:08X} (slot mask 0x{:08X}) for weight model 0x{:X}; that slot stays empty. Report this line together with the game version.", a_armor->GetFormID(), a_armor->GetSlotMask().underlying(), reinterpret_cast<std::uintptr_t>(a_model));
         }
 
-        // The vtable of the visitor of the pass this hook sits on, reported by the
-        // installer. A visitor of any other pass - the checker object AE 1.6.1170 calls
-        // the same function with - is rejected by it.
-        std::atomic<std::uintptr_t> g_wornVisitorVTable{ 0 };
+        void CustomOne(RE::Actor* a_actor, RE::ActorWeightModel* a_model);
+        void RecordSiteHookHit(RE::FormID a_actor);
+
+        // How deep the display set is being attached. CustomOne itself calls
+        // ApplyArmorAddon, which comes back through the hook this file installs, and
+        // those calls must never be hidden - they are the pieces being put on.
+        thread_local int g_attachDepth = 0;
+
+        // The first ApplyArmorAddon call of a skinning pass belongs to the pass, the rest
+        // of the calls of that pass follow within microseconds; the next pass is at least
+        // a frame away. So a gap decides when the display set is attached: at the start of
+        // a pass, before the engine has written the slots this plugin does not own.
+        struct PassMark
+        {
+            const void* model;
+            std::chrono::steady_clock::time_point last;
+        };
+        thread_local std::array<PassMark, 4> g_passMarks{};
+        inline constexpr auto kPassGap = std::chrono::milliseconds(8);
+
+        bool FirstCallOfPass(const void* a_model) {
+            const auto now = std::chrono::steady_clock::now();
+            PassMark* slot = nullptr;
+            for (auto& mark : g_passMarks) {
+                if (mark.model == a_model) { slot = &mark; break; }
+            }
+            if (slot) {
+                if (now - slot->last < kPassGap) { slot->last = now; return false; }
+                slot->last = now;
+                return true;
+            }
+            for (auto& mark : g_passMarks) {
+                if (mark.model == nullptr) { mark.model = a_model; mark.last = now; return true; }
+            }
+            // Every slot is in use: replace the one that has been quiet the longest.
+            PassMark* oldest = &g_passMarks[0];
+            for (auto& mark : g_passMarks) {
+                if (mark.last < oldest->last) oldest = &mark;
+            }
+            oldest->model = a_model;
+            oldest->last = now;
+            return true;
+        }
+
+        // Something inside a hook threw. MSVC's dynamic_cast throws
+        // std::__non_rtti_object when the pointer is readable but carries no RTTI - the
+        // shape one player's stack had when 1.5.81 read an actor from a register of a
+        // relocated call site - and an exception that leaves a hook frame takes the game
+        // down. Every entry point below catches, and this makes sure it is not silent.
+        void LogThrown(const char* a_where) {
+            static std::atomic<std::uint32_t> count{ 0 };
+            const auto seen = count.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (seen == 1 || seen % 100 == 0) {
+                LOG(err, "{}: an exception was caught inside this hook ({} time(s) so far); the call was ignored so the game keeps running.", a_where, seen);
+            }
+        }
+
+        // The actor a weight model is being built for. The engine keeps the handle of the
+        // owner in the biped itself (checked in both executables: written right after the
+        // skinning setup, read back by the engine's own lookup), so nothing here depends on
+        // a caller's registers. The model is only accepted when its biped really is one of
+        // this actor's two bipeds, which rules out preview models and actors whose biped is
+        // somewhere else.
+        RE::Actor* ResolveModelOwner(RE::ActorWeightModel* a_model) {
+            if (!a_model || !IsReadableObject(a_model)) return nullptr;
+            auto* biped = reinterpret_cast<RE::BipedAnim* const*>(a_model)[0];
+            if (!biped || !IsReadableObject(biped)) return nullptr;
+            auto* owner = biped->actorRef.get().get();
+            if (!owner || !IsReadableObject(owner)) return nullptr;
+            if (owner->formType != RE::FormType::ActorCharacter) return nullptr;
+            auto* actor = skyrim_cast<RE::Actor*>(owner);
+            if (!actor) return nullptr;
+            if (actor->GetBiped(false).get() != biped && actor->GetBiped(true).get() != biped) return nullptr;
+            return actor;
+        }
+
+        void DiagnoseMissingOwner(RE::ActorWeightModel* a_model) {
+            static std::atomic<std::uint32_t> count{ 0 };
+            const auto seen = count.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (seen == 1) {
+                LOG(warn, "ShouldHideForModel: the weight model 0x{:X} does not belong to an actor this plugin can identify, so it is left alone. Report this line together with the game version.", reinterpret_cast<std::uintptr_t>(a_model));
+            } else if (seen % 100 == 0) {
+                LOG(debug, "ShouldHideForModel: {} call(s) for weight models this plugin cannot attribute to an actor so far.", seen);
+            }
+        }
+
+        void AttachFromHook(RE::Actor* a_actor, RE::ActorWeightModel* a_model) {
+            if (!a_actor || !a_model) return;
+            if (!FirstCallOfPass(a_model)) return;
+            if (!ShouldOverrideSkinning(a_actor)) return;
+            RecordSiteHookHit(a_actor->GetFormID());
+            ++g_attachDepth;
+            struct DepthReset
+            {
+                ~DepthReset() { --g_attachDepth; }
+            } reset;
+            CustomOne(a_actor, a_model);
+        }
 
         // What ApplyArmorAddon put in the biped for one piece. The bool it returns is not
         // a render signal: it is false for every piece whose armatures cover fewer slots
@@ -336,43 +434,6 @@ namespace Hooking {
         void ForgetSiteHookHit(RE::FormID a_actor) {
             std::lock_guard lock(g_hitMutex);
             g_siteHookHit.erase(a_actor);
-        }
-
-        // The visitor the worn pass is handed starts with its vtable and keeps the biped
-        // being filled as its fourth member; SE 1.5.97 and AE 1.6.1170 lay it out the same
-        // way. Checking the vtable first keeps a visitor of another pass from being read.
-        RE::BipedAnim* PassBiped(RE::InventoryChanges::IItemChangeVisitor* a_visitor) {
-            if (!a_visitor) return nullptr;
-            const auto vtable = g_wornVisitorVTable.load(std::memory_order_relaxed);
-            if (vtable == 0) return nullptr;
-            if (*reinterpret_cast<const std::uintptr_t*>(a_visitor) != vtable) return nullptr;
-            return *reinterpret_cast<RE::BipedAnim**>(reinterpret_cast<std::uintptr_t>(a_visitor) + 0x18);
-        }
-
-        // "The hook is installed" and "the hook is reached" are two different facts, and a
-        // player log that only shows the first one cannot tell a pass that never runs for
-        // this actor from a hook that never fires. Announced once.
-        std::atomic_bool g_wornPassHitLogged{ false };
-
-        // Same blind spot one level deeper: a visitor whose vtable this build does not
-        // record means the hook sits on a pass other than the one that fills the biped, and
-        // then nothing is displayed without a word. Each unexpected vtable is logged once,
-        // so the log names it without growing with every skinning update.
-        std::mutex g_foreignVisitorMutex;
-        std::unordered_set<std::uintptr_t> g_foreignVisitorVTable{};
-
-        void LogForeignVisitor(RE::InventoryChanges::IItemChangeVisitor* a_visitor) {
-            if (!a_visitor) return;
-            const auto expected = g_wornVisitorVTable.load(std::memory_order_relaxed);
-            if (expected == 0) return;
-            const auto actual = *reinterpret_cast<const std::uintptr_t*>(a_visitor);
-            if (actual == expected) return;
-            {
-                std::lock_guard lock(g_foreignVisitorMutex);
-                if (g_foreignVisitorVTable.size() > 64) return;
-                if (!g_foreignVisitorVTable.insert(actual).second) return;
-            }
-            LOG(warn, "CustomSkinPlayer: the hooked worn pass was handed a visitor with vtable 0x{:X}, but this build records 0x{:X} for the pass that fills the biped; that pass is left alone. Report this line together with the game version.", actual, expected);
         }
 
         // The store revision changes whenever an outfit is created, edited or
@@ -635,51 +696,6 @@ namespace Hooking {
             Custom(actor, nullptr);
         }
 
-        // Entry point used by the hook on the worn pass. Everything comes out of the two
-        // arguments the game passed, so the injected code carries no register contract that
-        // breaks whenever a runtime keeps the actor or the model somewhere else.
-        //
-        // The hook sits on the entry of the worn visitor itself, which every pass of every
-        // actor runs through, so the visitor is judged before anything else: only the one
-        // whose vtable this build recorded fills the biped this plugin may write. The other
-        // passes - in particular the checker pass of AE 1.6.1170 - are left alone, because
-        // writing a biped outside the pass that builds it produces parts the game never
-        // finishes (on 1.6.1170 that was a see-through body with no feet).
-        void CustomFromWornPass(RE::InventoryChanges* a_inventory, RE::InventoryChanges::IItemChangeVisitor* a_visitor) {
-            // ApplyArmorAddon and the worn-form lookup walk worn items themselves, so this
-            // function can be re-entered from inside itself; the second entry has to do
-            // nothing at all.
-            static thread_local bool inPass = false;
-            if (inPass) return;
-            inPass = true;
-            struct Reset
-            {
-                bool& flag;
-                ~Reset() { flag = false; }
-            } reset{ inPass };
-
-            if (!a_inventory || !a_visitor) return;
-            if (!g_wornPassHitLogged.exchange(true, std::memory_order_relaxed)) {
-                LOG(info, "CustomSkinPlayer: the worn pass hook has been reached, so the display set is attached from inside the pass that fills the biped.");
-            }
-            auto* anim = PassBiped(a_visitor);
-            if (!anim) {
-                LogForeignVisitor(a_visitor);
-                return;// another pass: its biped is none of this plugin's business
-            }
-            auto* owner = a_inventory->owner;
-            if (!ShouldOverrideSkinning(owner)) return;
-            auto* actor = skyrim_cast<RE::Actor*>(owner);
-            if (!actor) return;
-            // This actor really came through the hooked pass, so the deferred attach is not
-            // needed for it while it keeps doing so.
-            RecordSiteHookHit(actor->GetFormID());
-            // ApplyArmorAddon reads this pointer and never keeps it, so a temporary stands
-            // in for the engine struct exactly like the address of the caller's own holder.
-            RE::BipedAnim* holder = anim;
-            CustomOne(actor, reinterpret_cast<RE::ActorWeightModel*>(&holder));
-        }
-
         // Called from the main thread, outside any skinning pass. A pass is not the only
         // thing that can empty the biped: a scene framework that strips the actor edits
         // the biped directly, and then nothing puts the illusion back until the player
@@ -761,10 +777,6 @@ namespace Hooking {
             g_siteHookInstalled.store(a_installed, std::memory_order_relaxed);
         }
 
-        void SetWornVisitorVTable(std::uintptr_t a_vtable) {
-            g_wornVisitorVTable.store(a_vtable, std::memory_order_relaxed);
-        }
-
         bool SiteHookInstalled() {
             return g_siteHookInstalled.load(std::memory_order_relaxed);
         }
@@ -805,6 +817,47 @@ namespace Hooking {
             tasks->AddTask([]() { DrainAttachPending(); });
         }
     }// namespace CustomSkinPlayer
+
+    // The decision the armour-pass hook makes for one piece: hide it (true) or let the
+    // vanilla pass build it normally (false), and the same call attaches the display set.
+    //
+    // Where this sits is the whole point of 1.5.85. 1.5.81 hooked a call site inside the
+    // skinning routine, found by a byte fingerprint, and hooked it anyway when the
+    // fingerprint did not match - on one player's machine another plugin had rewritten
+    // that call, the register the injected code read the actor from held something else,
+    // and the std::__non_rtti_object from the cast came out of the hook and took the game
+    // down. Here the game's own arguments are used (the armour and the weight model of the
+    // pass that is running), and the actor comes out of the biped itself.
+    namespace DontVanillaSkinPlayer {
+        bool ShouldHideForModel(RE::TESObjectARMO* a_armor, RE::ActorWeightModel* a_model) {
+            using namespace CustomSkinPlayer;
+            if (g_attachDepth > 0) return false;// the pieces being attached are not to be hidden
+            if (!a_armor || !a_model) return false;
+            if (!IllusionDisplayEnabled()) return false;
+            if (SOS::GameState::IsLoading()) return false;
+            try {
+                auto* actor = ResolveModelOwner(a_model);
+                if (!actor) {
+                    DiagnoseMissingOwner(a_model);
+                    return false;
+                }
+                // The skin armour builds the body, head, hands and feet of every actor and
+                // is never part of an outfit; hiding it leaves a hole in the body. This one
+                // line is what 1.5.82 was missing: it hid the skin too, which turned an
+                // empty preset into a head-only body and left other presets without hands
+                // or feet.
+                if (a_armor == actor->GetSkin()) return false;
+                // Attaching happens once per pass, at its first piece, so the outfit-only
+                // pieces are written before the engine fills the rest of the slots.
+                AttachFromHook(actor, a_model);
+                return ShouldOverride(a_armor, actor);
+            } catch (...) {
+                LogThrown("ShouldHideForModel");
+                return false;// never hide a piece on a path that already went wrong
+            }
+        }
+    }// namespace DontVanillaSkinPlayer
+
 
     namespace FixEquipConflictCheck {
         //

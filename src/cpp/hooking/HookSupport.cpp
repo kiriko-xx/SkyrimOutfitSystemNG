@@ -554,6 +554,35 @@ namespace Hooking
 		return used;
 	}
 
+	bool EntryMatches(const char* a_hook, std::uintptr_t a_entry, const std::uint8_t* a_expected, std::size_t a_size)
+	{
+		if (!a_entry || !a_expected || a_size == 0) return false;
+		if (!Readable(a_entry, a_size)) {
+			LOG(critical, "{}: the {} byte(s) at the entry of the function this hook needs ({}) cannot be read; this hook stays disabled so the game keeps running.", a_hook, a_size, ModuleOwner(a_entry));
+			return false;
+		}
+		const auto* actual = reinterpret_cast<const std::uint8_t*>(a_entry);
+		if (std::equal(a_expected, a_expected + a_size, actual)) {
+			LOG(debug, "{}: the entry at {} holds the prologue this hook was written for.", a_hook, ModuleOwner(a_entry));
+			return true;
+		}
+		// A branch at the entry is another plugin's hook, not a wrong address: chaining onto
+		// it is what 1.5.79 to 1.5.84 did for the worn visitor, and on a player machine that
+		// detour did not even keep the game function's argument in rdx, so the code behind it
+		// cannot be hooked as if it were the game function. Say which case this is.
+		const bool branched = actual[0] == 0xE9 || actual[0] == 0xEB ||
+			(a_size >= 2 && actual[0] == 0xFF && actual[1] == 0x25) ||
+			(a_size >= 3 && actual[0] == 0x48 && actual[1] == 0xFF && actual[2] == 0x25);
+		if (branched) {
+			LOG(critical, "{}: another plugin hooked the function this hook needs before this plugin could - the entry at {} holds a branch instead of the game's prologue, and the code behind that branch is not guaranteed to keep the game function's arguments, so this hook does not chain onto it and stays disabled so the game keeps running. Report this line together with your plugin list.", a_hook, ModuleOwner(a_entry));
+			LogSiteBytes(a_hook, a_entry);
+			return false;
+		}
+		LOG(critical, "{}: the entry at {} reads {:02X} {:02X} {:02X} {:02X} {:02X}, which is not the prologue this hook was written for; either the address library describes another build of the executable or another plugin rewrote this function. This hook stays disabled so the game keeps running. Report this line together with your game version.", a_hook, ModuleOwner(a_entry), actual[0], actual[1], actual[2], actual[3], actual[4]);
+		LogSiteBytes(a_hook, a_entry);
+		return false;
+	}
+
 	std::string ModuleOwner(std::uintptr_t a_address)
 	{
 		::HMODULE module = nullptr;

@@ -123,6 +123,21 @@ namespace Hooking
 	// caller does not copy a rip-relative or relative instruction into the trampoline.
 	std::size_t CopyableEntryLength(std::uintptr_t a_entry, std::size_t a_needed);
 
+	// Checks that the bytes at a_entry are still the ones this hook was written for.
+	//
+	// Hooking a function at its entry assumes the address library points at the function
+	// itself and that nobody replaced its prologue since. Both assumptions can be wrong:
+	// SKSE ships two address libraries for some game versions (1.6.1170 has "-0" and
+	// "-0-1", and 98.7% of the shared ids sit at different addresses in them, while
+	// CommonLib only ever loads "-0"), and another plugin may have hooked the same function
+	// first. Writing five bytes at either place would corrupt unrelated code, so the entry
+	// is compared with the prologue of the game function the hook was written for.
+	//
+	// Returns true when the bytes match. Otherwise it logs what is there instead - a branch
+	// means someone hooked the function first, anything else means the address library
+	// describes another build - and returns false so the caller leaves the hook disabled.
+	bool EntryMatches(const char* a_hook, std::uintptr_t a_entry, const std::uint8_t* a_expected, std::size_t a_size);
+
 	// Identity of the module that owns a_address - the game executable or an SKSE plugin
 	// dll - in the form "<file name> + 0x<rva>". A log line that names the owner says
 	// whose code sits at an address; a bare pointer does not.

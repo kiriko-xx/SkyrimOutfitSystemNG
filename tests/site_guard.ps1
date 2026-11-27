@@ -21,14 +21,18 @@ function Block([string]$text, [string]$start, [string]$end) {
 
 # every call site hook goes through the fingerprint check
 $verified = ([regex]::Matches($hooks, 'FindVerifiedCall\(')).Count
-if ($verified -ne 4) { Write-Host "FAIL the four call site hooks should all use FindVerifiedCall, found $verified"; $fails++ }
+if ($verified -ne 3) { Write-Host "FAIL the three remaining call site hooks should all use FindVerifiedCall, found $verified"; $fails++ }
+Missing $hooks 'EntryMatches("DontVanillaSkinPlayer"' 'the armour pass entry is checked against the prologue it must hold before it is written'
+Missing $hooks 'REL::RelocationID TESObjectARMO_ApplyArmorAddon(17392, 17792);' 'the armour pass is hooked at its own entry'
+Missing $hooks 'kArmourPassPrologue' 'the entry of the armour pass is checked against the prologue it must hold'
+Present $hooks 'FindVerifiedCall("DontVanillaSkinPlayer"' 'the armour pass is no longer reached through a call site fingerprint'
 Present $hooks 'FindCallInFunction(' 'Hooks.cpp no longer scans a host body without a fingerprint'
 Present $hooks 'FindCallInFunctionOrOffset(' 'Hooks.cpp no longer falls back to a fixed offset'
 Present $hooks '0x7B' 'the skill loop skip point is derived, not hard coded'
 
 # the fingerprints themselves (measured on 1.5.97 and 1.6.1170)
-Missing $hooks '44 8B 49 38 41 83 E1 01 48 8B 91 58 01 00 00 48 8B CD' 'the vanilla armour pass fingerprint is declared'
-Missing $hooks '40 B? 01 40 0F B6 C?' 'the vanilla armour pass fingerprint tolerates dil/sil'
+Present $hooks '44 8B 49 38 41 83 E1 01 48 8B 91 58 01 00 00 48 8B CD' 'the vanilla armour pass fingerprint is gone, the hook sits on the function entry'
+Present $hooks '40 B? 01 40 0F B6 C?' 'the dil/sil tolerant fingerprint is gone as well'
 Missing $hooks '48 8B C8 4C 89 ?? 24 70' 'the worn mask fingerprint tolerates the lock register'
 Missing $hooks '4C 8B F0 8B D3 48 8B CD' 'the equip conflict fingerprint is declared'
 Missing $hooks '4C 8B E8 48 8B 0E' 'the AE skill loop fingerprint is declared'
@@ -61,4 +65,4 @@ if (-not (Test-Path (Join-Path $root 'tests/site_pattern.cpp'))) { Write-Host 'F
 if (-not (Test-Path (Join-Path $root 'tests/site_pattern.ps1'))) { Write-Host 'FAIL tests/site_pattern.ps1 is missing'; $fails++ }
 
 if ($fails -gt 0) { Write-Host "SITE_GUARD_FAILED: $fails check(s)"; exit 1 }
-Write-Host 'SITE_GUARD_OK: 4 hook(s) verified by fingerprint'
+Write-Host 'SITE_GUARD_OK: 3 hook(s) verified by fingerprint, 1 hooked at the entry of the function it needs'

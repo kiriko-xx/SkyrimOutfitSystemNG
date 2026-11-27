@@ -8,12 +8,12 @@
 // is written there. A runtime that recompiled the function only moves the site -
 // the hook finds it again instead of disabling itself.
 //
-// Only where the *injected machine code* itself differs does the trampoline branch
-// on REL::Module::IsAE():
-//   * DontVanillaSkinPlayer reads the actor from the register the skinning routine
-//     keeps it in (r13) while it restores the argument registers for its own call;
+// The one remaining per-runtime difference is in the *injected machine code*:
 //   * FixSkillLeveling targets a function that was inlined into its caller in AE,
 //     so the trampoline needs a different prologue and a different exit.
+// Everything else reads the arguments the game itself passes (DontVanillaSkinPlayer
+// sits on the entry of TESObjectARMO::ApplyArmorAddon, whose argument layout the same
+// on both runtimes), so no hook depends on a caller's register allocation any more.
 //
 
 #include "hooking/Hooks.hpp"
@@ -105,78 +105,105 @@ namespace Hooking {
         bool g_customSkinPlayerInstalled = false;
 
         namespace DontVanillaSkinPlayer {
-            using Hooking::DontVanillaSkinPlayer::ShouldOverride;
+            using Hooking::DontVanillaSkinPlayer::ShouldHideForModel;
 
-            // TESObjectARMO::ApplyArmorAddon is called for the player by the vanilla
-            // skinning routine; we skip it while an outfit override is active.
-            REL::RelocationID DontVanillaSkinPlayer_Hook_ID(24232, 24736);
+            // The one hook the illusion is built on: TESObjectARMO::ApplyArmorAddon, hooked at
+            // its own entry.
+            //
+            // Hooking the function instead of one of the calls inside the skinning routine is
+            // what makes this work on a machine where other plugins patch those calls: the
+            // address library names the function itself, and the game's own callers keep
+            // calling it no matter who rewrote their bytes. 1.5.81 hooked a call site inside
+            // the routine, identified by a byte fingerprint, and patched it anyway when the
+            // fingerprint did not match ("the only call ... does not match 'vanilla armour
+            // pass'; hooking it anyway") - on one player's machine that call sat in a routine
+            // whose callee-saved registers held something else, the actor read from r13 was
+            // garbage, and the std::__non_rtti_object thrown by the cast came out of the hook
+            // and took the game down.
+            //
+            // The entry is a standard ABI, so nothing here reads a register the caller happens
+            // to keep the actor in: rcx is the armour, rdx the race, r8 the weight model and
+            // r9d the female flag, and the prologue below proves it (it stores rcx into rdi
+            // and r8 into r14 before the first call). Both runtimes start the function the same
+            // way, which was checked on SE 1.5.97 (rva 0x228AD0) and AE 1.6.1170 (0x279320).
             REL::RelocationID TESObjectARMO_ApplyArmorAddon(17392, 17792);
 
-            std::uintptr_t DontVanillaSkinPlayer_Hook = 0;
+            // mov [rsp+0x10], rbx / mov [rsp+0x18], rbp - ten bytes, of which the hook takes
+            // the first five. The address library of a game version can describe a different
+            // build of the same version (1.6.1170 has two libraries), so these bytes are what
+            // tells "this is the function" from "this is some other code".
+            inline constexpr std::uint8_t kArmourPassPrologue[] = { 0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18 };
 
             void Apply() {
-                if (!RequireIds("DontVanillaSkinPlayer", { DontVanillaSkinPlayer_Hook_ID, TESObjectARMO_ApplyArmorAddon })) {
+                if (!RequireIds("DontVanillaSkinPlayer", { TESObjectARMO_ApplyArmorAddon })) {
                     return;
                 }
-
-                // What the site looks like, independent of the address it sits at: the
-                // routine fills the call arguments right before the call (r9d = race flag,
-                // rdx = the item list, rcx = the body model) and turns the call result into
-                // the "armour applied" flag right after it. The next function along calls the
-                // same function and ends in a return straight after, so the two never match
-                // the same fingerprints. The register the flag is written through differs
-                // between the runtimes (dil on SE, sil on AE), hence the wildcards.
-                const SiteShape shape{
-                    "vanilla armour pass",
-                    {
-                        { -18, "44 8B 49 38 41 83 E1 01 48 8B 91 58 01 00 00 48 8B CD" },
-                        { 5, "40 B? 01 40 0F B6 C?" },
-                    }
-                };
-                DontVanillaSkinPlayer_Hook = FindVerifiedCall("DontVanillaSkinPlayer", DontVanillaSkinPlayer_Hook_ID, TESObjectARMO_ApplyArmorAddon, shape);
-                if (!DontVanillaSkinPlayer_Hook) {
-                    return;
-                }
-
-                LOG(debug, "Patching vanilla player skinning");
                 LogResolved("TESObjectARMO_ApplyArmorAddon", TESObjectARMO_ApplyArmorAddon);
 
-                struct Code : Xbyak::CodeGenerator {
-                    Code(std::uintptr_t a_resume, std::uintptr_t a_applyArmorAddon) {
-                        Xbyak::Label j_Out;
-                        Xbyak::Label f_ApplyArmorAddon;
-                        Xbyak::Label f_ShouldOverride;
+                const auto entry = TESObjectARMO_ApplyArmorAddon.address();
+                if (!EntryMatches("DontVanillaSkinPlayer", entry, kArmourPassPrologue, sizeof(kArmourPassPrologue))) {
+                    return;
+                }
+                constexpr std::size_t kStolen = 5;
+                const auto copied = CopyableEntryLength(entry, kStolen);
+                if (copied != kStolen) {
+                    LOG(critical, "DontVanillaSkinPlayer: the entry of the armour pass at {} starts with a sequence this hook cannot copy into a trampoline; this hook stays disabled so the game keeps running.", ModuleOwner(entry));
+                    LogSiteBytes("DontVanillaSkinPlayer", entry);
+                    return;
+                }
 
-                        // armor in rcx, target in r13
+                struct Code : Xbyak::CodeGenerator {
+                    Code(std::uintptr_t a_resume, std::uintptr_t a_stolen, std::size_t a_stolenLength, std::uintptr_t a_decide) {
+                        Xbyak::Label j_Run;
+                        Xbyak::Label f_Decide;
+
+                        // rcx = armour, rdx = race, r8 = weight model, r9d = female flag.
+                        // The decision only needs the armour and the weight model, and the
+                        // weight model is what identifies the actor it is being built for.
                         push(rcx);
                         push(rdx);
-                        push(r9);
                         push(r8);
-                        mov(rdx, r13);
-                        sub(rsp, 0x40);
-                        call(ptr[rip + f_ShouldOverride]);
-                        add(rsp, 0x40);
-                        pop(r8);
+                        push(r9);
+                        mov(rdx, r8);
+                        sub(rsp, 0x28);// shadow space, keeps rsp 16-byte aligned for the call
+                        call(ptr[rip + f_Decide]);
+                        add(rsp, 0x28);
                         pop(r9);
+                        pop(r8);
                         pop(rdx);
                         pop(rcx);
                         test(al, al);
-                        jnz(j_Out);
-                        call(ptr[rip + f_ApplyArmorAddon]);
-                        L(j_Out);
+                        jz(j_Run);
+                        // Hidden: the real piece is never put on the biped. Nothing is written
+                        // to the return register because the game does not set it either - all
+                        // four call sites of this function ignore it.
+                        xor_(eax, eax);
+                        ret();
+
+                        L(j_Run);
+                        // Not hidden: the five bytes taken from the entry run here, then the
+                        // function continues where they ended. Same stack, same registers.
+                        db(reinterpret_cast<const std::uint8_t*>(a_stolen), a_stolenLength);
                         jmp(ptr[rip]);
                         dq(a_resume);
 
-                        L(f_ApplyArmorAddon);
-                        dq(a_applyArmorAddon);
-
-                        L(f_ShouldOverride);
-                        dq(uintptr_t(ShouldOverride));
+                        L(f_Decide);
+                        dq(a_decide);
                     }
                 };
 
-                Code gen{ DontVanillaSkinPlayer_Hook + 0x5, TESObjectARMO_ApplyArmorAddon.address() };
-                g_dontVanillaSkinPlayerInstalled = Install("vanilla player skinning", DontVanillaSkinPlayer_Hook, gen);
+                Code gen{ entry + copied, entry, copied, reinterpret_cast<std::uintptr_t>(ShouldHideForModel) };
+                g_dontVanillaSkinPlayerInstalled = Install("armour pass", entry, gen);
+                // Both halves of the illusion live in this one hook now: it hides the real
+                // piece and attaches the display set inside the same pass, so the pair can no
+                // longer be half installed.
+                g_customSkinPlayerInstalled = g_dontVanillaSkinPlayerInstalled;
+                CustomSkinPlayer::SetSiteHookInstalled(g_dontVanillaSkinPlayerInstalled);
+                if (g_dontVanillaSkinPlayerInstalled) {
+                    LOG(info, "DontVanillaSkinPlayer: the armour pass is hooked at {} (declared at {}), so a piece the outfit does not show is never put on the biped and the display set is attached from inside the same pass.", ModuleOwner(entry), ModuleOwner(TESObjectARMO_ApplyArmorAddon.address()));
+                } else {
+                    LOG(critical, "DontVanillaSkinPlayer: the armour pass of this game build could not be hooked, so nothing can hide the real armour and nothing can attach the display set; the illusion stays off for this session and the real armour shows. The reason is in the lines above.");
+                }
             }
         }// namespace DontVanillaSkinPlayer
 
@@ -239,127 +266,6 @@ namespace Hooking {
             }
         }// namespace ShimWornFlags
 
-        namespace CustomSkinPlayer {
-            using Hooking::CustomSkinPlayer::CustomFromWornPass;
-            using Hooking::CustomSkinPlayer::SetSiteHookInstalled;
-            using Hooking::CustomSkinPlayer::SetWornVisitorVTable;
-
-            // The function every skinning pass calls to walk an actor's worn items, hooked
-            // at its own entry. Hooking the callee instead of one of the calls inside its
-            // caller is what makes this hook reachable on AE 1.6.1170: the address library
-            // gives the function itself, which no other plugin can move, while the calls
-            // inside the skinning routine belong to whoever patched them last. On 1.6.1170
-            // only one of the two calls to this function still reads as a plain call at run
-            // time, and that one is on the pass which is skipped, so 1.5.56 to 1.5.60
-            // attached nothing while the real armour was already hidden.
-            REL::RelocationID InventoryChanges_ExecuteVisitorOnWorn(15856, 16096);
-            // The vtable of the visitor the pass that fills the biped is handed. The checker
-            // pass of AE 1.6.1170 hands a different object, so the visitor itself - not the
-            // order of the calls - tells the two passes apart.
-            REL::RelocationID WornVisitorVTable(241890, 195851);
-
-            void Apply() {
-                if (!RequireIds("CustomSkinPlayer", { InventoryChanges_ExecuteVisitorOnWorn })) {
-                    return;
-                }
-                LogResolved("InventoryChanges_ExecuteVisitorOnWorn", InventoryChanges_ExecuteVisitorOnWorn);
-                // Tells the C++ side which visitor object marks the filling pass, so the
-                // BipedAnim being filled is read out of the visitor instead of a register.
-                if (IdExists(WornVisitorVTable)) {
-                    SetWornVisitorVTable(WornVisitorVTable.address());
-                } else {
-                    LOG(critical, "CustomSkinPlayer: this build's address library has no entry for the visitor of the skinning pass, so the display half cannot tell the filling pass from the checking one; the illusion stays off for this session and the real armour shows.");
-                }
-
-                const auto declared = InventoryChanges_ExecuteVisitorOnWorn.address();
-                // Another plugin may already have hooked this function, and then its entry
-                // reads as a jump into that plugin's detour instead of the prologue of the
-                // game function. Chaining on top of it keeps the display half working;
-                // 1.5.64 and earlier gave up here and left the illusion off for the whole
-                // session (an SE 1.5.97 report showed E9 2B AE D7 FF at the entry where the
-                // shipped executable has 48 89 5C 24 10).
-                const auto entry = FollowEntryJumps("CustomSkinPlayer", declared);
-                if (!entry) {
-                    LOG(err, "CustomSkinPlayer: the worn visitor at {} could not be reached through the code that sits at its entry; the hook stays disabled.", ModuleOwner(declared));
-                    LogSiteBytes("CustomSkinPlayer", declared);
-                    return;
-                }
-                constexpr std::size_t kStolen = 5;
-                const auto copied = CopyableEntryLength(entry, kStolen);
-                if (copied != kStolen) {
-                    LOG(err, "CustomSkinPlayer: the entry of the worn visitor at {} starts with a sequence this hook cannot copy into a trampoline; the hook stays disabled.", ModuleOwner(entry));
-                    LogSiteBytes("CustomSkinPlayer", entry);
-                    return;
-                }
-
-                // The copied prologue of the game function, followed by a jump to the rest of
-                // it: the injected code calls this, so the vanilla pass still runs exactly
-                // once with the arguments and the stack the game prepared for it.
-                struct Prologue : Xbyak::CodeGenerator {
-                    Prologue(std::uintptr_t a_entry, std::size_t a_copied) {
-                        db(reinterpret_cast<const std::uint8_t*>(a_entry), a_copied);
-                        jmp(ptr[rip]);
-                        dq(a_entry + a_copied);
-                    }
-                };
-
-                Prologue pro{ entry, copied };
-                void* trampoline = AllocateCode("custom skin player prologue", pro);
-                if (!trampoline) {
-                    return;
-                }
-
-                // Entry stub. The inventory (rcx) and the visitor (rdx) are still the ones the
-                // game passed, so nothing here depends on a register a runtime happens to keep
-                // the actor or the weight model in. Order matters: the vanilla pass runs first
-                // and leaves the real armour in the biped, then the display set is written over
-                // it, exactly like the SE hook does. 1.5.57 took the model from r15 and 1.5.60
-                // wrote the biped from outside the pass; neither ever produced geometry.
-                struct Code : Xbyak::CodeGenerator {
-                    Code(std::uintptr_t a_trampoline, std::uintptr_t a_customFromWornPass) {
-                        Xbyak::Label f_CustomFromWornPass;
-                        Xbyak::Label f_trampoline;
-
-                        push(rcx);
-                        push(rdx);
-                        sub(rsp, 0x28);// shadow space for the callee, keeps rsp 16-byte aligned
-                        call(ptr[rip + f_trampoline]);
-                        add(rsp, 0x28);
-
-                        mov(rcx, ptr[rsp + 8]);
-                        mov(rdx, ptr[rsp]);
-                        sub(rsp, 0x28);
-                        call(ptr[rip + f_CustomFromWornPass]);
-                        add(rsp, 0x28);
-
-                        pop(rdx);
-                        pop(rcx);
-                        ret();
-
-                        L(f_CustomFromWornPass);
-                        dq(a_customFromWornPass);
-
-                        L(f_trampoline);
-                        dq(a_trampoline);
-                    }
-                };
-
-                Code gen{ reinterpret_cast<std::uintptr_t>(trampoline), std::uintptr_t(CustomFromWornPass) };
-                g_customSkinPlayerInstalled = Install("custom skin player", entry, gen);
-                // Tells the C++ side whether the display set is attached from inside the
-                // skinning pass or from the deferred pass it drives itself.
-                SetSiteHookInstalled(g_customSkinPlayerInstalled);
-                if (g_customSkinPlayerInstalled) {
-                    LOG(info, "CustomSkinPlayer: the worn visitor is hooked at {} (declared at {}), so the display set is attached inside the pass that fills the biped.", ModuleOwner(entry), ModuleOwner(declared));
-                } else {
-                    // No deferred pass can stand in for this hook: with the display half
-                    // missing the pair is incomplete, the illusion is switched off below and
-                    // the player sees the real armour. Say so instead of pointing at a pass
-                    // that would produce unfinished parts (1.5.22).
-                    LOG(critical, "CustomSkinPlayer: the worn visitor of this game build could not be hooked, so the display set cannot be attached inside the pass that fills the biped; the illusion stays off for this session and the real armour shows. The reason is in the lines above.");
-                }
-            }
-        }// namespace CustomSkinPlayer
 
         namespace FixEquipConflictCheck {
             using Hooking::FixEquipConflictCheck::Inner;
@@ -663,8 +569,8 @@ namespace Hooking {
         }
         // MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST
         box(nullptr,
-            L"幻化本次会话不可用：幻化需要的两个钩子没有全部装上，真实装备会照常显示。\n"
-            L"The outfit illusion is off for this session: the two skinning hooks are not both in place, so the real equipped armour stays visible.\n\n"
+            L"幻化本次会话不可用：幻化需要的钩子没有装上，真实装备会照常显示。\n"
+            L"The outfit illusion is off for this session: the hook that hides the real armour and attaches the display set is not in place, so the real equipped armour stays visible.\n\n"
             L"具体原因见 SKSE\\Plugins\\OutfitSystemNG.log。",
             L"OutfitSystemNG", 0x00000030u | 0x00010000u | 0x00040000u);
     }
@@ -674,7 +580,6 @@ namespace Hooking {
         LogModuleIdentity("Skinning hooks");
         Detail::DontVanillaSkinPlayer::Apply();
         Detail::ShimWornFlags::Apply();
-        Detail::CustomSkinPlayer::Apply();
         Detail::FixEquipConflictCheck::Apply();
         Detail::FixSkillLeveling::Apply();
 #if _DEBUG
@@ -682,16 +587,17 @@ namespace Hooking {
 #endif
 
         // Hiding the real armour without something to put in its place shows up as a
-        // nude actor, so the illusion stays off unless both halves are in place. Up to
-        // 1.5.19 the display half was the CustomSkinPlayer hook; 1.5.22 tried to keep
-        // the illusion on with only the hiding hook and let the deferred pass attach
-        // the display set, and users saw a nude actor, so both are required again.
+        // nude actor, so the illusion stays off unless the hook that does both is in
+        // place. Up to 1.5.84 this was a pair of hooks - one hiding, one attaching - and
+        // every failure of the second one left the first one hiding nothing but the
+        // player's clothes (1.5.22, and again on AE 1.6.1170 in 1.5.78 to 1.5.83). The
+        // display set is attached from inside the same pass now, so there is one flag.
         const bool illusionAvailable = Detail::g_dontVanillaSkinPlayerInstalled && Detail::g_customSkinPlayerInstalled;
         SetIllusionDisplayEnabled(illusionAvailable);
         if (illusionAvailable) {
-            LOG(info, "Illusion display is active: the player skinning hooks are installed.");
+            LOG(info, "Illusion display is active: the armour pass hook is installed.");
         } else {
-            LOG(critical, "Illusion display is off for this session: the player skinning hooks are not both installed (vanilla pass {}, display pass {}). The real equipped armour stays visible. Nothing else is disabled.",
+            LOG(critical, "Illusion display is off for this session: the armour pass hook is missing (hide half {}, attach half {}), so the real equipped armour stays visible. Nothing else is disabled. The reason is in the lines above.",
                 Detail::g_dontVanillaSkinPlayerInstalled ? "hooked" : "missing",
                 Detail::g_customSkinPlayerInstalled ? "hooked" : "missing");
             ShowIllusionUnavailable();

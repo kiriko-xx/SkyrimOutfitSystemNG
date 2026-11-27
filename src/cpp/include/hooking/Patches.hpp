@@ -10,16 +10,23 @@
 #include "RE/REAugments.h"
 
 namespace Hooking {
-    // The illusion is only applied while both player skinning hooks are in place:
-    // DontVanillaSkinPlayer hides the real armour, so without CustomSkinPlayer nothing
-    // is attached in its place and the actor renders nude. The installer reports the
-    // hook state here once it has run; until then the override stays off.
+    // The illusion is only applied while the skinning hook is in place: it hides the real
+    // armour, so without it nothing is attached in its place and the actor renders nude.
+    // Both halves live in that one hook now (1.5.85). The installer reports the hook state
+    // here once it has run; until then the override stays off.
     void SetIllusionDisplayEnabled(bool a_enabled);
     bool IllusionDisplayEnabled();
 
     bool ShouldOverrideSkinning(RE::TESObjectREFR* target);
 
     namespace DontVanillaSkinPlayer {
+        // The register-level gate, called from inside the hooked armour pass with the
+        // pieces the game itself passed (armour, weight model). It resolves the actor from
+        // the weight model, attaches the display set at the start of the pass and answers
+        // whether this piece is to be hidden.
+        bool ShouldHideForModel(RE::TESObjectARMO* armor, RE::ActorWeightModel* model);
+
+        // The same question in terms of an actor, used by the deferred path.
         bool ShouldOverride(RE::TESObjectARMO* armor, RE::TESObjectREFR* target);
     }
 
@@ -35,23 +42,14 @@ namespace Hooking {
         // actor plus both of its weight models are resolved from it.
         void CustomFromInventory(RE::InventoryChanges* inventory);
 
-        // Entry point used by the hook that sits on the worn pass itself: the actor is
-        // taken from the inventory, and the BipedAnim the pass is filling from the
-        // visitor it was handed, so the injected code reads no register.
-        void CustomFromWornPass(RE::InventoryChanges* inventory, RE::InventoryChanges::IItemChangeVisitor* visitor);
-
-        // The vtable that identifies the visitor of the pass this hook sits on. Resolved
-        // and reported by the installer before the hook is written.
-        void SetWornVisitorVTable(std::uintptr_t a_vtable);
-
         // actorWeightModel may be null, in which case both of the actor's weight models
         // (third person, then first person) are attached.
         void Custom(RE::Actor* target, RE::ActorWeightModel* actorWeightModel);
 
-        // Whether the installer found a call site inside the game's skinning routine.
-        // When it did not, the display set is attached from the deferred queue below:
-        // the worn mask query and the skinning pass still run for every actor, so the
-        // illusion can be applied right after the pass that hid the real armour.
+        // Whether the installer managed to hook the armour pass. When it did not, the
+        // display set is attached from the deferred queue below: the worn mask query and
+        // the skinning pass still run for every actor, so the illusion can be applied
+        // right after the pass that hid the real armour.
         void SetSiteHookInstalled(bool a_installed);
         bool SiteHookInstalled();
 
