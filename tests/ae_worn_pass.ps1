@@ -1,18 +1,28 @@
 $ErrorActionPreference = 'Stop'
-# Static guard for the skinning hook (1.5.85). The illusion rests on one hook, on the
-# entry of TESObjectARMO::ApplyArmorAddon: the game's own arguments (armour, weight model)
-# are handed to the decision, the actor is read out of the biped the engine is filling, the
-# display set is attached at the first piece of a pass, and a piece is never hidden when it
-# is the actor's skin. The entry is checked against the prologue this hook was written for
+# Static guard for the two skinning hooks the illusion rests on (1.5.89). One hides, one
+# attaches, and they sit on different functions:
+#
+#   * TESObjectARMO::ApplyArmorAddon, at its entry: the game's own arguments (armour, weight
+#     model) are handed to the decision and a piece is never hidden when it is the skin;
+#   * InventoryChanges::ExecuteVisitorOnWorn, at its entry: the vanilla pass runs first and
+#     then the display set is written over the biped it filled, because the routine that
+#     CALLS that pass is what turns the slots into geometry. Writing the biped from anywhere
+#     else (1.5.82 inside ApplyArmorAddon, 1.5.87 and 1.5.88 from a deferred queue) claims
+#     slots that never get a mesh: in the 2026-11-27 log every one of 368 slot lines read
+#     "part 1 clone 0", an empty preset drew a head only, and a claimed hair slot left the
+#     actor bald.
+#
+# Both entries are checked against the prologue they were written for
 # before anything is written, a prologue that is safe to relocate is copied, the stub reads
 # no register the engine happens to hold, the five-byte branch is written by this plugin
 # itself (CommonLib write_branch routes it through a slot next to the executable and ends
 # the process when the site is out of that slot's reach: 1.5.79, "displacement is out of
 # range"), and a site another plugin moved out of the executable is reached through a stub
-# next to the site (SE 1.5.97, InventoryLagFix.dll + 0x2B70, 1.5.78). The worn visitor is no
-# longer hooked at all: on a machine where another plugin had rewritten the function that
-# call was reached through, the code behind that branch did not keep the game function's
-# arguments, which is how 1.5.81 to 1.5.83 crashed or displayed nothing.
+# next to the site (SE 1.5.97, InventoryLagFix.dll + 0x2B70, 1.5.78). The worn visitor is
+# hooked through that same path, so a build where another plugin owns the function still
+# gets the display set.
+#
+# ---- the armour pass hides, the worn pass attaches ----
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $failures = 0
 
@@ -86,10 +96,12 @@ Assert-Contains $armourBlock 'xor_(eax, eax);' 'a hidden piece returns without p
 Assert-Contains $armourBlock 'db(reinterpret_cast<const std::uint8_t*>(a_stolen), a_stolenLength);' 'the trampoline carries a copy of the game prologue'
 Assert-Contains $armourBlock 'jmp(ptr[rip]);' 'the trampoline jumps back into the game function'
 Assert-Contains $armourBlock 'Install("armour pass", entry, gen)' 'the hook is written to the entry of the armour pass'
-Assert-Contains $armourBlock 'g_customSkinPlayerInstalled = g_dontVanillaSkinPlayerInstalled;' 'both halves are the same hook, so they can no longer be half installed'
-Assert-Absent $hooks 'REL::RelocationID InventoryChanges_ExecuteVisitorOnWorn(15856, 16096);' 'the worn visitor is no longer hooked'
-Assert-Absent $hooks 'WornVisitorVTable(241890, 195851)' 'the worn visitor vtable is no longer needed'
-Assert-Absent $hooks 'namespace CustomSkinPlayer {' 'there is no second skinning hook to install'
+Assert-Absent $armourBlock 'g_customSkinPlayerInstalled = g_dontVanillaSkinPlayerInstalled;' 'the attach half is no longer taken from the hide half'
+Assert-Contains $hooks 'REL::RelocationID InventoryChanges_ExecuteVisitorOnWorn(15856, 16096);' 'the worn visitor is hooked again'
+Assert-Contains $hooks 'WornVisitorVTable(241890, 195851)' 'the visitor of the filling pass is told apart from the checking one'
+Assert-Contains $hooks 'namespace CustomSkinPlayer {' 'the attach half is its own hook'
+Assert-Contains $hooks 'g_customSkinPlayerInstalled = Install("custom skin player", entry, gen);' 'and reports its own result'
+Assert-Contains $hooks 'Detail::CustomSkinPlayer::Apply();' 'and is installed'
 Assert-Absent $armourBlock 'FindVerifiedCall(' 'no call site inside the game routine is fingerprinted any more'
 Assert-Absent $armourBlock 'mov(rdx, r13)' 'no register the caller happens to keep the actor in is trusted'
 Assert-Absent $armourBlock 'mov(rdx, r15)' 'no register the caller happens to keep the actor in is trusted'
@@ -107,8 +119,9 @@ $decideBlock = Get-Block $patches 'bool ShouldHideForModel(RE::TESObjectARMO* a_
 Assert-Contains $decideBlock 'if (g_attachDepth > 0) return false;' 'the pieces being attached are never hidden'
 Assert-Contains $decideBlock 'ResolveModelOwner(a_model)' 'the actor is resolved from the weight model'
 Assert-Contains $decideBlock 'if (a_armor == actor->GetSkin()) {' 'the skin is never hidden - hiding it is what left an empty preset with a head only (1.5.82)'
-Assert-Contains $decideBlock 'AttachFromHook(actor, a_model);' 'the display set is attached from inside the pass'
-Assert-Contains $decideBlock 'NotePassModel(actor, a_model);' 'the pass hands its weight model over even when it has nothing to hide (1.5.88)'
+Assert-Contains $decideBlock 'MarkAttachPending(actor);' 'a skin-only pass asks for the pass to run again'
+Assert-Absent $decideBlock 'AttachFromHook' 'nothing is attached from inside the armour pass'
+Assert-Absent $decideBlock 'NotePassModel' 'no weight model is remembered for a later attach'
 Assert-Contains $decideBlock 'return ShouldOverride(a_armor, actor);' 'hidden pieces are still decided by the display set'
 Assert-Contains $decideBlock 'catch (...)' 'an exception inside the hook cannot take the game down'
 Assert-Contains $decideBlock 'LogThrown("ShouldHideForModel");' 'and it is reported instead of passing silently'
@@ -117,24 +130,26 @@ Assert-Contains $patches 'auto* biped = reinterpret_cast<RE::BipedAnim* const*>(
 Assert-Contains $patches 'auto* owner = biped->actorRef.get().get();' 'the actor is read from the handle the engine itself keeps in the biped'
 Assert-Contains $patches 'owner->formType != RE::FormType::ActorCharacter' 'the handle is checked before it is cast'
 Assert-Contains $patches 'actor->GetBiped(false).get() != biped && actor->GetBiped(true).get() != biped' 'a biped that belongs to nobody is left alone'
-Assert-Contains $patches 'bool FirstCallOfPass(const void* a_model)' 'a pass is recognised by the gap between its calls'
-Assert-Contains $patches 'kPassGap = std::chrono::milliseconds(8)' 'that gap is one constant'
+Assert-Absent $patches 'FirstCallOfPass' 'a pass is no longer guessed from the gap between its calls'
+Assert-Absent $patches 'kPassGap' 'that constant is gone with it'
 Assert-Contains $patches '++g_attachDepth;' 'the attach is re-entered by its own ApplyArmorAddon calls'
-Assert-Contains $patches 'RecordSiteHookHit(a_actor->GetFormID())' 'an actor that comes through the pass is recorded'
+Assert-Contains $patches 'RecordSiteHookHit(actor->GetFormID());' 'an actor that comes through the worn pass is recorded'
 Assert-Contains $patches 'void LogThrown(const char* a_where)' 'a caught exception is counted and reported'
 Assert-Contains $patches 'std::uint32_t StagedSlots(' 'the applied slots are read back'
 Assert-Contains $patches 'const auto staged = StagedSlots(anim, armor);' 'a piece is judged by what landed in the biped'
 Assert-Absent $patches 'if (!RE::TESObjectARMOAugments::ApplyArmorAddon' 'ApplyArmorAddon no longer gates on its return value'
-Assert-Absent $patches 'PassBiped(' 'the biped is no longer taken from a visitor'
-Assert-Absent $patches 'LogForeignVisitor(' 'an unexpected visitor is no longer the shape of the failure'
-Assert-Absent $patches 'CustomFromWornPass(' 'the worn pass is no longer hooked'
-Assert-Absent $patches 'SetWornVisitorVTable(' 'the worn visitor vtable is gone'
-Assert-Absent $patches 'reinterpret_cast<std::uintptr_t>(a_visitor) + 0x18' 'nothing reads a biped out of a visitor any more'
+Assert-Contains $patches 'RE::BipedAnim* PassBiped(RE::InventoryChanges::IItemChangeVisitor* a_visitor)' 'the biped comes out of the visitor the game handed over'
+Assert-Contains $patches 'LogForeignVisitor(a_visitor);' 'an unexpected visitor is named once in the log'
+Assert-Contains $patches 'void CustomFromWornPass(RE::InventoryChanges* a_inventory' 'the worn pass is where the display set is written'
+Assert-Contains $patches 'void SetWornVisitorVTable(std::uintptr_t a_vtable)' 'the vtable of the filling pass is handed over'
+Assert-Contains $patches 'reinterpret_cast<std::uintptr_t>(a_visitor) + 0x18' 'the biped is the visitor member at 0x18'
+Assert-Absent $patches 'AttachFromKnownModel' 'nothing attaches to a remembered model'
+Assert-Absent $patches 'g_passModel' 'no model is cached across passes'
 Assert-Absent $patches 'ShouldOverride: Failed to cast target to Actor.' 'a cast failure no longer hides the piece it could not attribute'
 Assert-Contains $patches 'SiteHookHitRecently(id)' 'the deferred attach keeps running when the hook never fires'
 $drainBlock = Get-Block $patches 'void DrainAttachPending()' 'void SetSiteHookInstalled' 'DrainAttachPending'
 Assert-Contains $drainBlock '::OutfitSystem::refreshArmorFor(actor);' 'the deferred pass rebuilds the equipment while the hook is installed'
-Assert-Contains $drainBlock 'Custom(actor, nullptr);' 'the external fill stays as the fallback without an in-pass hook'
+Assert-Absent $drainBlock 'Custom(actor, nullptr);' 'the deferred queue never writes a biped itself'
 
 # ---- a written branch is read back, and every site is re-checked after the load ----
 # Writing five bytes says nothing about what the site holds a moment later: the next plugin

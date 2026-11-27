@@ -194,18 +194,134 @@ namespace Hooking {
 
                 Code gen{ entry + copied, entry, copied, reinterpret_cast<std::uintptr_t>(ShouldHideForModel) };
                 g_dontVanillaSkinPlayerInstalled = Install("armour pass", entry, gen);
-                // Both halves of the illusion live in this one hook now: it hides the real
-                // piece and attaches the display set inside the same pass, so the pair can no
-                // longer be half installed.
-                g_customSkinPlayerInstalled = g_dontVanillaSkinPlayerInstalled;
-                CustomSkinPlayer::SetSiteHookInstalled(g_dontVanillaSkinPlayerInstalled);
                 if (g_dontVanillaSkinPlayerInstalled) {
-                    LOG(info, "DontVanillaSkinPlayer: the armour pass is hooked at {} (declared at {}), so a piece the outfit does not show is never put on the biped and the display set is attached from inside the same pass.", ModuleOwner(entry), ModuleOwner(TESObjectARMO_ApplyArmorAddon.address()));
+                    LOG(info, "DontVanillaSkinPlayer: the armour pass is hooked at {} (declared at {}), so a piece the outfit does not show is never put on the biped.", ModuleOwner(entry), ModuleOwner(TESObjectARMO_ApplyArmorAddon.address()));
                 } else {
-                    LOG(critical, "DontVanillaSkinPlayer: the armour pass of this game build could not be hooked, so nothing can hide the real armour and nothing can attach the display set; the illusion stays off for this session and the real armour shows. The reason is in the lines above.");
+                    LOG(critical, "DontVanillaSkinPlayer: the armour pass of this game build could not be hooked, so the real armour cannot be hidden and the illusion stays off for this session. The reason is in the lines above.");
                 }
             }
         }// namespace DontVanillaSkinPlayer
+
+        namespace CustomSkinPlayer {
+            using Hooking::CustomSkinPlayer::CustomFromWornPass;
+            using Hooking::CustomSkinPlayer::SetSiteHookInstalled;
+            using Hooking::CustomSkinPlayer::SetWornVisitorVTable;
+
+            // The function every skinning pass calls to walk an actor's worn items, hooked
+            // at its own entry. This is the only place the display set is written, and the
+            // reason is the caller: the routine that calls this function is also the one
+            // that finishes the parts of whatever the biped holds when it returns. A biped
+            // written from anywhere else keeps its slots (the item, the addon) without ever
+            // getting the mesh - 1.5.82 wrote it from inside ApplyArmorAddon and 1.5.87 and
+            // 1.5.88 wrote it from outside the pass, and in the 2026-11-27 log all 368 slot
+            // lines read "part 1 clone 0": an empty preset that showed only the head, and a
+            // hair slot claimed with no hair in it.
+            REL::RelocationID InventoryChanges_ExecuteVisitorOnWorn(15856, 16096);
+            // The vtable of the visitor the pass that fills the biped is handed. The checker
+            // pass of AE 1.6.1170 hands a different object, so the visitor itself - not the
+            // order of the calls - tells the two passes apart.
+            REL::RelocationID WornVisitorVTable(241890, 195851);
+
+            void Apply() {
+                if (!RequireIds("CustomSkinPlayer", { InventoryChanges_ExecuteVisitorOnWorn })) {
+                    return;
+                }
+                LogResolved("InventoryChanges_ExecuteVisitorOnWorn", InventoryChanges_ExecuteVisitorOnWorn);
+                // Tells the C++ side which visitor object marks the filling pass, so the
+                // BipedAnim being filled is read out of the visitor instead of a register.
+                if (IdExists(WornVisitorVTable)) {
+                    SetWornVisitorVTable(WornVisitorVTable.address());
+                } else {
+                    LOG(critical, "CustomSkinPlayer: this build's address library has no entry for the visitor of the skinning pass, so the display half cannot tell the filling pass from the checking one; the illusion stays off for this session and the real armour shows.");
+                }
+
+                const auto declared = InventoryChanges_ExecuteVisitorOnWorn.address();
+                // Another plugin may already have hooked this function, and then its entry
+                // reads as a jump into that plugin's detour instead of the prologue of the
+                // game function. Chaining on top of it keeps the display half working;
+                // 1.5.64 and earlier gave up here and left the illusion off for the whole
+                // session (an SE 1.5.97 report showed E9 2B AE D7 FF at the entry where the
+                // shipped executable has 48 89 5C 24 10).
+                const auto entry = FollowEntryJumps("CustomSkinPlayer", declared);
+                if (!entry) {
+                    LOG(err, "CustomSkinPlayer: the worn visitor at {} could not be reached through the code that sits at its entry; the hook stays disabled.", ModuleOwner(declared));
+                    LogSiteBytes("CustomSkinPlayer", declared);
+                    return;
+                }
+                constexpr std::size_t kStolen = 5;
+                const auto copied = CopyableEntryLength(entry, kStolen);
+                if (copied != kStolen) {
+                    LOG(err, "CustomSkinPlayer: the entry of the worn visitor at {} starts with a sequence this hook cannot copy into a trampoline; the hook stays disabled.", ModuleOwner(entry));
+                    LogSiteBytes("CustomSkinPlayer", entry);
+                    return;
+                }
+
+                // The copied prologue of the game function, followed by a jump to the rest of
+                // it: the injected code calls this, so the vanilla pass still runs exactly
+                // once with the arguments and the stack the game prepared for it.
+                struct Prologue : Xbyak::CodeGenerator {
+                    Prologue(std::uintptr_t a_entry, std::size_t a_copied) {
+                        db(reinterpret_cast<const std::uint8_t*>(a_entry), a_copied);
+                        jmp(ptr[rip]);
+                        dq(a_entry + a_copied);
+                    }
+                };
+
+                Prologue pro{ entry, copied };
+                void* trampoline = AllocateCode("custom skin player prologue", pro);
+                if (!trampoline) {
+                    return;
+                }
+
+                // Entry stub. The inventory (rcx) and the visitor (rdx) are still the ones the
+                // game passed, so nothing here depends on a register a runtime happens to keep
+                // the actor or the weight model in. Order matters: the vanilla pass runs first
+                // and leaves the real armour in the biped, then the display set is written over
+                // it, and only then does the routine that called this function finish the
+                // parts. 1.5.57 took the model from r15 and 1.5.60 wrote the biped from
+                // outside the pass; neither ever produced geometry.
+                struct Code : Xbyak::CodeGenerator {
+                    Code(std::uintptr_t a_trampoline, std::uintptr_t a_customFromWornPass) {
+                        Xbyak::Label f_CustomFromWornPass;
+                        Xbyak::Label f_trampoline;
+
+                        push(rcx);
+                        push(rdx);
+                        sub(rsp, 0x28);// shadow space for the callee, keeps rsp 16-byte aligned
+                        call(ptr[rip + f_trampoline]);
+                        add(rsp, 0x28);
+
+                        mov(rcx, ptr[rsp + 8]);
+                        mov(rdx, ptr[rsp]);
+                        sub(rsp, 0x28);
+                        call(ptr[rip + f_CustomFromWornPass]);
+                        add(rsp, 0x28);
+
+                        pop(rdx);
+                        pop(rcx);
+                        ret();
+
+                        L(f_CustomFromWornPass);
+                        dq(a_customFromWornPass);
+
+                        L(f_trampoline);
+                        dq(a_trampoline);
+                    }
+                };
+
+                Code gen{ reinterpret_cast<std::uintptr_t>(trampoline), std::uintptr_t(CustomFromWornPass) };
+                g_customSkinPlayerInstalled = Install("custom skin player", entry, gen);
+                // Tells the deferred queue whether the pass carries this hook at all; the
+                // queue never writes a biped itself, it only asks for a rebuild so that this
+                // pass runs again.
+                SetSiteHookInstalled(g_customSkinPlayerInstalled);
+                if (g_customSkinPlayerInstalled) {
+                    LOG(info, "CustomSkinPlayer: the worn visitor is hooked at {} (declared at {}), so the display set is attached inside the pass that fills the biped.", ModuleOwner(entry), ModuleOwner(declared));
+                } else {
+                    LOG(critical, "CustomSkinPlayer: the worn visitor of this game build could not be hooked, so the display set cannot be attached inside the pass that fills the biped; the illusion stays off for this session and the real armour shows. The reason is in the lines above.");
+                }
+            }
+        }// namespace CustomSkinPlayer
 
         namespace ShimWornFlags {
             using Hooking::ShimWornFlags::OverrideWornFlags;
@@ -587,6 +703,7 @@ namespace Hooking {
         LOG(debug, "Installing skinning hooks for runtime {}.", REL::Module::get().version().string());
         LogModuleIdentity("Skinning hooks");
         Detail::DontVanillaSkinPlayer::Apply();
+        Detail::CustomSkinPlayer::Apply();
         Detail::ShimWornFlags::Apply();
         Detail::FixEquipConflictCheck::Apply();
         Detail::FixSkillLeveling::Apply();
@@ -595,17 +712,16 @@ namespace Hooking {
 #endif
 
         // Hiding the real armour without something to put in its place shows up as a
-        // nude actor, so the illusion stays off unless the hook that does both is in
-        // place. Up to 1.5.84 this was a pair of hooks - one hiding, one attaching - and
-        // every failure of the second one left the first one hiding nothing but the
-        // player's clothes (1.5.22, and again on AE 1.6.1170 in 1.5.78 to 1.5.83). The
-        // display set is attached from inside the same pass now, so there is one flag.
+        // nude actor, so the illusion stays off unless both hooks are in place: the entry
+        // of the armour pass hides the real piece, and the worn pass attaches the display
+        // set (1.5.89). They sit on different functions and fail for different reasons,
+        // which is why both are required instead of one standing in for the other.
         const bool illusionAvailable = Detail::g_dontVanillaSkinPlayerInstalled && Detail::g_customSkinPlayerInstalled;
         SetIllusionDisplayEnabled(illusionAvailable);
         if (illusionAvailable) {
-            LOG(info, "Illusion display is active: the armour pass hook is installed.");
+            LOG(info, "Illusion display is active: the player skinning hooks are installed.");
         } else {
-            LOG(critical, "Illusion display is off for this session: the armour pass hook is missing (hide half {}, attach half {}), so the real equipped armour stays visible. Nothing else is disabled. The reason is in the lines above.",
+            LOG(critical, "Illusion display is off for this session: the player skinning hooks are not both installed (vanilla pass {}, display pass {}), so the real equipped armour stays visible. Nothing else is disabled. The reason is in the lines above.",
                 Detail::g_dontVanillaSkinPlayerInstalled ? "hooked" : "missing",
                 Detail::g_customSkinPlayerInstalled ? "hooked" : "missing");
             ShowIllusionUnavailableBox(true);

@@ -10,9 +10,10 @@
 #include "RE/REAugments.h"
 
 namespace Hooking {
-    // The illusion is only applied while the skinning hook is in place: it hides the real
-    // armour, so without it nothing is attached in its place and the actor renders nude.
-    // Both halves live in that one hook now (1.5.85). The installer reports the hook state
+    // The illusion needs two hooks in place: one hides the real armour (the entry of
+    // ApplyArmorAddon), the other writes the display set inside the worn pass. Without the
+    // first the real armour shows through, without the second nothing is attached at all
+    // and the actor would be nude, so both are required. The installer reports the state
     // here once it has run; until then the override stays off.
     void SetIllusionDisplayEnabled(bool a_enabled);
     bool IllusionDisplayEnabled();
@@ -42,14 +43,23 @@ namespace Hooking {
         // actor plus both of its weight models are resolved from it.
         void CustomFromInventory(RE::InventoryChanges* inventory);
 
+        // Entry point of the worn-visitor hook: the injected stub runs the game's own pass
+        // first and then calls this with the same inventory and visitor, so the biped holds
+        // the real armour and the routine that called the pass finishes the parts after
+        // this returns. This is the only place the display set is written.
+        void CustomFromWornPass(RE::InventoryChanges* inventory, RE::InventoryChanges::IItemChangeVisitor* visitor);
+
+        // The vtable of the visitor the pass that fills the biped is handed, so a visitor
+        // belonging to another pass is recognised instead of read.
+        void SetWornVisitorVTable(std::uintptr_t a_vtable);
+
         // actorWeightModel may be null, in which case both of the actor's weight models
         // (third person, then first person) are attached.
         void Custom(RE::Actor* target, RE::ActorWeightModel* actorWeightModel);
 
-        // Whether the installer managed to hook the armour pass. When it did not, the
-        // display set is attached from the deferred queue below: the worn mask query and
-        // the skinning pass still run for every actor, so the illusion can be applied
-        // right after the pass that hid the real armour.
+        // Whether the installer managed to hook the worn pass. The deferred queue below
+        // never writes a biped itself - it only asks the game to rebuild one, so that the
+        // pass (and this hook) runs again.
         void SetSiteHookInstalled(bool a_installed);
         bool SiteHookInstalled();
 
