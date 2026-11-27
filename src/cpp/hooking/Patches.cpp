@@ -61,6 +61,7 @@ namespace Hooking {
         // Keeps the vanilla skinning pass untouched unless the illusion can actually be
         // applied; see SetIllusionDisplayEnabled.
         if (!IllusionDisplayEnabled()) {
+            LOG(debug, "ShouldOverrideSkinning: the illusion is switched off for this session, so {:08X} is left alone.", target ? target->GetFormID() : 0);
             return false;
         }
         // Never touch actors while a save is being loaded: the biped data is
@@ -79,13 +80,21 @@ namespace Hooking {
                 reinterpret_cast<std::uintptr_t>(target));
             return false;
         }
-        if (!service->inner().enabled_c()) return false;
+        if (!service->inner().enabled_c()) {
+            LOG(debug, "ShouldOverrideSkinning: the outfit service is disabled, so {:08X} is left alone.", target->GetFormID());
+            return false;
+        }
             auto actor = skyrim_cast<RE::Actor*>(target);
         if (!actor) {
             LOG(warn, "Target failed to cast to RE::Actor");
             return false;
         }
-        if (!service->inner().should_override(actor->GetFormID())) return false;
+        if (!service->inner().should_override(actor->GetFormID())) {
+            // The state that used to be invisible: an actor with no outfit assigned is
+            // neither hidden nor filled, and nothing anywhere said so.
+            LOG(debug, "ShouldOverrideSkinning: no outfit is assigned to {:08X}, so nothing is hidden and nothing is attached for it.", actor->GetFormID());
+            return false;
+        }
         return true;
     }
 
@@ -147,6 +156,86 @@ namespace Hooking {
         std::atomic_bool g_brokenIllusionReported{ false };
         inline constexpr std::uint32_t kHiddenBeforeHealthCheck = 10;
         inline constexpr std::uint32_t kPassesBeforeHealthCheck = 60;
+
+        // 1.5.87: the actor of a skinning pass used to be found only through
+        // BipedAnim::actorRef - one structure offset that a build nobody has looked at may
+        // place elsewhere. A player log from 2026-11-27 showed the hook installed and the
+        // pass running on a repacked 1.6.1170 executable, yet no piece was ever hidden, so
+        // the illusion stayed invisible while every line of the log was green. Every actor
+        // this plugin has seen now registers its two biped pointers here; a weight model
+        // handed to the hook is matched by comparing pointers, and actorRef is only the
+        // fallback for an actor this plugin has never seen.
+        std::mutex g_bipedOwnerMutex;
+        std::unordered_map<const void*, RE::FormID> g_bipedOwner;
+
+        void RememberBipeds(RE::Actor* a_actor) {
+            if (!a_actor) return;
+            const auto id = a_actor->GetFormID();
+            std::lock_guard lock(g_bipedOwnerMutex);
+            if (g_bipedOwner.size() > 2048) g_bipedOwner.clear();
+            for (const bool firstPerson : { false, true }) {
+                const auto* biped = reinterpret_cast<const void*>(a_actor->GetBiped(firstPerson).get());
+                if (biped) g_bipedOwner[biped] = id;
+            }
+        }
+
+        RE::Actor* ActorOfBiped(const void* a_biped) {
+            if (!a_biped) return nullptr;
+            RE::FormID id = 0;
+            {
+                std::lock_guard lock(g_bipedOwnerMutex);
+                const auto it = g_bipedOwner.find(a_biped);
+                if (it == g_bipedOwner.end()) return nullptr;
+                id = it->second;
+            }
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!actor) return nullptr;
+            // The pointer has to still be one of this actor's bipeds: a recreated biped
+            // leaves a stale entry behind, and a wrong actor here would hide the wrong
+            // pieces.
+            if (reinterpret_cast<const void*>(actor->GetBiped(false).get()) != a_biped &&
+                reinterpret_cast<const void*>(actor->GetBiped(true).get()) != a_biped) {
+                return nullptr;
+            }
+            return actor;
+        }
+
+        // Actors for which the armour pass hook has actually run with a known model. Until
+        // that happens the deferred pass has to use the external fill: asking the engine to
+        // rebuild a biped only helps when the hook fills it, and on a build where it does
+        // not, the refresh is invisible work (1.5.86: the log was clean and the illusion
+        // never appeared).
+        std::mutex g_provenMutex;
+        std::unordered_set<RE::FormID> g_provenActors;
+
+        void MarkHookProven(RE::FormID a_actor) {
+            std::lock_guard lock(g_provenMutex);
+            if (g_provenActors.size() > 1024) g_provenActors.clear();
+            g_provenActors.insert(a_actor);
+        }
+
+        bool HookProven(RE::FormID a_actor) {
+            std::lock_guard lock(g_provenMutex);
+            return g_provenActors.contains(a_actor);
+        }
+
+        // A pass that runs but never hides anything is the one failure the 1.5.86 log could
+        // not show: no hook error, no exception, no health-check trip - just real armour
+        // where the outfit should be. Either nothing is assigned to the player or the pass
+        // on this build does not build the pieces this plugin hides; both leave the log
+        // without a single line, so say it once.
+        inline constexpr RE::FormID kPlayerFormID = 0x14;
+
+        void NoteArmourPass(RE::Actor* a_actor) {
+            if (!a_actor || a_actor->GetFormID() != kPlayerFormID) return;
+            static std::atomic<std::uint32_t> passes{ 0 };
+            static std::atomic_bool reported{ false };
+            const auto seen = passes.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (seen < 120) return;
+            if (g_hiddenPieces.load(std::memory_order_relaxed) != 0) return;
+            if (reported.exchange(true, std::memory_order_relaxed)) return;
+            LOG(warn, "CustomSkinPlayer: the armour pass has run {} time(s) for the player and not one piece of real armour was hidden. Either no outfit is assigned to the player, or on this game build the pass does not build the pieces this plugin hides. If an outfit is assigned and the illusion still does not show, report this line together with your game version.", seen);
+        }
 
         void CheckIllusionHealth() {
             if (g_brokenIllusionReported.load(std::memory_order_relaxed)) return;
@@ -388,12 +477,16 @@ namespace Hooking {
             if (!a_model || !IsReadableObject(a_model)) return nullptr;
             auto* biped = reinterpret_cast<RE::BipedAnim* const*>(a_model)[0];
             if (!biped || !IsReadableObject(biped)) return nullptr;
+            // 1.5.87: an actor this plugin already knows is matched by the biped pointer
+            // itself, so a build that lays BipedAnim out differently still resolves.
+            if (auto* known = ActorOfBiped(biped)) return known;
             auto* owner = biped->actorRef.get().get();
             if (!owner || !IsReadableObject(owner)) return nullptr;
             if (owner->formType != RE::FormType::ActorCharacter) return nullptr;
             auto* actor = skyrim_cast<RE::Actor*>(owner);
             if (!actor) return nullptr;
             if (actor->GetBiped(false).get() != biped && actor->GetBiped(true).get() != biped) return nullptr;
+            RememberBipeds(actor);// the fallback worked, so use the cache from now on
             return actor;
         }
 
@@ -417,7 +510,17 @@ namespace Hooking {
             {
                 ~DepthReset() { --g_attachDepth; }
             } reset;
+            MarkHookProven(a_actor->GetFormID());
+            const auto before = g_attachedPieces.load(std::memory_order_relaxed);
             CustomOne(a_actor, a_model);
+            // One info line, once, so a player log shows that the illusion came from
+            // inside the pass and does not depend on the worn visitor hook any more.
+            if (g_attachedPieces.load(std::memory_order_relaxed) != before) {
+                static std::atomic_bool logged{ false };
+                if (!logged.exchange(true, std::memory_order_relaxed)) {
+                    LOG(info, "CustomSkinPlayer: the armour pass hook attached the display set for {:08X} from inside the pass, so the illusion no longer depends on the worn visitor hook.", a_actor->GetFormID());
+                }
+            }
         }
 
         // What ApplyArmorAddon put in the biped for one piece. The bool it returns is not
@@ -556,6 +659,7 @@ namespace Hooking {
             if (!actorBase)
                 return;
             const bool isFemale = actorBase->GetSex() == RE::SEX::kFemale;
+            RememberBipeds(actor);
             //
             auto svc = outfit_service_get_singleton_ptr();
             auto outfit = svc->inner().current_outfit_ptr(actor->GetFormID());
@@ -709,6 +813,7 @@ namespace Hooking {
                 auto* actor = skyrim_cast<RE::Actor*>(target);
                 if (!actor) {
                     LOG(debug, "Custom: Failed to cast target to Actor.");
+                RememberBipeds(actor);
                     return;
                 }
                 // No weight model was handed in (deferred path only - the hook always
@@ -800,7 +905,7 @@ namespace Hooking {
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
                     if (!actor) continue;
                     if (!ShouldOverrideSkinning(actor)) continue;
-                    if (SiteHookInstalled()) {
+                    if (SiteHookInstalled() && HookProven(id)) {
                         // The hook lives inside the pass that builds the biped, so the display
                         // set only gets geometry when the game rebuilds that biped. Writing the
                         // biped from here instead fills a model the game never finishes: on AE
@@ -810,7 +915,11 @@ namespace Hooking {
                         // it.
                         ::OutfitSystem::refreshArmorFor(actor);
                     } else {
-                        // No hook in the pass at all: the external fill is all that is left.
+                        // Either there is no hook in the pass, or the hook has never been
+                        // proved to run for this actor on this build - and on a build where it
+                        // does not, asking the engine to rebuild the biped is invisible work.
+                        // The external fill is what made the illusion show on the machine whose
+                        // 1.5.86 log was clean and whose screen was not (2026-11-27).
                         Custom(actor, nullptr);
                     }
                 }
@@ -832,7 +941,7 @@ namespace Hooking {
             // used for this actor recently the deferred pass takes over, which is what
             // keeps an actor whose skinning routine returns early from being nude.
             const auto id = a_actor->GetFormID();
-            if (SiteHookInstalled() && SiteHookHitRecently(id)) return;
+            if (SiteHookInstalled() && HookProven(id) && SiteHookHitRecently(id)) return;
             const auto now = std::chrono::steady_clock::now();
             bool firstOfBatch = false;
             {
@@ -846,10 +955,10 @@ namespace Hooking {
                 g_attachPending.insert(id);
             }
             if (firstOfBatch) {
-                if (SiteHookInstalled()) {
+                if (SiteHookInstalled() && HookProven(id)) {
                     LOG(debug, "Custom: {:08X} has not been through the hooked skinning pass in the last moment; asking the engine to rebuild its biped so that the hook can fill it.", static_cast<std::uint32_t>(id));
                 } else {
-                    LOG(debug, "Custom: this game build's worn visitor could not be hooked; attaching the display set from the deferred pass.");
+                    LOG(debug, "Custom: the armour pass hook has not filled {:08X} on this game build yet; attaching the display set from the deferred pass.", static_cast<std::uint32_t>(id));
                 }
             }
             if (g_attachTaskQueued.exchange(true, std::memory_order_relaxed)) return;
@@ -890,6 +999,7 @@ namespace Hooking {
                 // line is what 1.5.82 was missing: it hid the skin too, which turned an
                 // empty preset into a head-only body and left other presets without hands
                 // or feet.
+                NoteArmourPass(actor);
                 if (a_armor == actor->GetSkin()) return false;
                 // Attaching happens once per pass, at its first piece, so the outfit-only
                 // pieces are written before the engine fills the rest of the slots.
