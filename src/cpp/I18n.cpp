@@ -43,7 +43,7 @@ namespace SOS::I18n
 			{ "Random outfit", "随机幻化" },
 			{ "Diagnostics", "诊断" },
 			{ "Language", "语言" },
-			{ "Auto (game language)", "自动（跟随游戏）" },
+			{ "Auto (menu language)", "自动（跟随菜单语言）" },
 			{ "English", "English" },
 			{ "中文", "中文" },
 			{ "Change outfit", "更换幻化" },
@@ -355,6 +355,9 @@ namespace SOS::I18n
 			{ "Only free slots", "只显示槽位空闲的" },
 			{ "Showing the first %zu of %zu pieces - refine the search or tick 「only free slots」.", "只显示前 %zu 件（共 %zu 件），请细化搜索或勾选「只显示槽位空闲的」。" },
 			{ "[slot taken] ", "[槽位已占用] " },
+			// 1.5.92: the conflict prompt names the piece that holds the slot.
+			{ "%s uses a body slot this outfit already covers: %s.", "「%s」要用的槽位已被本预设占用：%s。" },
+			{ "%s (slot %s)", "「%s」（槽位 %s）" },
 			{ "Bulk delete", "批量删除" },
 			{ "%zu preset(s) ticked", "已勾选 %zu 套幻化" },
 			{ "Tick this page", "本页全选" },
@@ -809,21 +812,54 @@ namespace SOS::I18n
 				state.languages.size(), total, TranslationsDir().string());
 		}
 
-		std::string GameLanguageCode()
+		// 1.5.92: "auto" follows the language chosen on the SKSE Menu Framework
+		// settings page, not the game's sLanguage. The framework does not store a
+		// language name: it stores the glyph ranges it has to load, and that is what
+		// [Fonts] in its own ini holds, so those switches are the answer. sLanguage
+		// is what the game speaks and never changes what the framework draws with.
+		std::string MenuLanguageCode()
 		{
-			auto* collection = RE::INISettingCollection::GetSingleton();
-			if (!collection) {
-				return "english";
+			bool chinese = false;
+			bool japanese = false;
+			bool korean = false;
+			bool cyrillic = false;
+			bool thai = false;
+			bool turkish = false;
+			bool polish = false;
+			bool vietnamese = false;
+			{
+				CSimpleIniA ini;
+				ini.SetUnicode();
+				const auto      path = PluginsDir() / "SKSEMenuFramework.ini";
+				std::error_code ec;
+				if (!std::filesystem::exists(path, ec) || ec) {
+					SKSE::log::debug("Language: {} is missing, so the menu framework runs on its defaults and the interface stays English.", path.string());
+					return "english";
+				}
+				if (ini.LoadFile(path.string().c_str()) < 0) {
+					SKSE::log::warn("Language: {} could not be read, so the interface stays English. Fix or delete it and start the game again.", path.string());
+					return "english";
+				}
+				chinese = ini.GetBoolValue("Fonts", "EnableChinese", false);
+				japanese = ini.GetBoolValue("Fonts", "EnableJapanese", false);
+				korean = ini.GetBoolValue("Fonts", "EnableKorean", false);
+				cyrillic = ini.GetBoolValue("Fonts", "EnableCyrillic", false);
+				thai = ini.GetBoolValue("Fonts", "EnableThai", false);
+				turkish = ini.GetBoolValue("Fonts", "EnableTurkish", false);
+				polish = ini.GetBoolValue("Fonts", "EnablePolish", false);
+				vietnamese = ini.GetBoolValue("Fonts", "EnableVietnamese", false);
 			}
-			const auto* setting = collection->GetSetting("sLanguage:General");
-			if (!setting || setting->GetType() != RE::Setting::Type::kString || !setting->data.s) {
-				return "english";
-			}
-			auto code = ToLower(setting->data.s);
-			if (code.rfind("chin", 0) == 0) {
-				return "chinese";
-			}
-			return code;
+			// The order the framework itself checks the switches in. With more than
+			// one of them on the first one wins here too, so both menus agree.
+			if (chinese) { return "chinese"; }
+			if (japanese) { return "japanese"; }
+			if (korean) { return "korean"; }
+			if (cyrillic) { return "russian"; }
+			if (thai) { return "thai"; }
+			if (turkish) { return "turkish"; }
+			if (polish) { return "polish"; }
+			if (vietnamese) { return "vietnamese"; }
+			return "english";
 		}
 
 		// Reads [Fonts] from the framework ini. Defaults mirror the framework:
@@ -924,7 +960,7 @@ namespace SOS::I18n
 
 			auto requested = ToLower(state.mode);
 			if (requested == "auto" || requested.empty()) {
-				requested = GameLanguageCode();
+				requested = MenuLanguageCode();
 			}
 			if (requested == "zh" || requested == "cn") {
 				requested = "chinese";

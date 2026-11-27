@@ -57,6 +57,10 @@ namespace SOS::Menu
 		// programmatically) so the list scrolls the selection into view on the
 		// next frame instead of leaving it off screen.
 		bool                      g_scrollToSelected{ false };
+		// 1.5.92: set when the menu opens so the browser puts itself on the outfit
+		// the chosen actor is wearing, the way the quick picker does. Consumed by
+		// the first frame of the outfits page that follows.
+		bool                      g_outfitsFocusWorn{ false };
 		char                      g_newName[257]{};
 		char                      g_renameName[257]{};
 		std::string               g_pendingDelete;
@@ -936,6 +940,36 @@ namespace SOS::Menu
 			g_scrollToSelected = true;
 		}
 
+		// 1.5.92: focus the preset the chosen actor is wearing when the menu is
+		// opened. The search box is left untouched: an outfit the filter hides is
+		// the filter the user asked for, so the selection stays where it was.
+		void FocusWornOutfit()
+		{
+			auto* target = TargetActor();
+			if (!target) {
+				return;
+			}
+			std::string wornName;
+			{
+				auto service = outfit_service_get_singleton_ptr();
+				if (const auto* worn = service->inner().current_outfit_ptr(target->GetFormID())) {
+					wornName = worn->name_c();
+				}
+			}
+			if (wornName.empty()) {
+				return;
+			}
+			const auto it = std::find(g_filtered.begin(), g_filtered.end(), wornName);
+			if (it == g_filtered.end()) {
+				return;
+			}
+			g_selected = wornName;
+			std::snprintf(g_renameName, sizeof(g_renameName), "%s", wornName.c_str());
+			const auto pageSize = static_cast<std::size_t>(std::max(1, OutfitPageSize()));
+			g_page = static_cast<int>((static_cast<std::size_t>(it - g_filtered.begin()) / pageSize) + 1);
+			g_scrollToSelected = true;
+		}
+
 		void RenderOutfits()
 		{
 			auto& settings = Settings::Get();
@@ -969,6 +1003,10 @@ namespace SOS::Menu
 			// Deleting the last outfit of the last page (or a filter shrinking the
 			// list) can leave g_page past the end; clamp before it is used to slice.
 			g_page = std::clamp(g_page, 1, pageCount);
+			if (g_outfitsFocusWorn) {
+				g_outfitsFocusWorn = false;
+				FocusWornOutfit();
+			}
 			IG::SameLine();
 			if (IG::SmallButton("|<")) { g_page = 1; }
 			IG::SameLine();
@@ -1766,9 +1804,9 @@ namespace SOS::Menu
 				// translator can add a language without touching the plugin.
 				const std::string mode(I18n::ModeName());
 				const bool        isAuto = mode == "auto";
-				const char*       preview = isAuto ? I18n::Tr("Auto (game language)") : I18n::LabelForCode(I18n::CurrentCode());
+				const char*       preview = isAuto ? I18n::Tr("Auto (menu language)") : I18n::LabelForCode(I18n::CurrentCode());
 				if (IG::BeginCombo(I18n::TrId("Language"), preview)) {
-					if (IG::Selectable(I18n::TrId("Auto (game language)"), isAuto)) {
+					if (IG::Selectable(I18n::TrId("Auto (menu language)"), isAuto)) {
 						I18n::SetLanguage("auto");
 						Settings::Get().Save();
 					}
@@ -2071,6 +2109,8 @@ namespace SOS::Menu
 				Hotkeys::CancelCapture();
 			}
 			if (open) {
+				// 1.5.92: the browser starts on the preset the chosen actor wears.
+				g_outfitsFocusWorn = true;
 				IG::SetMenuInputSuppressed(false);
 				// The framework has a font loaded by now, so the language can be asked
 				// whether the interface it is set to can actually be drawn.

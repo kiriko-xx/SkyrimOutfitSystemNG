@@ -77,7 +77,7 @@ Assert-Contains $hooks 'the display set is attached inside the skinning pass, bu
 Assert-Absent $hooks 'SetIllusionDisplayEnabled(illusionAvailable)' 'the all-or-nothing gate is gone'
 
 # 5. version
-if ($version -notmatch 'VERSION_PATCH 91') { Write-Host 'FAIL version.h is not at 1.5.91'; $fails++ }
+if ($version -notmatch 'VERSION_PATCH (\d+)' -or [int]$Matches[1] -lt 91) { Write-Host 'FAIL version.h is not at 1.5.91 or later'; $fails++ }
 
 if ($fails -gt 0) { Write-Host "ENTRY_IDENTITY_FAILED $fails"; exit 1 }
 Write-Host 'ENTRY_IDENTITY_OK: 33 byte fingerprints (lea masked), the library is a candidate with a 0x800 window, and the illusion degrades by half instead of switching off'

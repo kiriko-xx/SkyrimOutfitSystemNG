@@ -46,7 +46,8 @@ namespace SOS::I18n
 	// "中文", anything unknown gets its first letter capitalised.
 	const char* LabelForCode(const char* a_code);
 
-	// Switches the interface language. Pass "auto" to follow sLanguage:General.
+	// Switches the interface language. Pass "auto" to follow the language picked
+	// on the SKSE Menu Framework settings page (the [Fonts] switches in its ini).
 	// The value is written to Settings by the caller when it should persist.
 	void SetLanguage(const char* a_code);
 

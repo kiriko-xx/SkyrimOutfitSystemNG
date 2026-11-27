@@ -159,14 +159,21 @@ namespace SOS::Menu::Editor
 			return text;
 		}
 
-		// "32, 37" - the numbers Creation Kit and xEdit show, i.e. the zero based
-		// BOD2 index plus 30.
-		std::string SlotNumbersText(const RE::TESObjectARMO* a_armor)
+		// 1.5.92: the prompt names the pieces that hold the slot instead of
+		// saying "the conflicting pieces", so the decision can be made before the
+		// click. The struct is declared up here because CollectConflicts below
+		// takes it by reference.
+		struct PendingConflict
 		{
-			const auto  mask = a_armor ? a_armor->GetSlotMask().underlying() : 0;
+			const RE::TESObjectARMO* armor{ nullptr };
+			std::string              slots;
+		};
+
+		std::string SlotNumbersOfMask(std::uint32_t a_mask)
+		{
 			std::string text;
 			for (std::uint32_t bit = 0; bit < 32; ++bit) {
-				if ((mask & (1u << bit)) == 0) {
+				if ((a_mask & (1u << bit)) == 0) {
 					continue;
 				}
 				char number[8]{};
@@ -174,6 +181,38 @@ namespace SOS::Menu::Editor
 				text += number;
 			}
 			return text.empty() ? std::string("?") : text;
+		}
+
+		// "32, 37" - the numbers Creation Kit and xEdit show, i.e. the zero based
+		// BOD2 index plus 30.
+		std::string SlotNumbersText(const RE::TESObjectARMO* a_armor)
+		{
+			return SlotNumbersOfMask(a_armor ? a_armor->GetSlotMask().underlying() : 0);
+		}
+
+		// The pieces of the outfit that hold a slot the new piece needs, with the
+		// slot numbers that collide, so the prompt can name them.
+		void CollectConflicts(const std::string& a_outfit, const RE::TESObjectARMO* a_armor, std::vector<PendingConflict>& a_out)
+		{
+			a_out.clear();
+			if (!a_armor) {
+				return;
+			}
+			auto        service = outfit_service_get_singleton_ptr();
+			const auto* outfit = service->inner().get_outfit_ptr(a_outfit.c_str());
+			if (!outfit) {
+				return;
+			}
+			const auto mask = a_armor->GetSlotMask().underlying();
+			for (const auto* existing : outfit->armors()) {
+				if (!existing) {
+					continue;
+				}
+				const auto overlap = existing->GetSlotMask().underlying() & mask;
+				if (overlap != 0) {
+					a_out.push_back({ existing, SlotNumbersOfMask(overlap) });
+				}
+			}
 		}
 
 		// ---- editor state ---------------------------------------------------
@@ -192,6 +231,8 @@ namespace SOS::Menu::Editor
 		std::string               g_status;
 		const RE::TESObjectARMO*  g_pending{ nullptr };
 		std::string               g_pendingOutfit;
+		std::vector<PendingConflict> g_pendingConflicts;
+		bool                         g_pendingFromPieceList{ false };
 
 		// The old MCM asked for confirmation before taking a piece out of an
 		// outfit; keep that so a stray click cannot lose the entry.  The prompt
@@ -329,7 +370,7 @@ namespace SOS::Menu::Editor
 			}());
 		}
 
-		void AddArmor(const std::string& a_outfit, const RE::TESObjectARMO* a_armor)
+		void AddArmor(const std::string& a_outfit, const RE::TESObjectARMO* a_armor, bool a_fromPieceList = false)
 		{
 			if (!a_armor) {
 				return;
@@ -342,8 +383,12 @@ namespace SOS::Menu::Editor
 			if (outfit->conflicts_with(a_armor)) {
 				g_pending = a_armor;
 				g_pendingOutfit = a_outfit;
+				g_pendingFromPieceList = a_fromPieceList;
+				CollectConflicts(a_outfit, a_armor, g_pendingConflicts);
 				return;
 			}
+			g_pendingConflicts.clear();
+			g_pendingFromPieceList = false;
 			outfit->insert_armor(a_armor);
 			SetStatus(std::string(I18n::T("Added ", "已添加 ")) + ArmorName(a_armor) + ".");
 			NotifyChanged(a_outfit);
@@ -362,13 +407,36 @@ namespace SOS::Menu::Editor
 			NotifyChanged(a_outfit);
 		}
 
-		void RenderPendingConflict()
+		std::string ConflictPiecesText()
+		{
+			const char* item = I18n::Tr("%s (slot %s)");
+			const char* joiner = I18n::Chinese() ? "、" : ", ";
+			std::string text;
+			for (const auto& conflict : g_pendingConflicts) {
+				char line[384]{};
+				std::snprintf(line, sizeof(line), item, ArmorName(conflict.armor).c_str(), conflict.slots.c_str());
+				if (!text.empty()) {
+					text += joiner;
+				}
+				text += line;
+			}
+			return text;
+		}
+
+		// The body of the "slot already taken" prompt: it is drawn at the top of
+		// the panel, or under the row that was clicked in the ESP piece list.
+		void RenderConflictChoice()
 		{
 			if (!g_pending) {
 				return;
 			}
-			IG::TextWrapped(I18n::Tr("%s uses a body slot that is already covered by this outfit. Replace the conflicting pieces?"),
-				ArmorName(g_pending).c_str());
+			if (g_pendingConflicts.empty()) {
+				IG::TextWrapped(I18n::Tr("%s uses a body slot that is already covered by this outfit. Replace the conflicting pieces?"),
+					ArmorName(g_pending).c_str());
+			} else {
+				IG::TextWrapped(I18n::Tr("%s uses a body slot this outfit already covers: %s."),
+					ArmorName(g_pending).c_str(), ConflictPiecesText().c_str());
+			}
 			if (IG::Button(I18n::TrId("Replace the conflicting pieces"))) {
 				auto  service = outfit_service_get_mut_singleton_ptr();
 				auto* outfit = service->inner().get_mut_outfit_ptr(g_pendingOutfit.c_str());
@@ -388,10 +456,14 @@ namespace SOS::Menu::Editor
 					NotifyChanged(g_pendingOutfit);
 				}
 				g_pending = nullptr;
+				g_pendingConflicts.clear();
+				g_pendingFromPieceList = false;
 			}
 			IG::SameLine();
 			if (IG::Button(I18n::TrId("Cancel"))) {
 				g_pending = nullptr;
+				g_pendingConflicts.clear();
+				g_pendingFromPieceList = false;
 			}
 		}
 
@@ -619,10 +691,15 @@ namespace SOS::Menu::Editor
 								occupied ? I18n::T("[slot taken] ", "[槽位已占用] ") : "", name, idText.c_str());
 							IG::PushID(static_cast<int>(row++));
 							if (IG::Selectable(label)) {
-								AddArmor(a_outfit, armor);
+								AddArmor(a_outfit, armor, true);
 							}
 							IG::SameLine();
 							IG::TextDisabled(I18n::T("[slot %s]", "[槽位 %s]"), SlotNumbersText(armor).c_str());
+							// 1.5.92: ask right here instead of at the top of the panel, which the
+							// user has usually scrolled away from by the time a piece is clicked.
+							if (g_pending == armor && g_pendingOutfit == a_outfit) {
+								RenderConflictChoice();
+							}
 							IG::PopID();
 						}
 						if (shown == 0) {
@@ -874,7 +951,9 @@ namespace SOS::Menu::Editor
 			IG::TextDisabled("%s", g_status.c_str());
 		}
 
-		RenderPendingConflict();
+		if (g_pending && !g_pendingFromPieceList) {
+			RenderConflictChoice();
+		}
 		RenderAddSection(a_outfit);
 		RenderSlotList(a_outfit, view.armors);
 		RenderPolicies(a_outfit, view);
@@ -885,6 +964,8 @@ namespace SOS::Menu::Editor
 		g_searchSignature.clear();
 		g_results.clear();
 		g_pending = nullptr;
+		g_pendingConflicts.clear();
+		g_pendingFromPieceList = false;
 		g_pendingRemove = nullptr;
 		g_pendingRemoveSlot = 0;
 		g_pendingRemoveOutfit.clear();

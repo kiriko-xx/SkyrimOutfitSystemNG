@@ -118,8 +118,10 @@ namespace SOS
 		bool quickslotsEnabled{ true };
 		bool extraLogging{ false };
 
-		// [UI] - "auto" follows the game language, "en" forces English, "zh"
-		// forces Chinese (falls back to English when no CJK font is loaded).
+		// [UI] - "auto" follows the language chosen on the SKSE Menu Framework
+		// settings page (the [Fonts] switches in SKSEMenuFramework.ini), "en"
+		// forces English, "zh" forces Chinese (falls back to English when no CJK
+		// font is loaded).
 		std::string language{ "auto" };
 
 		// [UI] - list layout, shared by the outfits browser and the quick picker
