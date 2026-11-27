@@ -1,3 +1,15 @@
+## [1.5.92] - 2026-11-27
+
+### 改：自动语言跟菜单语言、槽位冲突点名占位件、幻化页自动焦点（m15096 / m15455）
+
+**用户原话**：「测试功能正常，这是真实的SKSEMenuFramework.ini你可以看看，另外我使用的测试包没有替换interface中的语言txt文件，但还是正确显示了新增的那几条替换槽位的中文，是写死了？没落实到i18n语言txt？」
+
+- **「自动」语言改读宿主菜单语言**：新增 `I18n::MenuLanguageCode()`，读 `SKSEMenuFramework.ini` 的 `[Fonts] Enable*`（chinese / japanese / korean / russian / thai / turkish / polish / vietnamese，按此顺序取第一个 true；全 false 或读不到 = english）；删掉原来读 `sLanguage:General` 的 `GameLanguageCode()`。下拉文案 `Auto (game language)` → `Auto (menu language)`（中文「自动（跟随菜单语言）」），ini 注释与两份翻译 txt 同步。
+- **中文不依赖翻译 txt**：`I18n::Apply()` 在中文下先把编译进 DLL 的 `kDictionary`（372 条）装成 en→zh，再把 `interface/translations/SkyrimOutfitSystemNG_<code>.txt` 覆盖上去（`strings[key] = value`）；其它语言没有内置词典，全来自 txt、缺键回落英文键。载入时 `PlaceholdersMatch` 校验 `%s`/`%d` 的数量与顺序，不符则该行拒收并 warn，防止格式串把游戏带崩。
+- **槽位冲突点名占位件**：新增 `SlotNumbersOfMask()`（槽号 = bit + 30，与 Creation Kit / xEdit 一致）、`CollectConflicts()`、`PendingConflict`；`AddArmor(..., a_fromPieceList)` 记下冲突件，`RenderConflictChoice()` 输出 `"%s uses a body slot this outfit already covers: %s."` + 逐件 `"%s (slot %s)"`，按钮「替换冲突部件 / 取消」。从 ESP 单件列表触发时，提示与按钮直接画在被点行下面（`Render()` 顶层只处理非单件列表的冲突）。
+- **幻化页自动焦点**：`g_outfitsFocusWorn` 在 `OnFrameworkMenuEvent(open)` 置位，`RenderOutfits()` 里由 `FocusWornOutfit()` 把选中、页码与滚动对到 `current_outfit_ptr()` 那一套；被搜索过滤掉时不动列表。
+- **守卫测试**：新增 `tests/menu_language_focus.ps1`（A 语言 / B 冲突 / C 焦点三段断言，含「结构体先于使用」与负向反证）；`tests/entry_identity.ps1` 的版本门改为 `-lt 91`。37 个脚本 36 PASS（`skse_listener_replay.ps1` 需游戏日志跳过）。
+
 ## [1.5.81] - 2026-11-26
 
 ### 修：热键录制独占输入、能力键按当前选中判定、钩子与别的插件共存（m07787 / m08192 / m09015 / m09153 / m09267）

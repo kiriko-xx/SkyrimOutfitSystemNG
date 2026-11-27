@@ -1,4 +1,19 @@
-## 1.5.81 最新交付准备（2026-11-26）
+## 1.5.92 最新交付准备（2026-11-27）
+
+**验证状态（1.5.92）**：用户 m15455「测试功能正常」。本版只改界面与语言，引擎侧（钩子安装、隐藏真甲、显示集挂载、策略、健康检查）与 1.5.91 完全一致，1.5.89–1.5.91 的实机结论（SE 1.5.97 / AE 1.6.1170 幻化正常、不再 CTD）继续有效。
+
+| 最终产物复核项 | 状态 |
+| --- | --- |
+| DLL 大小 / SHA256 / FileVersion | 2,322,944 字节；`499B1ABA86E8F84B3DBF5F487BA87021DC1D72EFC4BCFE3D08E1A6382A12A0F2`；`1.5.92.0`（干净重建产物，dist 与 build/Release 逐字节一致） |
+| 静态守卫 | 37 个 `tests/*.ps1`：36 PASS，仅 `skse_listener_replay.ps1` 因构建机没有游戏日志跳过 |
+| 干净重建 | `build/build_1_5_92_clean.bat`（MSBuild `/t:Rebuild`）：`CFG_EXIT=0` / `CLEAN_EXIT=0`，唯一警告是既有的 MSB8028 |
+| 翻译文件 | 词典 372 条 UI 文本 ↔ 两份 txt 各 372 行逐条对齐（含 1.5.92 改名的一条 auto 与新增两条） |
+
+- **本版改动面**：`src/cpp/I18n.cpp`（`MenuLanguageCode()`、删 `GameLanguageCode()`、词典两条新增 + 一条改名）、`src/cpp/include/I18n.h`、`src/cpp/MenuUI.cpp`（语言下拉文案、`g_outfitsFocusWorn` / `FocusWornOutfit()`）、`src/cpp/MenuOutfitEditor.cpp`（`PendingConflict` / `CollectConflicts` / `SlotNumbersOfMask` / `ConflictPiecesText` / `RenderConflictChoice()` / 单件行内渲染）、`src/core/Settings.h` 与 `dist/SKSE/Plugins/SkyrimOutfitSystemNG.ini` 注释、`dist/interface/translations/*`。引擎侧零改动。
+- **兼容性**：字体探针仍走 SMF 3.x 的可选导出 `igGetFont` / `ImFont_FindGlyphNoFallback`，取不到就「不 gate」（按配置使用），不会因框架版本差异关掉中文；1.5.91 的 33 字节指纹 + 地址库邻域搜索 + 按半降级未改。
+- **回退**：装 1.5.91 的测试包即可回到与 1.5.92 完全相同的引擎行为（只少这三处界面改动）；要更早的正式发布则用 1.5.81 成品包（`VERSIONS.md` 有大小与哈希）。
+
+## 1.5.81 交付准备（历史，被 1.5.92 取代）
 
 **验证状态（1.5.81）**：用户 m09460「测试通过」。SE 1.5.97 与 AE 1.6.1170 两套运行时均已实机确认；1.5.80 起 AE 的启动即崩（`displacement is out of range`）已修。
 
