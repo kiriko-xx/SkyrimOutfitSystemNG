@@ -98,7 +98,7 @@ Assert-Contains $hooks 'branchTarget = AllocateFarStub(a_name, a_site, branchTar
 Assert-Contains $hooks 'if (!WriteBranchTo(a_name, a_site, branchTarget)) {' 'the five-byte branch is written by this plugin, not routed through the trampoline slot of CommonLib'
 Assert-Absent $hooks 'g_branchTrampoline->write_branch<5>' 'no hook goes through write_branch, whose slot next to the executable ends the process for a far site (1.5.79, AE 1.6.1170: displacement is out of range)'
 Assert-Contains $hooks 'WriteBranchTo("RTTIPrinter", InventoryChanges_ExecuteVisitorOnWorn_Hook' 'the debug RTTI hook writes its branch the same way'
-Assert-Contains $hooks 'ShowIllusionUnavailable();' 'a session without the hook says so in a box at startup instead of looking healthy'
+Assert-Contains $hooks 'ShowIllusionUnavailableBox(true);' 'a session without the hook says so in a box at startup instead of looking healthy'
 Assert-Contains $hooks '::LoadLibraryW(L"user32.dll")' 'the box is resolved at run time, so the plugin gains no import dependency'
 Assert-Absent $hooks 'is out of reach of the trampoline stub; this hook stays disabled so the game keeps running.' 'the hook is no longer given up when the site is far away'
 

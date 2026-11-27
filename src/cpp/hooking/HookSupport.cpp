@@ -261,8 +261,14 @@ namespace Hooking
 				static_cast<std::ptrdiff_t>(site) - static_cast<std::ptrdiff_t>(entry), entry - base);
 		}
 		if (sites.size() > 1) {
-			LOG(warn, "{}: the function at rva 0x{:X} calls 0x{:X} {} times; hooking the first one at rva 0x{:X}. If the illusion skips a path in this game build, report this line.",
-				a_hook, entry - base, target, sites.size(), sites.front() - base);
+			// 1.5.86: taking the first of several calls is the same guess that cost 1.5.81 a
+			// crash on another player's build, so several candidates without a fingerprint means
+			// the site cannot be identified here and the hook stays off.
+			LOG(err, "{}: the function at rva 0x{:X} calls 0x{:X} {} times and this hook has no fingerprint to tell them apart; the hook stays disabled rather than patching a guess. Report this line together with your game version.",
+				a_hook, entry - base, target, sites.size());
+			LogModuleIdentity(a_hook);
+			LogForeignJumps(a_hook, entry, end);
+			return 0;
 		}
 		return sites.front();
 	}
@@ -335,12 +341,21 @@ namespace Hooking
 		}
 
 		if (sites.size() == 1) {
-			// Fingerprints were written against the builds that have been looked at. A game
-			// build nobody has looked at yet still leaves a single call to the callee in the
-			// function, which is the evidence this hook was written around.
-			LOG(warn, "{}: the only call to 0x{:X} in the function at rva 0x{:X} does not match '{}'; hooking it anyway because it is the only one there. Report this line together with your game version.",
+			// Fingerprints are written against the builds that have been looked at. A build
+			// nobody has looked at still leaves a single call to the callee here, and up to
+			// 1.5.85 that was taken as good enough ("hooked anyway"). It is not: the
+			// fingerprint is what proves which registers this call site feeds and which
+			// branches follow it. A build that carries the same single call with other bytes
+			// around it is exactly the build where patching it costs the player a crash -
+			// on one machine another plugin had rewritten this call site, the injected code
+			// read the actor out of a register that held something else, and the cast threw
+			// std::__non_rtti_object straight out of the hook. An unverified site is not
+			// hooked at all; the caller logs which feature that leaves switched off.
+			LOG(err, "{}: the only call to 0x{:X} in the function at rva 0x{:X} does not match '{}', so this call site could not be verified for this game build; this hook stays disabled instead of being installed on a guess. Report this line together with your game version and your plugin list.",
 				a_hook, target, entry - base, a_shape.name);
-			return sites.front();
+			LogModuleIdentity(a_hook);
+			LogForeignJumps(a_hook, entry, end);
+			return 0;
 		}
 
 		LOG(err, "{}: {} calls to 0x{:X} inside the function at rva 0x{:X} and none matches '{}'; the hook stays disabled so the game keeps running. Report this line together with your game version.",
@@ -426,8 +441,11 @@ namespace Hooking
 					static_cast<std::ptrdiff_t>(site) - static_cast<std::ptrdiff_t>(entry), entry - base);
 			}
 			if (sites.size() > 1) {
-				LOG(warn, "{}: the function at rva 0x{:X} calls 0x{:X} {} times; hooking the first one at rva 0x{:X}.",
-					a_hook, entry - base, target, sites.size(), sites.front() - base);
+				LOG(err, "{}: the function at rva 0x{:X} calls 0x{:X} {} times and this hook has no fingerprint to tell them apart; the hook stays disabled rather than patching a guess. Report this line together with your game version.",
+					a_hook, entry - base, target, sites.size());
+				LogModuleIdentity(a_hook);
+				LogForeignJumps(a_hook, entry, end);
+				return 0;
 			}
 			return sites.front();
 		}

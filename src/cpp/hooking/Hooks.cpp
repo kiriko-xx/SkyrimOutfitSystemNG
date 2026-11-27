@@ -230,6 +230,9 @@ namespace Hooking {
                 };
                 ShimWornFlags_Hook = FindVerifiedCall("ShimWornFlags", ShimWornFlags_Hook_ID, InventoryChanges_GetWornMask, shape);
                 if (!ShimWornFlags_Hook) {
+                    // Fail-closed: an unverified call site is never patched any more, so say
+                    // what that costs instead of leaving a warn in the middle of the log.
+                    LOG(warn, "ShimWornFlags: the worn mask shim stays off for this session because its call site could not be verified on this game build. The game keeps answering with its own worn mask while an illusion is displayed; the illusion itself is drawn from the skinning pass and still works.");
                     return;
                 }
 
@@ -294,6 +297,7 @@ namespace Hooking {
                 };
                 FixEquipConflictCheck_Hook = FindVerifiedCall("FixEquipConflictCheck", FixEquipConflictCheck_Hook_ID, BGSBipedObjectForm_TestBodyPartByIndex, shape);
                 if (!FixEquipConflictCheck_Hook) {
+                    LOG(warn, "FixEquipConflictCheck: the equip conflict fix stays off for this session because its call site could not be verified on this game build. The game keeps testing the pieces the illusion displays instead of the real gear, so a body part the outfit leaves out can be equipped twice.");
                     return;
                 }
 
@@ -401,6 +405,7 @@ namespace Hooking {
                           } };
                 SkillMutationFunction_Hook = FindVerifiedCall("FixSkillLeveling", SkillMutationFunction_Hook_ID, visitor, shape);
                 if (!SkillMutationFunction_Hook) {
+                    LOG(warn, "FixSkillLeveling: the skill level fix stays off for this session because its call site could not be verified on this game build. The pieces the illusion displays keep counting towards light and heavy armour skill leveling.");
                     return;
                 }
 
@@ -557,7 +562,7 @@ namespace Hooking {
     // player only notices it after the save has loaded and the outfit does not show up. A box
     // at startup says so right away instead of letting the session look healthy; the details
     // stay in the log. Resolved at run time so the plugin gains no import dependency.
-    static void ShowIllusionUnavailable() {
+    void ShowIllusionUnavailableBox(bool a_atLoad) {
         using MessageBoxWFn = int(__stdcall*)(void*, const wchar_t*, const wchar_t*, unsigned);
         const auto user32 = ::LoadLibraryW(L"user32.dll");
         if (!user32) {
@@ -568,11 +573,14 @@ namespace Hooking {
             return;
         }
         // MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST
-        box(nullptr,
-            L"幻化本次会话不可用：幻化需要的钩子没有装上，真实装备会照常显示。\n"
-            L"The outfit illusion is off for this session: the hook that hides the real armour and attaches the display set is not in place, so the real equipped armour stays visible.\n\n"
-            L"具体原因见 SKSE\\Plugins\\OutfitSystemNG.log。",
-            L"OutfitSystemNG", 0x00000030u | 0x00010000u | 0x00040000u);
+        const wchar_t* text = a_atLoad
+            ? L"幻化本次会话不可用：幻化需要的钩子没有装上，真实装备会照常显示。\n"
+              L"The outfit illusion is off for this session: the hook that hides the real armour and attaches the display set is not in place, so the real equipped armour stays visible.\n\n"
+              L"具体原因见 SKSE\\Plugins\\OutfitSystemNG.log。"
+            : L"幻化本次会话已自动关闭：游戏把真实装备藏起来了，却一件幻化外观都没能挂到人物身上，继续下去人物会变成裸的。\n"
+              L"The outfit illusion has been switched off for this session: the real armour was being hidden but not one piece of the outfit was ever attached, so the actor would have been left nude. The real armour is back.\n\n"
+              L"具体原因见 SKSE\\Plugins\\OutfitSystemNG.log。";
+        box(nullptr, text, L"OutfitSystemNG", 0x00000030u | 0x00010000u | 0x00040000u);
     }
 
     void ApplyPlayerSkinningHooks() {
@@ -600,7 +608,7 @@ namespace Hooking {
             LOG(critical, "Illusion display is off for this session: the armour pass hook is missing (hide half {}, attach half {}), so the real equipped armour stays visible. Nothing else is disabled. The reason is in the lines above.",
                 Detail::g_dontVanillaSkinPlayerInstalled ? "hooked" : "missing",
                 Detail::g_customSkinPlayerInstalled ? "hooked" : "missing");
-            ShowIllusionUnavailable();
+            ShowIllusionUnavailableBox(true);
         }
     }
 }// namespace Hooking

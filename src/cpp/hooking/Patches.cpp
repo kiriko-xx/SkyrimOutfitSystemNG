@@ -3,6 +3,7 @@
 //
 
 #include "hooking/Patches.hpp"
+#include "hooking/Hooks.hpp"
 
 #include <algorithm>
 #include <array>
@@ -129,6 +130,40 @@ namespace Hooking {
         F callable;
     };
 
+    namespace {
+        // Whatever is hidden has to be replaced by something, and the two halves of that
+        // live in different places: the pieces are hidden in DontVanillaSkinPlayer below,
+        // the display set is put on the biped in CustomSkinPlayer::CustomOne. When only
+        // the first half works the actor is nude and every line in the log still says the
+        // hooks are fine (1.5.82 hid the skin as well and the player saw a head only).
+        // These counters make that state visible: pieces hidden, passes that had outfit
+        // pieces to attach, and pieces that really landed in a biped. If pieces keep
+        // being hidden, passes keep having something to attach, and nothing has landed,
+        // the illusion is switched off and the real armour comes back - a box says so and
+        // the log says why.
+        std::atomic<std::uint32_t> g_hiddenPieces{ 0 };
+        std::atomic<std::uint32_t> g_attachPasses{ 0 };
+        std::atomic<std::uint32_t> g_attachedPieces{ 0 };
+        std::atomic_bool g_brokenIllusionReported{ false };
+        inline constexpr std::uint32_t kHiddenBeforeHealthCheck = 10;
+        inline constexpr std::uint32_t kPassesBeforeHealthCheck = 60;
+
+        void CheckIllusionHealth() {
+            if (g_brokenIllusionReported.load(std::memory_order_relaxed)) return;
+            const auto hidden = g_hiddenPieces.load(std::memory_order_relaxed);
+            const auto passes = g_attachPasses.load(std::memory_order_relaxed);
+            if (hidden < kHiddenBeforeHealthCheck || passes < kPassesBeforeHealthCheck) return;
+            if (g_attachedPieces.load(std::memory_order_relaxed) != 0) return;
+            if (g_brokenIllusionReported.exchange(true, std::memory_order_relaxed)) return;
+            // Hiding without attaching is worse than no illusion at all, so fall back to
+            // the real gear instead of leaving the actor naked.
+            SetIllusionDisplayEnabled(false);
+            LOG(critical, "CustomSkinPlayer: {} piece(s) of real armour were hidden over {} skinning pass(es) that had outfit pieces to attach, but not one piece of the display set was ever put on a biped, so the actor would have been left nude. The illusion is switched off for this session and the real armour comes back. Report this line together with your game version and your plugin list.",
+                hidden, passes);
+            ShowIllusionUnavailableBox(false);
+        }
+    }// namespace
+
     namespace DontVanillaSkinPlayer {
         bool ShouldOverride(RE::TESObjectARMO* armor, RE::TESObjectREFR* target) {
             LogExit exitPrint("DontVanillaSkinPlayer.ShouldOverride"sv);
@@ -161,6 +196,7 @@ namespace Hooking {
             // pass, and the deferred pass stays as the fallback for actors whose skinning
             // routine never reaches ApplyArmorAddon again.
             CustomSkinPlayer::MarkAttachPending(actor);
+            g_hiddenPieces.fetch_add(1, std::memory_order_relaxed);
             return true;
         }
     }// namespace DontVanillaSkinPlayer
@@ -573,6 +609,11 @@ namespace Hooking {
                 fullRebuild = revisionRebuild || morphRebuild;
                 LOG(debug, "Custom: attaching {} outfit-only piece(s) of {} displayed (mask 0x{:08X}, outfit revision {}, body morph {}) for {:08X}.", applySet.size(), displaySet.size(), displayMask, revisionRebuild, morphRebuild, actor->GetFormID());
             }
+            // One attach attempt for one biped. A pass with nothing to attach says nothing
+            // about whether attaching works, so only passes with a non-empty set count.
+            if (!applySet.empty()) {
+                g_attachPasses.fetch_add(1, std::memory_order_relaxed);
+            }
 
             // Slots of this pass whose piece is not genuinely worn: the only slots that
             // can be holding a clone of ours.
@@ -643,11 +684,14 @@ namespace Hooking {
                     RestoreRealItems(actor, armor, wornBySlot);
                 }
                 LOG(debug, "Custom: {:08X} put 0x{:08X} of its 0x{:08X} slot(s) on the biped for {:08X}.", armor->GetFormID(), staged, mask, actor->GetFormID());
+                g_attachedPieces.fetch_add(1, std::memory_order_relaxed);
                 for (std::uint32_t bit = 0; bit < 32; ++bit) {
                     if ((mask & (1u << bit)) == 0) continue;
                     LogSlotState(actor, actorWeightModel, armor, bit);
                 }
             }
+            CheckIllusionHealth();
+
             // Every clone above was created straight through ApplyArmorAddon, so it
             // never went past skee's attach hook and carries no .tri morph target:
             // RaceMenu's ApplyMorphs() walks such a subtree without touching it.

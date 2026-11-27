@@ -50,6 +50,9 @@ Missing $header 'FindVerifiedCall(' 'FindVerifiedCall is declared'
 Missing $header 'DeriveLoopSkip(' 'DeriveLoopSkip is declared'
 Missing $support 'is the site of this hook' 'a matching site is logged'
 Missing $support 'does not match' 'an unmatched single candidate is logged'
+$guess = ([regex]::Matches($support, 'hooking it anyway')).Count
+if ($guess -ne 0) { Write-Host 'FAIL an unverified single call site is no longer hooked on a guess (1.5.81 crash)'; $fails++ }
+Missing $support 'so this call site could not be verified for this game build' 'an unverified site is refused and named'
 Missing $support 'target < address' 'the loop scan accepts a back edge that lands after the call'
 $disabled = ([regex]::Matches($support, 'the hook stays disabled')).Count
 if ($disabled -lt 1) { Write-Host 'FAIL an ambiguous site must disable the hook instead of guessing'; $fails++ }
