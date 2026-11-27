@@ -154,6 +154,14 @@ namespace Hooking {
         std::atomic<std::uint32_t> g_hiddenPieces{ 0 };
         std::atomic<std::uint32_t> g_attachPasses{ 0 };
         std::atomic<std::uint32_t> g_attachedPieces{ 0 };
+        // 1.5.90: the first two counters above only move inside CustomOne, and CustomOne only
+        // runs once a pass has been recognised as the one that fills the biped. On a build
+        // where that recognition never succeeds the health check below can therefore never
+        // fire, exactly in the situation it exists for (audit of 1.5.89, 2026-11-27). These
+        // two count at the entry of the hook instead: every pass it is handed, and the ones
+        // recognised as the filling pass.
+        std::atomic<std::uint32_t> g_hookPasses{ 0 };
+        std::atomic<std::uint32_t> g_recognizedPasses{ 0 };
         std::atomic_bool g_brokenIllusionReported{ false };
         inline constexpr std::uint32_t kHiddenBeforeHealthCheck = 10;
         inline constexpr std::uint32_t kPassesBeforeHealthCheck = 60;
@@ -242,18 +250,37 @@ namespace Hooking {
             LOG(warn, "CustomSkinPlayer: the armour pass has run {} time(s) for the player and not one piece of real armour was hidden. Either no outfit is assigned to the player, or on this game build the pass does not build the pieces this plugin hides. If an outfit is assigned and the illusion still does not show, report this line together with your game version.", seen);
         }
 
+        // Two ways for the illusion to hide real armour and show nothing, both watched here
+        // and both ending in the real armour coming back:
+        //  1. not one pass is recognised as the one that fills the biped - the visitor this
+        //     build hands over is not the one recorded for it, so nothing can ever be
+        //     attached (the failure an audit of 1.5.89 found unguarded, 2026-11-27);
+        //  2. passes are recognised and keep having outfit pieces to attach, yet not one
+        //     piece ever landed on a biped.
+        // A pass with nothing to attach says nothing about attaching, which is why case 2
+        // counts those passes separately and a working build never trips it.
         void CheckIllusionHealth() {
             if (g_brokenIllusionReported.load(std::memory_order_relaxed)) return;
             const auto hidden = g_hiddenPieces.load(std::memory_order_relaxed);
-            const auto passes = g_attachPasses.load(std::memory_order_relaxed);
-            if (hidden < kHiddenBeforeHealthCheck || passes < kPassesBeforeHealthCheck) return;
+            if (hidden < kHiddenBeforeHealthCheck) return;
             if (g_attachedPieces.load(std::memory_order_relaxed) != 0) return;
+            const auto passes = g_hookPasses.load(std::memory_order_relaxed);
+            if (passes < kPassesBeforeHealthCheck) return;
+            const auto recognized = g_recognizedPasses.load(std::memory_order_relaxed);
+            const auto attachPasses = g_attachPasses.load(std::memory_order_relaxed);
+            const bool neverRecognized = recognized == 0;
+            if (!neverRecognized && attachPasses < kPassesBeforeHealthCheck) return;
             if (g_brokenIllusionReported.exchange(true, std::memory_order_relaxed)) return;
             // Hiding without attaching is worse than no illusion at all, so fall back to
             // the real gear instead of leaving the actor naked.
             SetIllusionDisplayEnabled(false);
-            LOG(critical, "CustomSkinPlayer: {} piece(s) of real armour were hidden over {} skinning pass(es) that had outfit pieces to attach, but not one piece of the display set was ever put on a biped, so the actor would have been left nude. The illusion is switched off for this session and the real armour comes back. Report this line together with your game version and your plugin list.",
-                hidden, passes);
+            if (neverRecognized) {
+                LOG(critical, "CustomSkinPlayer: {} piece(s) of real armour were hidden over {} skinning pass(es), but not one of those passes was recognised as the pass that fills the biped, so the display set could never be attached and the actor would have been left nude. The illusion is switched off for this session and the real armour comes back. Report this line together with your game version and your plugin list.",
+                    hidden, passes);
+            } else {
+                LOG(critical, "CustomSkinPlayer: {} piece(s) of real armour were hidden over {} skinning pass(es) that had outfit pieces to attach, but not one piece of the display set was ever put on a biped, so the actor would have been left nude. The illusion is switched off for this session and the real armour comes back. Report this line together with your game version and your plugin list.",
+                    hidden, attachPasses);
+            }
             ShowIllusionUnavailableBox(false);
         }
     }// namespace
@@ -578,6 +605,7 @@ namespace Hooking {
             inPass = true;
             Reset reset{ inPass };
             if (!a_inventory || !a_visitor) return;
+            g_hookPasses.fetch_add(1, std::memory_order_relaxed);
             {
                 static std::atomic_bool logged{ false };
                 if (!logged.exchange(true, std::memory_order_relaxed)) {
@@ -588,8 +616,13 @@ namespace Hooking {
                 auto* anim = PassBiped(a_visitor);
                 if (!anim) {
                     LogForeignVisitor(a_visitor);
+                    // Nothing was attached on this one either, and on a build that never
+                    // recognises the filling pass this is the only place the health check
+                    // can still see how many passes went by (see CheckIllusionHealth).
+                    CheckIllusionHealth();
                     return;
                 }
+                g_recognizedPasses.fetch_add(1, std::memory_order_relaxed);
                 auto* owner = a_inventory->owner;
                 if (!ShouldOverrideSkinning(owner)) return;
                 auto* actor = skyrim_cast<RE::Actor*>(owner);

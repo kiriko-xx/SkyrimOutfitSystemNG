@@ -12,7 +12,10 @@ $ErrorActionPreference = 'Stop'
 #    skin as well and left a head only). Pieces hidden, passes with something to attach and
 #    pieces that really landed are counted now; when the first keeps growing, the second keeps
 #    happening and the third stays zero, the illusion is switched off, the real armour comes
-#    back and a box says so.
+#    back and a box says so. 1.5.90 closes the hole the audit of 1.5.89 found: those counters
+#    only move once a pass is recognised, so on a build where none ever is, the check could
+#    not fire at all - passes are now counted at the entry of the hook, and "not one pass was
+#    recognised as the one that fills the biped" trips the check by itself.
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $failures = 0
 
@@ -61,6 +64,28 @@ $patches = Read-RepoFile 'src/cpp/hooking/Patches.cpp'
 Assert-Contains $patches 'std::atomic<std::uint32_t> g_hiddenPieces{ 0 };' 'hidden pieces are counted'
 Assert-Contains $patches 'std::atomic<std::uint32_t> g_attachPasses{ 0 };' 'passes that had something to attach are counted'
 Assert-Contains $patches 'std::atomic<std::uint32_t> g_attachedPieces{ 0 };' 'pieces that really landed are counted'
+# 1.5.90: the three counters above only move inside CustomOne, so a build that never
+# recognises the filling pass could never trip the check. Passes are counted at the entry of
+# the hook as well, and "never recognised" is a trip of its own.
+Assert-Contains $patches 'std::atomic<std::uint32_t> g_hookPasses{ 0 };' 'every pass handed to the hook is counted at its entry'
+Assert-Contains $patches 'std::atomic<std::uint32_t> g_recognizedPasses{ 0 };' 'passes recognised as the filling one are counted'
+if (([regex]::Matches($patches, 'g_hookPasses\.fetch_add\(1')).Count -ne 1) {
+    Write-Output 'FAIL a pass is counted once, at the entry of the worn pass hook'
+    $failures++
+}
+if (([regex]::Matches($patches, 'g_recognizedPasses\.fetch_add\(1')).Count -ne 1) {
+    Write-Output 'FAIL a recognised pass is counted once, right after the biped is read out of the visitor'
+    $failures++
+}
+Assert-Contains $patches 'const bool neverRecognized = recognized == 0;' 'a build that never recognises the filling pass is its own case'
+Assert-Contains $patches 'if (!neverRecognized && attachPasses < kPassesBeforeHealthCheck) return;' 'a working build never trips the check for passes with nothing to attach'
+Assert-Contains $patches 'but not one of those passes was recognised as the pass that fills the biped' 'the never-recognised case says what went wrong'
+$reject = $patches.IndexOf('LogForeignVisitor(a_visitor);')
+$health = $patches.IndexOf('CheckIllusionHealth();')
+if ($reject -lt 0 -or $health -lt 0 -or $health -lt $reject) {
+    Write-Output 'FAIL a pass that is not the filling one still reaches the health check'
+    $failures++
+}
 Assert-Contains $patches 'kHiddenBeforeHealthCheck = 10' 'the health check waits for a few hidden pieces'
 Assert-Contains $patches 'kPassesBeforeHealthCheck = 60' 'the health check waits for a few passes'
 Assert-Contains $patches 'if (g_attachedPieces.load(std::memory_order_relaxed) != 0) return;' 'the health check stays quiet as soon as one piece landed'
@@ -79,15 +104,15 @@ if (([regex]::Matches($patches, 'g_attachedPieces\.fetch_add\(1')).Count -ne 1) 
     $failures++
 }
 Assert-Contains $patches 'void CheckIllusionHealth()' 'the health check exists'
-if (([regex]::Matches($patches, 'CheckIllusionHealth\(\);')).Count -ne 1) {
-    Write-Output 'FAIL the health check runs once, at the end of an attach attempt'
+if (([regex]::Matches($patches, 'CheckIllusionHealth\(\);')).Count -ne 2) {
+    Write-Output 'FAIL the health check runs at the end of an attach attempt and on a pass that was not recognised'
     $failures++
 }
 
 $version = Read-RepoFile 'src/cpp/include/version.h'
 if ($version -match 'SKYRIMOUTFITSYSTEMNG_VERSION_PATCH\s+(\d+)') {
-    if ([int]$Matches[1] -lt 86) {
-        Write-Output "FAIL the fail-closed call sites and the health check arrived in 1.5.86 (found 1.5.$($Matches[1]))"
+    if ([int]$Matches[1] -lt 90) {
+        Write-Output "FAIL the fail-closed call sites arrived in 1.5.86 and the never-recognised guard in 1.5.90 (found 1.5.$($Matches[1]))"
         $failures++
     }
 } else {
