@@ -572,33 +572,93 @@ namespace Hooking
 		return used;
 	}
 
-	bool EntryMatches(const char* a_hook, std::uintptr_t a_entry, const std::uint8_t* a_expected, std::size_t a_size)
+	namespace {
+		bool MaskedEqual(const std::uint8_t* a_bytes, const std::uint8_t* a_expected, const std::uint8_t* a_mask, std::size_t a_size)
+		{
+			for (std::size_t i = 0; i < a_size; ++i) {
+				const auto mask = a_mask ? a_mask[i] : static_cast<std::uint8_t>(0xFF);
+				if ((a_bytes[i] & mask) != (a_expected[i] & mask)) {
+					return false;
+				}
+			}
+			return true;
+		}
+	}
+
+	bool PrologueMatches(std::uintptr_t a_entry, const std::uint8_t* a_expected, const std::uint8_t* a_mask, std::size_t a_size)
 	{
 		if (!a_entry || !a_expected || a_size == 0) return false;
-		if (!Readable(a_entry, a_size)) {
-			LOG(critical, "{}: the {} byte(s) at the entry of the function this hook needs ({}) cannot be read; this hook stays disabled so the game keeps running.", a_hook, a_size, ModuleOwner(a_entry));
-			return false;
+		if (!Readable(a_entry, a_size)) return false;
+		return MaskedEqual(reinterpret_cast<const std::uint8_t*>(a_entry), a_expected, a_mask, a_size);
+	}
+
+	bool EntryLooksBranched(std::uintptr_t a_entry)
+	{
+		if (!a_entry || !Readable(a_entry, 3)) return false;
+		const auto* at = reinterpret_cast<const std::uint8_t*>(a_entry);
+		if (at[0] == 0xE9 || at[0] == 0xEB) return true;
+		if (at[0] == 0xFF && at[1] == 0x25) return true;
+		return at[0] == 0x48 && at[1] == 0xFF && at[2] == 0x25;
+	}
+
+	std::uintptr_t LocateEntry(const char* a_hook, std::uintptr_t a_declared, const std::uint8_t* a_expected, const std::uint8_t* a_mask, std::size_t a_size, std::size_t a_window)
+	{
+		if (!a_declared || !a_expected || a_size == 0) return 0;
+		if (!InText(a_declared, a_size)) {
+			LOG(critical, "{}: the entry the address library names (rva 0x{:X}) is not inside the executable's code; this hook stays disabled so the game keeps running.", a_hook, a_declared - REL::Module::get().base());
+			return 0;
 		}
-		const auto* actual = reinterpret_cast<const std::uint8_t*>(a_entry);
-		if (std::equal(a_expected, a_expected + a_size, actual)) {
-			LOG(debug, "{}: the entry at {} holds the prologue this hook was written for.", a_hook, ModuleOwner(a_entry));
-			return true;
+		if (PrologueMatches(a_declared, a_expected, a_mask, a_size)) {
+			LOG(debug, "{}: the entry at {} holds the fingerprint this hook was written for.", a_hook, ModuleOwner(a_declared));
+			return a_declared;
 		}
 		// A branch at the entry is another plugin's hook, not a wrong address: chaining onto
 		// it is what 1.5.79 to 1.5.84 did for the worn visitor, and on a player machine that
 		// detour did not even keep the game function's argument in rdx, so the code behind it
 		// cannot be hooked as if it were the game function. Say which case this is.
-		const bool branched = actual[0] == 0xE9 || actual[0] == 0xEB ||
-			(a_size >= 2 && actual[0] == 0xFF && actual[1] == 0x25) ||
-			(a_size >= 3 && actual[0] == 0x48 && actual[1] == 0xFF && actual[2] == 0x25);
-		if (branched) {
-			LOG(critical, "{}: another plugin hooked the function this hook needs before this plugin could - the entry at {} holds a branch instead of the game's prologue, and the code behind that branch is not guaranteed to keep the game function's arguments, so this hook does not chain onto it and stays disabled so the game keeps running. Report this line together with your plugin list.", a_hook, ModuleOwner(a_entry));
-			LogSiteBytes(a_hook, a_entry);
-			return false;
+		if (EntryLooksBranched(a_declared)) {
+			LOG(critical, "{}: another plugin hooked the function this hook needs before this plugin could - the entry at {} holds a branch instead of the game's prologue, and the code behind that branch is not guaranteed to keep the game function's arguments, so this hook stays disabled so the game keeps running. Report this line together with your plugin list.", a_hook, ModuleOwner(a_declared));
+			LogSiteBytes(a_hook, a_declared);
+			return 0;
 		}
-		LOG(critical, "{}: the entry at {} reads {:02X} {:02X} {:02X} {:02X} {:02X}, which is not the prologue this hook was written for; either the address library describes another build of the executable or another plugin rewrote this function. This hook stays disabled so the game keeps running. Report this line together with your game version.", a_hook, ModuleOwner(a_entry), actual[0], actual[1], actual[2], actual[3], actual[4]);
-		LogSiteBytes(a_hook, a_entry);
-		return false;
+
+		// The library named a build of this game version, this executable is another one.
+		// Look for the real function around the address it named, but only accept a single
+		// hit: two identical openings inside the window mean the fingerprint cannot tell
+		// the function from its neighbours here, and guessing is what took the game down.
+		MEMORY_BASIC_INFORMATION info{};
+		if (::VirtualQuery(reinterpret_cast<const void*>(a_declared), &info, sizeof(info)) == 0 || info.State != MEM_COMMIT) {
+			LOG(critical, "{}: the memory around {} cannot be inspected, so this hook stays disabled so the game keeps running.", a_hook, ModuleOwner(a_declared));
+			return 0;
+		}
+		const auto regionStart = reinterpret_cast<std::uintptr_t>(info.BaseAddress);
+		const auto regionEnd = regionStart + info.RegionSize;
+		const auto begin = std::max(regionStart, a_declared - a_window);
+		const auto end = std::min(regionEnd, a_declared + a_window + a_size);
+		std::uintptr_t found = 0;
+		std::size_t hits = 0;
+		for (auto candidate = begin; candidate + a_size <= end; ++candidate) {
+			if (!MaskedEqual(reinterpret_cast<const std::uint8_t*>(candidate), a_expected, a_mask, a_size)) {
+				continue;
+			}
+			++hits;
+			if (!found) {
+				found = candidate;
+			} else {
+				break;
+			}
+		}
+		if (hits == 1) {
+			LOG(warn, "{}: the address library points at {} but the fingerprint of the function this hook needs is at {} ({} bytes from there), so the hook goes where the fingerprint is; the library describes a different build of this executable.", a_hook, ModuleOwner(a_declared), ModuleOwner(found), static_cast<std::ptrdiff_t>(found) - static_cast<std::ptrdiff_t>(a_declared));
+			return found;
+		}
+		if (hits > 1) {
+			LOG(critical, "{}: {} places within 0x{:X} bytes of {} hold the same fingerprint, so this hook cannot tell which one is the function it needs and stays disabled so the game keeps running. Report this line together with your game version.", a_hook, hits, a_window, ModuleOwner(a_declared));
+			return 0;
+		}
+		LOG(critical, "{}: the entry at {} holds neither the fingerprint this hook was written for nor a branch, and none of the 0x{:X} bytes around it does; either the address library describes another build of the executable or another plugin rewrote this function. This hook stays disabled so the game keeps running. Report this line together with your game version.", a_hook, ModuleOwner(a_declared), a_window);
+		LogSiteBytes(a_hook, a_declared);
+		return 0;
 	}
 
 	std::string ModuleOwner(std::uintptr_t a_address)

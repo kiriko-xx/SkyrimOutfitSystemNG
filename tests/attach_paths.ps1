@@ -75,7 +75,7 @@ Assert-Contains $patches 'the hooked worn pass was handed a visitor with vtable 
 Assert-Contains $hooks 'REL::RelocationID InventoryChanges_ExecuteVisitorOnWorn(15856, 16096);' 'the worn visitor is addressed through the address library'
 Assert-Contains $hooks 'REL::RelocationID WornVisitorVTable(241890, 195851);' 'and so is the visitor vtable'
 Assert-Contains $hooks 'SetWornVisitorVTable(WornVisitorVTable.address());' 'the vtable is handed to the C++ side'
-Assert-Contains $hooks 'FollowEntryJumps("CustomSkinPlayer", declared)' 'another plugin already on the function is chained onto'
+Assert-Contains $hooks 'FollowEntryJumps("CustomSkinPlayer", gameEntry)' 'another plugin already on the function is chained onto'
 # The armour-pass stub uses the same shape, so the worn visitor stub is cut out by its own
 # tail: everything from the RelocationID declaration up to the code generator instance.
 $stubStart = $hooks.IndexOf('REL::RelocationID InventoryChanges_ExecuteVisitorOnWorn(15856, 16096);')

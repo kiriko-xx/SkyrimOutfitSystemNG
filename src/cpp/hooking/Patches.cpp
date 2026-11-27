@@ -30,10 +30,10 @@ namespace Hooking {
     SKSE::Trampoline* g_branchTrampoline = nullptr;
 
     namespace {
-        // Off until the hook installer reports that both player skinning hooks are in
-        // place. A failed install must never leave the real armour hidden behind an
-        // illusion that nobody applies: that shows up as a nude actor.
-        std::atomic_bool g_illusionDisplayEnabled{ false };
+        // Off until the hook installer reports which halves are in place. A failed install
+        // must never leave the real armour hidden behind an illusion that nobody applies:
+        // that shows up as a nude actor. See IllusionMode in Patches.hpp.
+        std::atomic<IllusionMode> g_illusionMode{ IllusionMode::off };
 
         // The skinning trampoline hands us the actor register as-is, so a hook that
         // ends up on a relocated call site must not dereference a pointer that is not
@@ -50,12 +50,20 @@ namespace Hooking {
         }
     }
 
+    void SetIllusionMode(IllusionMode a_mode) {
+        g_illusionMode.store(a_mode, std::memory_order_relaxed);
+    }
+
+    IllusionMode IllusionState() {
+        return g_illusionMode.load(std::memory_order_relaxed);
+    }
+
     void SetIllusionDisplayEnabled(bool a_enabled) {
-        g_illusionDisplayEnabled.store(a_enabled, std::memory_order_relaxed);
+        SetIllusionMode(a_enabled ? IllusionMode::full : IllusionMode::off);
     }
 
     bool IllusionDisplayEnabled() {
-        return g_illusionDisplayEnabled.load(std::memory_order_relaxed);
+        return IllusionState() != IllusionMode::off;
     }
 
     bool ShouldOverrideSkinning(RE::TESObjectREFR* target) {
@@ -1087,7 +1095,10 @@ namespace Hooking {
             using namespace CustomSkinPlayer;
             if (g_attachDepth > 0) return false;// the pieces being attached are not to be hidden
             if (!a_armor || !a_model) return false;
-            if (!IllusionDisplayEnabled()) return false;
+            // Hiding is only allowed when the other half is in place as well: with the
+            // display set missing the actor would be nude, so attachOnly hides nothing and
+            // the outfit is drawn over the real armour instead.
+            if (IllusionState() != IllusionMode::full) return false;
             if (SOS::GameState::IsLoading()) return false;
             try {
                 auto* actor = ResolveModelOwner(a_model);

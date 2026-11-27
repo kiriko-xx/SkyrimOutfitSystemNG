@@ -123,20 +123,42 @@ namespace Hooking
 	// caller does not copy a rip-relative or relative instruction into the trampoline.
 	std::size_t CopyableEntryLength(std::uintptr_t a_entry, std::size_t a_needed);
 
-	// Checks that the bytes at a_entry are still the ones this hook was written for.
+	// Compares the bytes at a_entry with a fingerprint, byte by byte; a_mask may be null,
+	// and a zero mask byte skips that position (used for the rel32 of a lea, which moves
+	// with the build).
 	//
-	// Hooking a function at its entry assumes the address library points at the function
-	// itself and that nobody replaced its prologue since. Both assumptions can be wrong:
-	// SKSE ships two address libraries for some game versions (1.6.1170 has "-0" and
-	// "-0-1", and 98.7% of the shared ids sit at different addresses in them, while
-	// CommonLib only ever loads "-0"), and another plugin may have hooked the same function
-	// first. Writing five bytes at either place would corrupt unrelated code, so the entry
-	// is compared with the prologue of the game function the hook was written for.
+	// The fingerprint has to be the whole opening of the function, not its first eight
+	// bytes: those eight bytes (48 89 5C 24 10 48 89 6C 24 18) are the stock MSVC prologue
+	// of both runtimes and occur 1176 times in the .text of SE 1.5.97 and 1164 times in
+	// that of AE 1.6.1170, so they tell nothing. The 33 bytes that follow them - the
+	// pushes, the stack frame and the register moves that prove the argument order - occur
+	// exactly once in each executable.
+	bool PrologueMatches(std::uintptr_t a_entry, const std::uint8_t* a_expected, const std::uint8_t* a_mask, std::size_t a_size);
+
+	// True when the first bytes at a_entry are a branch another plugin wrote because it
+	// hooked that function first.
+	bool EntryLooksBranched(std::uintptr_t a_entry);
+
+	// How far around the address the address library names the fingerprint is searched.
+	// The two 1.6.1170 libraries put the same function 0x270 bytes apart, so a few hundred
+	// bytes cover a build the library describes slightly differently.
+	inline constexpr std::size_t kEntrySearchWindow = 0x800;
+
+	// Finds the function this hook was written for and returns its entry, or zero when it
+	// cannot be found with certainty.
 	//
-	// Returns true when the bytes match. Otherwise it logs what is there instead - a branch
-	// means someone hooked the function first, anything else means the address library
-	// describes another build - and returns false so the caller leaves the hook disabled.
-	bool EntryMatches(const char* a_hook, std::uintptr_t a_entry, const std::uint8_t* a_expected, std::size_t a_size);
+	// The address library describes a build of a game version, not necessarily the build
+	// the player runs (1.6.1170 ships two libraries whose shared ids sit at different
+	// addresses, and CommonLib only ever loads "-0"), so the address it names is a
+	// candidate, not the answer. The check runs in this order:
+	//   1. the footprint matches where the library says - that is the function;
+	//   2. the bytes there are a branch - another plugin hooked it first, say so and stop;
+	//   3. otherwise search a_window bytes either way for the fingerprint - one hit is the
+	//      function of this build and is used (with a warning naming both addresses), two
+	//      or more hits mean it cannot be told apart and the hook stays off, none means the
+	//      library describes something this plugin does not know.
+	// Never guesses: an ambiguous or missing match leaves the hook disabled.
+	std::uintptr_t LocateEntry(const char* a_hook, std::uintptr_t a_declared, const std::uint8_t* a_expected, const std::uint8_t* a_mask, std::size_t a_size, std::size_t a_window = kEntrySearchWindow);
 
 	// Identity of the module that owns a_address - the game executable or an SKSE plugin
 	// dll - in the form "<file name> + 0x<rva>". A log line that names the owner says

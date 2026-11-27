@@ -10,11 +10,24 @@
 #include "RE/REAugments.h"
 
 namespace Hooking {
-    // The illusion needs two hooks in place: one hides the real armour (the entry of
-    // ApplyArmorAddon), the other writes the display set inside the worn pass. Without the
-    // first the real armour shows through, without the second nothing is attached at all
-    // and the actor would be nude, so both are required. The installer reports the state
-    // here once it has run; until then the override stays off.
+    // What the illusion is allowed to do this session. Its two halves sit on different
+    // functions and fail for different reasons, so they are reported and degraded
+    // separately instead of one switch that turns everything off:
+    //   off        - nothing is hidden, nothing is attached, the real armour shows;
+    //   attachOnly - the display set is attached inside the skinning pass, but the hook
+    //                that hides the real armour is missing, so the illusion is drawn on top
+    //                of the real armour instead of replacing it;
+    //   full       - both halves are in place.
+    // There is deliberately no "hide only": hiding the real armour with nothing to put in
+    // its place shows a nude actor, so an attach half that fails while the hide half is
+    // installed still means off.
+    enum class IllusionMode : std::uint8_t { off = 0, attachOnly = 1, full = 2 };
+
+    void SetIllusionMode(IllusionMode a_mode);
+    IllusionMode IllusionState();
+
+    // Convenience for the callers that only know "on" and "off" (the health check switching
+    // the illusion off, and anything that reads the switch as a boolean).
     void SetIllusionDisplayEnabled(bool a_enabled);
     bool IllusionDisplayEnabled();
 

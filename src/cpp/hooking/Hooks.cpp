@@ -128,11 +128,18 @@ namespace Hooking {
             // way, which was checked on SE 1.5.97 (rva 0x228AD0) and AE 1.6.1170 (0x279320).
             REL::RelocationID TESObjectARMO_ApplyArmorAddon(17392, 17792);
 
-            // mov [rsp+0x10], rbx / mov [rsp+0x18], rbp - ten bytes, of which the hook takes
-            // the first five. The address library of a game version can describe a different
-            // build of the same version (1.6.1170 has two libraries), so these bytes are what
-            // tells "this is the function" from "this is some other code".
-            inline constexpr std::uint8_t kArmourPassPrologue[] = { 0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18 };
+            // The opening of the function, 33 bytes: the two stack stores the hook copies,
+            // the three pushes, the frame, and the four moves that prove the argument order
+            // (ebp<-r9d, r14<-r8, r15<-rdx, rdi<-rcx). The first eight bytes alone are the
+            // stock MSVC prologue and occur over a thousand times in either executable, so
+            // they identify nothing; these 33 bytes occur once in each of them (checked on
+            // SE 1.5.97 rva 0x228AD0 and AE 1.6.1170 rva 0x279320), and they are identical on
+            // both runtimes, which is why there is one table and not one per runtime.
+            inline constexpr std::uint8_t kArmourPassFingerprint[] = {
+                0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18,
+                0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x20,
+                0x33, 0xDB, 0x41, 0x8B, 0xE9, 0x4D, 0x8B, 0xF0, 0x4C, 0x8B, 0xFA, 0x48, 0x8B, 0xF9
+            };
 
             void Apply() {
                 if (!RequireIds("DontVanillaSkinPlayer", { TESObjectARMO_ApplyArmorAddon })) {
@@ -140,8 +147,13 @@ namespace Hooking {
                 }
                 LogResolved("TESObjectARMO_ApplyArmorAddon", TESObjectARMO_ApplyArmorAddon);
 
-                const auto entry = TESObjectARMO_ApplyArmorAddon.address();
-                if (!EntryMatches("DontVanillaSkinPlayer", entry, kArmourPassPrologue, sizeof(kArmourPassPrologue))) {
+                const auto declared = TESObjectARMO_ApplyArmorAddon.address();
+                // Either the library names this build's function, or the fingerprint finds it
+                // a few hundred bytes away (a second library for the same game version), or
+                // the hook stays off. Hooking whatever happens to sit at the named address is
+                // what wrote five bytes into unrelated code on 1.5.82.
+                const auto entry = LocateEntry("DontVanillaSkinPlayer", declared, kArmourPassFingerprint, nullptr, sizeof(kArmourPassFingerprint));
+                if (!entry) {
                     return;
                 }
                 constexpr std::size_t kStolen = 5;
@@ -222,6 +234,24 @@ namespace Hooking {
             // order of the calls - tells the two passes apart.
             REL::RelocationID WornVisitorVTable(241890, 195851);
 
+            // The opening of the function that runs the pass, 33 bytes. Bytes 26-29 are the
+            // rel32 of the lea that builds the visitor, which points into that build's own
+            // .rdata and therefore moves; everything else is identical on SE 1.5.97
+            // (rva 0x1E51D0) and AE 1.6.1170 (rva 0x231AA0) and occurs once in each.
+            inline constexpr std::uint8_t kVisitorFingerprint[] = {
+                0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18,
+                0x56, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x20,
+                0x48, 0x8B, 0x31, 0x4C, 0x8D, 0x3D, 0x00, 0x00, 0x00, 0x00,
+                0x4C, 0x8B, 0xF2, 0x48
+            };
+            inline constexpr std::uint8_t kVisitorMask[] = {
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0x00, 0x00, 0x00, 0x00,
+                0xFF, 0xFF, 0xFF, 0xFF
+            };
+
             void Apply() {
                 if (!RequireIds("CustomSkinPlayer", { InventoryChanges_ExecuteVisitorOnWorn })) {
                     return;
@@ -236,13 +266,23 @@ namespace Hooking {
                 }
 
                 const auto declared = InventoryChanges_ExecuteVisitorOnWorn.address();
-                // Another plugin may already have hooked this function, and then its entry
-                // reads as a jump into that plugin's detour instead of the prologue of the
-                // game function. Chaining on top of it keeps the display half working;
-                // 1.5.64 and earlier gave up here and left the illusion off for the whole
-                // session (an SE 1.5.97 report showed E9 2B AE D7 FF at the entry where the
-                // shipped executable has 48 89 5C 24 10).
-                const auto entry = FollowEntryJumps("CustomSkinPlayer", declared);
+                // Identify the function before touching it, the same way as the armour pass:
+                // the library describes a build of the game version, this executable may be
+                // another one, and 1.6.1170 ships two libraries that disagree about where it
+                // is. When the entry already holds a branch another plugin wrote, the chain
+                // is followed below instead - that path is what keeps the display half
+                // working on machines where another plugin hooked this function first (an SE
+                // 1.5.97 log shows E9 2B AE D7 FF where the shipped executable has
+                // 48 89 5C 24 10, and the pass still ran).
+                std::uintptr_t gameEntry = declared;
+                if (!EntryLooksBranched(declared)) {
+                    gameEntry = LocateEntry("CustomSkinPlayer", declared, kVisitorFingerprint, kVisitorMask, sizeof(kVisitorFingerprint));
+                    if (!gameEntry) {
+                        LOG(critical, "CustomSkinPlayer: the function that runs the skinning pass could not be identified on this game build, so the display set cannot be attached inside the pass that fills the biped; the illusion stays off for this session and the real armour shows. The reason is in the lines above.");
+                        return;
+                    }
+                }
+                const auto entry = FollowEntryJumps("CustomSkinPlayer", gameEntry);
                 if (!entry) {
                     LOG(err, "CustomSkinPlayer: the worn visitor at {} could not be reached through the code that sits at its entry; the hook stays disabled.", ModuleOwner(declared));
                     LogSiteBytes("CustomSkinPlayer", declared);
@@ -711,19 +751,28 @@ namespace Hooking {
         Detail::RTTIPrinter::Apply();
 #endif
 
-        // Hiding the real armour without something to put in its place shows up as a
-        // nude actor, so the illusion stays off unless both hooks are in place: the entry
-        // of the armour pass hides the real piece, and the worn pass attaches the display
-        // set (1.5.89). They sit on different functions and fail for different reasons,
-        // which is why both are required instead of one standing in for the other.
-        const bool illusionAvailable = Detail::g_dontVanillaSkinPlayerInstalled && Detail::g_customSkinPlayerInstalled;
-        SetIllusionDisplayEnabled(illusionAvailable);
-        if (illusionAvailable) {
+        // The two halves sit on different functions and fail for different reasons, so each
+        // is reported on its own and the illusion degrades instead of vanishing (1.5.91):
+        //   both halves - the armour pass hides the real piece, the worn pass attaches the
+        //                 display set in its place;
+        //   attach only - the display set is still attached, over the real armour, because a
+        //                 player who can see the outfit is better off than one who cannot;
+        //   hide only   - never played: hiding the real armour with nothing to put in its
+        //                 place is a nude actor, which is exactly what 1.5.82 did.
+        const bool hideHalf = Detail::g_dontVanillaSkinPlayerInstalled;
+        const bool attachHalf = Detail::g_customSkinPlayerInstalled;
+        if (hideHalf && attachHalf) {
+            SetIllusionMode(IllusionMode::full);
             LOG(info, "Illusion display is active: the player skinning hooks are installed.");
+        } else if (attachHalf) {
+            SetIllusionMode(IllusionMode::attachOnly);
+            LOG(warn, "Illusion display is limited this session: the display set is attached inside the skinning pass, but the armour pass hook is missing (vanilla pass {}), so the real equipped armour is not hidden and the illusion is drawn over it. Nothing else is disabled. The reason is in the lines above.",
+                hideHalf ? "hooked" : "missing");
         } else {
-            LOG(critical, "Illusion display is off for this session: the player skinning hooks are not both installed (vanilla pass {}, display pass {}), so the real equipped armour stays visible. Nothing else is disabled. The reason is in the lines above.",
-                Detail::g_dontVanillaSkinPlayerInstalled ? "hooked" : "missing",
-                Detail::g_customSkinPlayerInstalled ? "hooked" : "missing");
+            SetIllusionMode(IllusionMode::off);
+            LOG(critical, "Illusion display is off for this session: the display pass is missing (vanilla pass {}, display pass {}), and hiding the real armour without a display set to put in its place would leave the actor nude, so nothing is hidden. The real equipped armour stays visible. The reason is in the lines above.",
+                hideHalf ? "hooked" : "missing",
+                attachHalf ? "hooked" : "missing");
             ShowIllusionUnavailableBox(true);
         }
     }
